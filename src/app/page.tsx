@@ -34,8 +34,8 @@ export default function Home() {
   return (
     <main className="app-shell" id="home">
       <header className="topbar">
-        <a className="brand" href="#home" aria-label="n빵 홈">
-          <img alt="" height="38" src="/liquid-glass-blue-cursor.png" width="38" />
+        <a className="brand" href="#home" aria-label="다모아 홈">
+          <img alt="다모아" height="38" src="/logo/da-moa-trans.png" width="46" />
         </a>
         <button className="icon-button" type="button" aria-label="알림">
           <Bell size={21} strokeWidth={2.2} />
@@ -44,7 +44,7 @@ export default function Home() {
 
       <section className="welcome" aria-labelledby="welcome-heading">
         <p>정산이 필요할 때</p>
-        <h1 id="welcome-heading">한 번에 깔끔하게<br />n빵해요.</h1>
+        <h1 id="welcome-heading">한 번에 깔끔하게<br />다모아 정산해요.</h1>
       </section>
 
       <section className="summary-card" aria-labelledby="summary-heading">
