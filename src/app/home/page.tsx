@@ -44,7 +44,7 @@ export default function Home() {
 
       <section className="welcome" aria-labelledby="welcome-heading">
         <p>정산이 필요할 때</p>
-        <h1 id="welcome-heading">한 번에 깔끔하게<br />다모아 정산해요.</h1>
+        <h1 id="welcome-heading">한 번에 깔끔하게<br />다모아 정산해요</h1>
       </section>
 
       <section className="summary-card" aria-labelledby="summary-heading">
@@ -105,7 +105,7 @@ export default function Home() {
           </span>
           <ChevronRight aria-hidden="true" size={20} />
         </label>
-        <p className="hint"><ReceiptText size={15} /> OCR 연동 전에는 금액을 직접 입력해요.</p>
+        <p className="hint"><ReceiptText size={15} /> OCR 연동 전에는 금액을 직접 입력해요</p>
 
         <div className="split-card">
           <label className="amount-label" htmlFor="total">총 결제 금액</label>
@@ -140,7 +140,7 @@ export default function Home() {
         <button className="settle-button" onClick={() => setSettlementStarted(true)} type="button">
           정산 링크 만들기 <ChevronRight size={20} />
         </button>
-        <p className="status" aria-live="polite">{settlementStarted ? '다음 단계에서 참여자와 송금 수단을 연결합니다.' : ''}</p>
+        <p className="status" aria-live="polite">{settlementStarted ? '다음 단계에서 참여자와 송금 수단을 연결합니다' : ''}</p>
       </section>
 
       <nav className="bottom-nav" aria-label="주요 메뉴">

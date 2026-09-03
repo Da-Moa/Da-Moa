@@ -23,8 +23,8 @@ export default function LoginPage() {
           <img alt="" height="72" src="/logo/da-moa-trans.png" width="87" />
         </div>
         <p className="auth-eyebrow">모임 정산을 더 간편하게</p>
-        <h1 id="auth-heading">다모아와 함께<br />정산을 시작해요.</h1>
-        <p className="auth-description">카카오 계정으로 로그인하면 내 정산 내역과<br />친구들과의 모임을 안전하게 관리할 수 있어요.</p>
+        <h1 id="auth-heading">다모아와 함께<br />정산을 시작해요</h1>
+        <p className="auth-description">카카오 계정으로 로그인하면 내 정산 내역과<br />친구들과의 모임을 안전하게 관리할 수 있어요</p>
 
         <div className="auth-benefits" aria-label="로그인 후 이용할 수 있는 기능">
           <span><Check size={15} /> 정산 내역 저장</span>
@@ -44,8 +44,8 @@ export default function LoginPage() {
             카카오로 시작하기
           </button>
         )}
-        <p className="auth-notice"><ShieldCheck size={15} /> 카카오 로그인으로 필요한 정보만 안전하게 받아요.</p>
-        {!kakaoLoginUrl && <p className="auth-setup">카카오 앱 키와 Redirect URI를 설정하면 로그인을 시작할 수 있어요.</p>}
+        <p className="auth-notice"><ShieldCheck size={15} /> 카카오 로그인으로 필요한 정보만 안전하게 받아요</p>
+        {!kakaoLoginUrl && <p className="auth-setup">카카오 앱 키와 Redirect URI를 설정하면 로그인을 시작할 수 있어요</p>}
       </section>
     </main>
   )
