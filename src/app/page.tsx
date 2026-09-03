@@ -280,7 +280,7 @@ export default function LandingPage() {
         <div className="landing-hero">
           <div className="landing-hero-copy">
             <p>더치페이, 이제 가볍게</p>
-            <h1 id="landing-heading">모임비 정산,<br />다모아로 끝내요</h1>
+            <h1 id="landing-heading">모임비 정산,<br /><span>다모아로 끝내요</span></h1>
             <span>영수증부터 송금 요청까지<br />복잡한 정산을 한 곳에서</span>
           </div>
           <Image alt="정산 과정을 상징하는 카드 일러스트" className="landing-hero-image" priority src={hero} />
