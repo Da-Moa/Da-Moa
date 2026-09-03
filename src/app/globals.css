@@ -134,6 +134,7 @@ h1 { color: #191f28; font-size: clamp(31px, 8.4vw, 39px); line-height: 1.2; marg
 .landing-hero-scene[data-phase='1'] .landing-hero-image,
 .landing-hero-scene[data-phase='1'] .landing-amount-card { opacity: 0; }
 .landing-hero-scene[data-phase='2'] .landing-hero { box-shadow: var(--box-shadow); }
+.landing-hero-initial { opacity: 0; will-change: opacity; }
 .landing-section-reset { display: none; }
 .landing-benefits-scene { background: #f2f4f6; margin: 0 -20px; }
 .landing-benefits { padding: 34px 24px 26px; }
@@ -218,6 +219,7 @@ html.landing-transition-locked body { touch-action: none; }
 
 @media (prefers-reduced-motion: reduce) {
   .brand, .summary-card, .activity, .receipt-card, .split-card, .result-card, .shortcut-grid span { transition: none; }
+  .landing-hero-initial { opacity: 1; }
   .hero-sequence-ready .landing-hero-scene { min-height: 0; }
   .hero-sequence-ready .landing-hero { position: relative; }
 }

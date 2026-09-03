@@ -47,10 +47,11 @@ export default function LandingPage() {
     let disposed = false
     let lastScrollY = window.scrollY
     let lockedScrollY: number | undefined
+    let initialEntering = true
     let stageTransitioning = false
     let transitionState: SectionTransitionState = 'idle-hero'
 
-    const isInteractionLocked = () => stageTransitioning || isSectionTransitioning(transitionState)
+    const isInteractionLocked = () => initialEntering || stageTransitioning || isSectionTransitioning(transitionState)
 
     const lockScroll = () => {
       lockedScrollY = window.scrollY
@@ -84,6 +85,16 @@ export default function LandingPage() {
       if (finished && !disposed) settle?.()
       animation.cancel()
       return finished && !disposed
+    }
+
+    const runInitialEntry = async () => {
+      lockScroll()
+      try {
+        await fade(heroPanel, 0, 1, () => heroPanel.classList.remove('landing-hero-initial'))
+      } finally {
+        initialEntering = false
+        unlockScroll()
+      }
     }
 
     const scrollToPosition = (top: number) => {
@@ -252,6 +263,12 @@ export default function LandingPage() {
     window.addEventListener('touchmove', preventScrollInput, { passive: false })
     window.addEventListener('keydown', preventScrollKey)
 
+    if (initialBenefitsPhase === 0 && window.scrollY === 0) void runInitialEntry()
+    else {
+      initialEntering = false
+      heroPanel.classList.remove('landing-hero-initial')
+    }
+
     return () => {
       disposed = true
       cancelAnimationFrame(animationFrame)
@@ -277,7 +294,7 @@ export default function LandingPage() {
       </header>
 
       <section className="landing-hero-scene" aria-labelledby="landing-heading" data-phase="1" ref={heroSceneRef}>
-        <div className="landing-hero">
+        <div className="landing-hero landing-hero-initial">
           <div className="landing-hero-copy">
             <p>더치페이, 이제 가볍게</p>
             <h1 id="landing-heading">모임비 정산,<br /><span>다모아로 끝내요</span></h1>
