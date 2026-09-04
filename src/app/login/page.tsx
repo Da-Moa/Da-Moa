@@ -1,17 +1,12 @@
 import { ArrowLeft, Check, MessageCircle } from 'lucide-react'
 import Link from 'next/link'
-
-const loginMessages: Record<string, string> = {
-  configuration: '로그인 설정을 확인해 주세요',
-  failed: '로그인을 완료하지 못했어요. 다시 시도해 주세요',
-  invalid: '로그인 요청이 만료되었어요. 다시 시도해 주세요',
-}
+import { getLoginMessage } from '../../lib/login-message'
 
 export default async function LoginPage({
   searchParams,
 }: Readonly<{ searchParams: Promise<{ error?: string }> }>) {
   const { error } = await searchParams
-  const message = error ? loginMessages[error] ?? loginMessages.failed : undefined
+  const message = getLoginMessage(error)
 
   return (
     <main className="auth-page">

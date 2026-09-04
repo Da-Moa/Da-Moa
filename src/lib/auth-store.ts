@@ -10,6 +10,12 @@ type RefreshSessionInput = {
   userId: string
 }
 
+type RefreshSessionRotationInput = RefreshSessionInput & {
+  now: number
+  previousSessionId: string
+  previousTokenHash: string
+}
+
 type KakaoProfileInput = {
   displayName: string | null
   email: string | null
@@ -18,7 +24,6 @@ type KakaoProfileInput = {
 
 export type UserAccount = KakaoProfileInput
 
-let schemaPromise: Promise<void> | undefined
 let sql: NeonQueryFunction<false, false> | undefined
 
 function getSql() {
@@ -27,54 +32,9 @@ function getSql() {
   return sql ??= neon(connectionString)
 }
 
-async function createSchema() {
-  const client = getSql()
-
-  await client`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      provider TEXT NOT NULL,
-      provider_subject TEXT NOT NULL,
-      created_at BIGINT NOT NULL,
-      updated_at BIGINT NOT NULL,
-      UNIQUE (provider, provider_subject)
-    )
-  `
-  await client`
-    CREATE TABLE IF NOT EXISTS refresh_sessions (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      token_hash TEXT NOT NULL UNIQUE,
-      issued_at BIGINT NOT NULL,
-      expires_at BIGINT NOT NULL,
-      revoked_at BIGINT,
-      CHECK (expires_at > issued_at)
-    )
-  `
-  await client`ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT`
-  await client`ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT`
-  await client`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_image_url TEXT`
-  await client`
-    CREATE INDEX IF NOT EXISTS refresh_sessions_active_user_idx
-    ON refresh_sessions(user_id)
-    WHERE revoked_at IS NULL
-  `
-}
-
-function ensureSchema() {
-  if (!schemaPromise) {
-    schemaPromise = createSchema().catch((error) => {
-      schemaPromise = undefined
-      throw error
-    })
-  }
-  return schemaPromise
-}
-
 export async function upsertKakaoUser(providerSubject: string, profile: KakaoProfileInput, now: number) {
   if (!providerSubject) throw new Error('Kakao subject is required')
 
-  await ensureSchema()
   const rows = await getSql().query(`
     INSERT INTO users (
       id, provider, provider_subject, display_name, email, profile_image_url, created_at, updated_at
@@ -105,7 +65,6 @@ function nullableText(value: unknown): string | null {
 }
 
 export async function getUserAccount(userId: string): Promise<UserAccount | null> {
-  await ensureSchema()
   const rows = await getSql().query(`
     SELECT display_name, email, profile_image_url
     FROM users
@@ -129,7 +88,6 @@ export async function getUserAccount(userId: string): Promise<UserAccount | null
 export async function deleteUser(userId: string) {
   if (!userId) throw new Error('User ID is required')
 
-  await ensureSchema()
   const rows = await getSql().query(`
     DELETE FROM users
     WHERE id = $1
@@ -147,32 +105,68 @@ export async function createRefreshSession({
 }: RefreshSessionInput) {
   if (expiresAt <= issuedAt) throw new Error('Refresh session must expire after it is issued')
 
-  await ensureSchema()
   await getSql().query(`
     INSERT INTO refresh_sessions (id, user_id, token_hash, issued_at, expires_at)
     VALUES ($1, $2, $3, $4, $5)
   `, [id, userId, tokenHash, issuedAt, expiresAt])
 }
 
-export async function isActiveRefreshToken(
-  userId: string,
-  sessionId: string,
-  tokenHash: string,
-  now: number,
-) {
-  await ensureSchema()
+export async function rotateRefreshSession({
+  expiresAt,
+  id,
+  issuedAt,
+  now,
+  previousSessionId,
+  previousTokenHash,
+  tokenHash,
+  userId,
+}: RefreshSessionRotationInput) {
+  if (expiresAt <= issuedAt) throw new Error('Refresh session must expire after it is issued')
+  if (!id || !userId || !tokenHash || !previousSessionId || !previousTokenHash) {
+    throw new Error('Refresh session is required')
+  }
+  if (id === previousSessionId || tokenHash === previousTokenHash) {
+    throw new Error('Refresh session rotation requires a new token')
+  }
+
+  // ponytail: opportunistic cleanup is sufficient at current volume; move it to a scheduled job if refresh traffic grows.
   const rows = await getSql().query(`
-    SELECT 1
-    FROM refresh_sessions
-    WHERE id = $1 AND user_id = $2 AND token_hash = $3 AND revoked_at IS NULL AND expires_at > $4
-  `, [sessionId, userId, tokenHash, now])
+    WITH expired AS (
+      DELETE FROM refresh_sessions
+      WHERE expires_at <= $1
+    ), revoked AS (
+      UPDATE refresh_sessions
+      SET revoked_at = $1
+      WHERE id = $2
+        AND user_id = $3
+        AND token_hash = $4
+        AND revoked_at IS NULL
+        AND expires_at > $1
+      RETURNING id
+    ), replacement AS (
+      INSERT INTO refresh_sessions (id, user_id, token_hash, issued_at, expires_at)
+      SELECT $5, $3, $6, $7, $8
+      WHERE EXISTS (SELECT 1 FROM revoked)
+      RETURNING id
+    )
+    SELECT id FROM replacement
+  `, [
+    now,
+    previousSessionId,
+    userId,
+    previousTokenHash,
+    id,
+    tokenHash,
+    issuedAt,
+    expiresAt,
+  ])
+
   return rows.length > 0
 }
 
 export async function deleteRefreshSession(userId: string, sessionId: string) {
   if (!userId || !sessionId) throw new Error('Refresh session is required')
 
-  await ensureSchema()
   await getSql().query(`
     DELETE FROM refresh_sessions
     WHERE id = $1 AND user_id = $2

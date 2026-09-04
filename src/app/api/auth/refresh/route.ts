@@ -1,16 +1,19 @@
+import { randomUUID } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import {
   ACCESS_TOKEN_COOKIE_NAME,
   ACCESS_TOKEN_MAX_AGE_SECONDS,
   authCookieOptions,
   createAccessToken,
+  createRefreshToken,
   currentTimestamp,
   hashRefreshToken,
   readRefreshToken,
   REFRESH_TOKEN_COOKIE_NAME,
+  REFRESH_TOKEN_MAX_AGE_SECONDS,
   refreshCookieOptions,
 } from '../../../../lib/auth'
-import { isActiveRefreshToken } from '../../../../lib/auth-store'
+import { rotateRefreshSession } from '../../../../lib/auth-store'
 
 export const runtime = 'nodejs'
 
@@ -26,6 +29,12 @@ function unauthorizedResponse() {
   return response
 }
 
+function unavailableResponse() {
+  const response = NextResponse.json({ error: 'refresh_unavailable' }, { status: 503 })
+  response.headers.set('Cache-Control', 'no-store')
+  return response
+}
+
 export async function POST(request: NextRequest) {
   const origin = request.headers.get('origin')
   if (origin && origin !== request.nextUrl.origin) return unauthorizedResponse()
@@ -36,19 +45,35 @@ export async function POST(request: NextRequest) {
 
   try {
     const now = currentTimestamp()
-    if (!(await isActiveRefreshToken(refresh.userId, refresh.sessionId, hashRefreshToken(token), now))) {
+    const sessionId = randomUUID()
+    const nextRefreshToken = createRefreshToken(refresh.userId, sessionId, undefined, now)
+    if (!(await rotateRefreshSession({
+      expiresAt: now + REFRESH_TOKEN_MAX_AGE_SECONDS,
+      id: sessionId,
+      issuedAt: now,
+      now,
+      previousSessionId: refresh.sessionId,
+      previousTokenHash: hashRefreshToken(token),
+      tokenHash: hashRefreshToken(nextRefreshToken),
+      userId: refresh.userId,
+    }))) {
       return unauthorizedResponse()
     }
 
     const response = NextResponse.json({ ok: true })
     response.cookies.set(
       ACCESS_TOKEN_COOKIE_NAME,
-      createAccessToken(refresh.userId, refresh.sessionId),
+      createAccessToken(refresh.userId, sessionId, undefined, now),
       authCookieOptions(ACCESS_TOKEN_MAX_AGE_SECONDS),
+    )
+    response.cookies.set(
+      REFRESH_TOKEN_COOKIE_NAME,
+      nextRefreshToken,
+      refreshCookieOptions(REFRESH_TOKEN_MAX_AGE_SECONDS),
     )
     response.headers.set('Cache-Control', 'no-store')
     return response
   } catch {
-    return unauthorizedResponse()
+    return unavailableResponse()
   }
 }

@@ -251,6 +251,7 @@ html.landing-transition-locked body { touch-action: none; }
 .auth-notice, .auth-setup { align-items: center; color: #8b95a1; font-size: 12px; justify-content: center; margin: 15px 0 0; text-wrap: pretty; }
 .auth-notice { display: flex; gap: 5px; }
 .auth-setup { line-height: 1.5; margin-top: 7px; }
+.auth-retry { background: transparent; border: 0; color: #4e5968; font-size: inherit; font-weight: 800; padding: 0; text-decoration: underline; }
 
 @media (min-width: 481px) {
   .app-shell, .auth-page, .landing-page { box-shadow: 0 0 28px rgba(25, 31, 40, .08); }

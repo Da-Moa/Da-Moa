@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { generateKeyPairSync, sign as signSignature } from 'node:crypto'
+import type { KeyObject } from 'node:crypto'
 import test from 'node:test'
 import {
   ACCESS_TOKEN_MAX_AGE_SECONDS,
@@ -10,10 +12,34 @@ import {
   REFRESH_TOKEN_MAX_AGE_SECONDS,
   refreshCookieOptions,
   verifyAccessToken,
+  verifyKakaoIdToken,
   verifyRefreshToken,
 } from './auth.ts'
 
 const TEST_SECRET = '0123456789abcdef0123456789abcdef'
+const TEST_KAKAO_CONFIG = {
+  clientId: 'client-id',
+  redirectUri: 'http://localhost:3000/auth/v1/kakao',
+}
+
+type NextFetchOptions = RequestInit & { next?: { revalidate?: number } }
+
+function createKakaoIdToken(privateKey: KeyObject, kid: string) {
+  const issuedAt = Math.floor(Date.now() / 1000)
+  const header = Buffer.from(JSON.stringify({ alg: 'RS256', kid, typ: 'JWT' })).toString('base64url')
+  const payload = Buffer.from(JSON.stringify({
+    aud: TEST_KAKAO_CONFIG.clientId,
+    exp: issuedAt + 60,
+    iat: issuedAt,
+    iss: 'https://kauth.kakao.com',
+    nonce: 'expected-nonce',
+    sub: 'kakao-subject',
+  })).toString('base64url')
+  const signingInput = `${header}.${payload}`
+  const signature = signSignature('RSA-SHA256', Buffer.from(signingInput), privateKey).toString('base64url')
+
+  return `${signingInput}.${signature}`
+}
 
 test('Kakao authorization requests profile consent and uses OIDC with PKCE', () => {
   const request = createKakaoAuthorizationRequest({
@@ -65,6 +91,63 @@ test('Kakao user info returns a verified display profile', async () => {
       email: 'member@example.com',
       profileImageUrl: 'https://cdn.example.com/profile-full.png',
     })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('Kakao ID token retries the JWKS once when its cached keys lack the token kid', async () => {
+  const originalFetch = globalThis.fetch
+  const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  const signingKey = {
+    ...publicKey.export({ format: 'jwk' }),
+    alg: 'RS256',
+    kid: 'rotated-key',
+    use: 'sig',
+  }
+  const calls: NextFetchOptions[] = []
+  globalThis.fetch = (async (_input, init) => {
+    calls.push((init ?? {}) as NextFetchOptions)
+    return new Response(JSON.stringify({
+      keys: calls.length === 1 ? [{ ...signingKey, kid: 'previous-key' }] : [signingKey],
+    }), { status: 200 })
+  }) as typeof fetch
+
+  try {
+    assert.equal(
+      await verifyKakaoIdToken(createKakaoIdToken(privateKey, signingKey.kid), TEST_KAKAO_CONFIG, 'expected-nonce'),
+      'kakao-subject',
+    )
+    assert.equal(calls.length, 2)
+    assert.deepEqual(calls[0].next, { revalidate: 300 })
+    assert.equal(calls[1].cache, 'no-store')
+    assert.equal(calls[1].next, undefined)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('Kakao ID token does not accept an invalid JWKS key with a matching kid', async () => {
+  const originalFetch = globalThis.fetch
+  const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  const invalidSigningKey = {
+    ...publicKey.export({ format: 'jwk' }),
+    alg: 'RS256',
+    kid: 'matching-key',
+    use: 'enc',
+  }
+  let calls = 0
+  globalThis.fetch = (async () => {
+    calls += 1
+    return new Response(JSON.stringify({ keys: [invalidSigningKey] }), { status: 200 })
+  }) as typeof fetch
+
+  try {
+    assert.equal(
+      await verifyKakaoIdToken(createKakaoIdToken(privateKey, invalidSigningKey.kid), TEST_KAKAO_CONFIG, 'expected-nonce'),
+      null,
+    )
+    assert.equal(calls, 1)
   } finally {
     globalThis.fetch = originalFetch
   }

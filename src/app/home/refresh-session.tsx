@@ -1,13 +1,16 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 
 export default function RefreshSession() {
   const router = useRouter()
+  const [attempt, setAttempt] = useState(0)
+  const [refreshFailed, setRefreshFailed] = useState(false)
 
   useEffect(() => {
     let active = true
+    setRefreshFailed(false)
 
     void fetch('/api/auth/refresh', {
       cache: 'no-store',
@@ -15,20 +18,31 @@ export default function RefreshSession() {
       method: 'POST',
     }).then((response) => {
       if (!active) return
-      if (response.ok) router.refresh()
-      else router.replace('/login')
+      if (response.ok) {
+        router.refresh()
+        return
+      }
+      if (response.status === 401) {
+        router.replace('/login')
+        return
+      }
+      setRefreshFailed(true)
     }).catch(() => {
-      if (active) router.replace('/login')
+      if (active) setRefreshFailed(true)
     })
 
     return () => {
       active = false
     }
-  }, [router])
+  }, [attempt, router])
 
   return (
     <main className="auth-page" aria-live="polite">
-      <p className="auth-notice">세션을 확인하고 있어요</p>
+      {refreshFailed ? (
+        <p className="auth-setup" role="alert">
+          세션을 갱신하지 못했어요. <button className="auth-retry" onClick={() => setAttempt((value) => value + 1)} type="button">다시 시도</button>
+        </p>
+      ) : <p className="auth-notice">세션을 확인하고 있어요</p>}
     </main>
   )
 }

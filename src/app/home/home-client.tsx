@@ -43,6 +43,8 @@ export default function HomeClient({ account, tab }: { account: UserAccount; tab
   const [withdrawing, setWithdrawing] = useState(false)
   const [withdrawalError, setWithdrawalError] = useState<string | null>(null)
   const amounts = useMemo(() => splitAmounts(total, people), [total, people])
+  const minimumAmount = Math.min(...amounts)
+  const maximumAmount = Math.max(...amounts)
 
   function onReceiptSelect(event: ChangeEvent<HTMLInputElement>) {
     setReceiptName(event.target.files?.[0]?.name ?? null)
@@ -257,7 +259,9 @@ export default function HomeClient({ account, tab }: { account: UserAccount; tab
           <div className="result-card">
             <p>1인당 낼 금액</p>
             <strong>{won.format(amounts[0] ?? 0)}<small>원</small></strong>
-            <span>{people}명이 똑같이 나눠 내요</span>
+            <span>{minimumAmount === maximumAmount
+              ? `${people}명이 똑같이 나눠 내요`
+              : `${won.format(minimumAmount)}원~${won.format(maximumAmount)}원으로 나눠 내요`}</span>
           </div>
 
           <button className="settle-button" onClick={() => setSettlementStarted(true)} type="button">

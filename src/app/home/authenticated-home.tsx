@@ -14,7 +14,7 @@ export async function renderAuthenticatedHome(tab: HomeTab) {
       const account = await getUserAccount(access.userId)
       if (account) return <HomeClient account={account} tab={tab} />
     } catch {
-      // Fail closed: the refresh route will clear the cookies if Neon is unavailable.
+      // Keep valid cookies so the refresh screen can offer a retry when Neon is unavailable.
     }
   }
 

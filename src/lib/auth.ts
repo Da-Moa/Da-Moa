@@ -239,35 +239,58 @@ export async function exchangeKakaoAuthorizationCode(
   return { accessToken: result.access_token, idToken: result.id_token }
 }
 
+function isKakaoSigningKey(candidate: unknown, kid: string): candidate is NodeJsonWebKey {
+  return (
+    isJsonObject(candidate)
+    && candidate.kid === kid
+    && candidate.kty === 'RSA'
+    && candidate.alg === 'RS256'
+    && candidate.use === 'sig'
+    && typeof candidate.n === 'string'
+    && typeof candidate.e === 'string'
+  )
+}
+
+async function fetchKakaoJwks(bypassCache = false): Promise<unknown[] | null> {
+  const response = await fetch(KAKAO_JWKS_URI, {
+    ...(bypassCache ? { cache: 'no-store' as const } : { next: { revalidate: 300 } }),
+    redirect: 'error',
+    signal: AbortSignal.timeout(10_000),
+  })
+  const jwks: unknown = await response.json().catch(() => null)
+  return response.ok && isJsonObject(jwks) && Array.isArray(jwks.keys) ? jwks.keys : null
+}
+
 export async function verifyKakaoIdToken(
   token: string,
   config: KakaoConfig,
   expectedNonce: string,
 ): Promise<string | null> {
   const parsed = parseJwt(token)
+  const kid = parsed?.header.kid
   if (
     !parsed
     || parsed.header.alg !== 'RS256'
-    || typeof parsed.header.kid !== 'string'
+    || typeof kid !== 'string'
   ) return null
 
-  const response = await fetch(KAKAO_JWKS_URI, {
-    next: { revalidate: 300 },
-    redirect: 'error',
-    signal: AbortSignal.timeout(10_000),
-  })
-  const jwks: unknown = await response.json().catch(() => null)
-  if (!response.ok || !isJsonObject(jwks) || !Array.isArray(jwks.keys)) return null
+  let jwks = await fetchKakaoJwks()
+  if (!jwks) return null
 
-  const key = jwks.keys.find((candidate): candidate is NodeJsonWebKey => (
-    isJsonObject(candidate)
-    && candidate.kid === parsed.header.kid
-    && candidate.kty === 'RSA'
-    && candidate.alg === 'RS256'
-    && candidate.use === 'sig'
-    && typeof candidate.n === 'string'
-    && typeof candidate.e === 'string'
+  let key = jwks.find((candidate): candidate is NodeJsonWebKey => (
+    isKakaoSigningKey(candidate, kid)
   ))
+  const cachedKidExists = jwks.some((candidate) => (
+    isJsonObject(candidate) && candidate.kid === kid
+  ))
+
+  if (!key && !cachedKidExists) {
+    jwks = await fetchKakaoJwks(true)
+    if (!jwks) return null
+    key = jwks.find((candidate): candidate is NodeJsonWebKey => (
+      isKakaoSigningKey(candidate, kid)
+    ))
+  }
   if (!key) return null
 
   try {

@@ -57,7 +57,7 @@ export const openApiDocument = {
       post: {
         tags: ['인증'],
         summary: '액세스 토큰 재발급',
-        description: '서명과 만료가 유효하고 DB에 저장된 해시와 일치하는 리프레시 토큰이 있을 때만 새 액세스 토큰 쿠키를 설정합니다.',
+        description: '서명과 만료가 유효하고 DB에 저장된 해시와 일치하는 리프레시 토큰이 있을 때만 액세스·리프레시 JWT를 함께 회전해 설정합니다.',
         parameters: [
           {
             name: 'Origin',
@@ -71,6 +71,7 @@ export const openApiDocument = {
         responses: {
           '200': { $ref: '#/components/responses/Ok' },
           '401': { $ref: '#/components/responses/Unauthorized' },
+          '503': { $ref: '#/components/responses/RefreshUnavailable' },
         },
       },
     },
@@ -78,7 +79,7 @@ export const openApiDocument = {
       post: {
         tags: ['인증'],
         summary: '로그아웃',
-        description: '현재 리프레시 토큰의 DB 기록을 삭제하고 액세스·리프레시 쿠키를 제거합니다.',
+        description: '유효한 리프레시 토큰을 우선 사용하고, 없으면 유효한 액세스 토큰의 세션 ID로 DB 기록을 식별·삭제한 뒤 액세스·리프레시 쿠키를 제거합니다.',
         parameters: [
           {
             name: 'Origin',
@@ -174,6 +175,12 @@ export const openApiDocument = {
         required: ['error'],
         properties: { error: { type: 'string', enum: ['logout_unavailable'] } },
       },
+      RefreshUnavailable: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['error'],
+        properties: { error: { type: 'string', enum: ['refresh_unavailable'] } },
+      },
       WithdrawalUnavailable: {
         type: 'object',
         additionalProperties: false,
@@ -215,6 +222,15 @@ export const openApiDocument = {
           'application/json': {
             schema: { $ref: '#/components/schemas/LogoutUnavailable' },
             example: { error: 'logout_unavailable' },
+          },
+        },
+      },
+      RefreshUnavailable: {
+        description: '액세스 토큰 재발급 중 리프레시 세션 저장소를 사용할 수 없음',
+        content: {
+          'application/json': {
+            schema: { $ref: '#/components/schemas/RefreshUnavailable' },
+            example: { error: 'refresh_unavailable' },
           },
         },
       },
