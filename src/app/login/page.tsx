@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, MessageCircle, ShieldCheck } from 'lucide-react'
+import { ArrowLeft, Check, MessageCircle } from 'lucide-react'
 import Link from 'next/link'
 
 const loginMessages: Record<string, string> = {
@@ -38,7 +38,6 @@ export default async function LoginPage({
           <MessageCircle aria-hidden="true" fill="currentColor" size={20} />
           카카오로 시작하기
         </a>
-        <p className="auth-notice"><ShieldCheck size={15} /> 카카오 로그인으로 필요한 정보만 안전하게 받아요</p>
         {message && <p className="auth-setup" role="alert">{message}</p>}
       </section>
     </main>
