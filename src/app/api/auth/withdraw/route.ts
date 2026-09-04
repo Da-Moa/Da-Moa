@@ -2,13 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import {
   ACCESS_TOKEN_COOKIE_NAME,
   authCookieOptions,
-  currentTimestamp,
   OIDC_COOKIE_NAMES,
   readAccessToken,
   REFRESH_TOKEN_COOKIE_NAME,
   refreshCookieOptions,
 } from '../../../../lib/auth'
-import { deleteUser, isActiveSession } from '../../../../lib/auth-store'
+import { deleteUser } from '../../../../lib/auth-store'
 
 export const runtime = 'nodejs'
 
@@ -36,8 +35,6 @@ export async function POST(request: NextRequest) {
   if (!access) return unauthorizedResponse()
 
   try {
-    const now = currentTimestamp()
-    if (!(await isActiveSession(access.userId, access.sessionId, now))) return unauthorizedResponse()
     if (!(await deleteUser(access.userId))) return unauthorizedResponse()
   } catch {
     const response = NextResponse.json({ error: 'withdrawal_unavailable' }, { status: 503 })

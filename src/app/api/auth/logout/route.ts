@@ -2,13 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import {
   ACCESS_TOKEN_COOKIE_NAME,
   authCookieOptions,
-  currentTimestamp,
   readAccessToken,
   readRefreshToken,
   REFRESH_TOKEN_COOKIE_NAME,
   refreshCookieOptions,
 } from '../../../../lib/auth'
-import { revokeRefreshSession } from '../../../../lib/auth-store'
+import { deleteRefreshSession } from '../../../../lib/auth-store'
 
 export const runtime = 'nodejs'
 
@@ -31,7 +30,7 @@ export async function POST(request: NextRequest) {
 
   if (session) {
     try {
-      await revokeRefreshSession(session.userId, session.sessionId, currentTimestamp())
+      await deleteRefreshSession(session.userId, session.sessionId)
     } catch {
       const response = NextResponse.json({ error: 'logout_unavailable' }, { status: 503 })
       response.headers.set('Cache-Control', 'no-store')

@@ -25,8 +25,8 @@ a:focus-visible, button:focus-visible, input:focus-visible { outline: 3px solid 
   padding: max(20px, env(safe-area-inset-top)) 20px calc(92px + env(safe-area-inset-bottom));
 }
 
-.topbar { align-items: center; display: flex; justify-content: space-between; }
-.topbar-actions { display: flex; gap: 2px; }
+.app-shell .topbar { align-items: center; display: flex; justify-content: space-between; }
+.app-shell .topbar-actions { display: flex; gap: 2px; }
 .brand { display: flex; mix-blend-mode: multiply; text-decoration: none; transition: transform .2s ease; }
 .brand:hover { transform: scale(1.08); }
 .brand img { display: block; }

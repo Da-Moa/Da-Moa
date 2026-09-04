@@ -154,16 +154,6 @@ export async function createRefreshSession({
   `, [id, userId, tokenHash, issuedAt, expiresAt])
 }
 
-export async function isActiveSession(userId: string, sessionId: string, now: number) {
-  await ensureSchema()
-  const rows = await getSql().query(`
-    SELECT 1
-    FROM refresh_sessions
-    WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL AND expires_at > $3
-  `, [sessionId, userId, now])
-  return rows.length > 0
-}
-
 export async function isActiveRefreshToken(
   userId: string,
   sessionId: string,
@@ -179,20 +169,12 @@ export async function isActiveRefreshToken(
   return rows.length > 0
 }
 
-export async function revokeRefreshSession(userId: string, sessionId: string, now: number) {
-  await ensureSchema()
-  await getSql().query(`
-    UPDATE refresh_sessions
-    SET revoked_at = $1
-    WHERE id = $2 AND user_id = $3 AND revoked_at IS NULL
-  `, [now, sessionId, userId])
-}
+export async function deleteRefreshSession(userId: string, sessionId: string) {
+  if (!userId || !sessionId) throw new Error('Refresh session is required')
 
-export async function revokeAllUserSessions(userId: string, now: number) {
   await ensureSchema()
   await getSql().query(`
-    UPDATE refresh_sessions
-    SET revoked_at = $1
-    WHERE user_id = $2 AND revoked_at IS NULL
-  `, [now, userId])
+    DELETE FROM refresh_sessions
+    WHERE id = $1 AND user_id = $2
+  `, [sessionId, userId])
 }
