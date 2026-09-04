@@ -26,10 +26,34 @@ a:focus-visible, button:focus-visible, input:focus-visible { outline: 3px solid 
 }
 
 .topbar { align-items: center; display: flex; justify-content: space-between; }
+.topbar-actions { display: flex; gap: 2px; }
 .brand { display: flex; mix-blend-mode: multiply; text-decoration: none; transition: transform .2s ease; }
 .brand:hover { transform: scale(1.08); }
 .brand img { display: block; }
 .icon-button { align-items: center; background: transparent; border: 0; border-radius: 50%; color: #4e5968; display: flex; justify-content: center; padding: 7px; }
+.account-dialog { background: #fff; border: 0; border-radius: 20px; box-shadow: var(--box-shadow); color: #191f28; margin: auto; max-width: calc(100% - 40px); padding: 0; width: 400px; }
+.account-dialog::backdrop { background: rgba(25, 31, 40, .42); }
+.account-dialog-content { padding: 22px; }
+.account-dialog-header { align-items: flex-start; display: flex; justify-content: space-between; }
+.account-dialog-header p { color: #6b7684; font-size: 13px; font-weight: 700; margin: 0 0 5px; }
+.account-dialog-header h2 { font-size: 21px; margin: 0; }
+.account-dialog-header form { margin: 0; }
+.account-dialog-close { background: #f2f4f6; color: #4e5968; }
+.account-provider { align-items: center; background: #f2f4f6; border-radius: 15px; display: flex; gap: 12px; margin-top: 22px; padding: 14px; }
+.account-avatar { align-items: center; background: #e8f8ff; border-radius: 50%; color: #5dc4fc; display: flex; flex: 0 0 56px; height: 56px; justify-content: center; overflow: hidden; width: 56px; }
+.account-avatar img { height: 100%; object-fit: cover; width: 100%; }
+.account-provider div { display: grid; gap: 4px; }
+.account-provider strong { font-size: 15px; }
+.account-details { border-top: 1px solid #e5e8eb; display: grid; gap: 13px; margin: 18px 0 0; padding-top: 18px; }
+.account-details div { align-items: center; display: flex; gap: 16px; justify-content: space-between; }
+.account-details dt { color: #6b7684; font-size: 13px; }
+.account-details dd { font-size: 13px; font-weight: 600; margin: 0; max-width: 70%; overflow-wrap: anywhere; text-align: right; }
+.account-logout-button { background: #f2f4f6; border: 0; border-radius: 12px; color: #4e5968; font-size: 14px; font-weight: 700; margin-top: 18px; min-height: 46px; width: 100%; }
+.account-logout-button:disabled { color: #8b95a1; }
+.account-logout-error { color: #e5484d; font-size: 12px; margin: 10px 0 0; text-align: center; }
+.account-withdraw-button { background: transparent; border: 0; color: #e5484d; display: block; font-size: 13px; font-weight: 700; margin: 10px auto 0; padding: 8px; }
+.account-withdraw-button:disabled { color: #b0b8c1; }
+.account-withdraw-error { color: #e5484d; font-size: 12px; margin: 0; text-align: center; }
 
 .welcome { padding: 37px 4px 27px; }
 .welcome p, .section-title p { color: #6b7684; font-size: 14px; font-weight: 600; margin: 0 0 7px; text-wrap: pretty; }
@@ -104,6 +128,21 @@ h1 { color: #191f28; font-size: clamp(31px, 8.4vw, 39px); line-height: 1.2; marg
 .bottom-nav { align-items: center; background: rgba(255, 255, 255, .96); border-top: 1px solid #e5e8eb; bottom: 0; display: flex; justify-content: space-around; left: 50%; max-width: 480px; padding: 9px 8px calc(9px + env(safe-area-inset-bottom)); position: fixed; transform: translateX(-50%); width: 100%; }
 .bottom-nav a { align-items: center; color: #8b95a1; display: flex; flex: 1; flex-direction: column; font-size: 11px; gap: 4px; min-height: 41px; justify-content: center; text-decoration: none; text-wrap: pretty; }
 .bottom-nav a[aria-current='page'] { color: #5dc4fc; font-weight: 700; }
+.tab-heading { padding: 37px 4px 27px; }
+.tab-heading p { color: #6b7684; font-size: 14px; font-weight: 600; margin: 0 0 7px; }
+.tab-heading h1 { margin-bottom: 0; }
+.tab-create { margin-top: 0; }
+.history-list { margin-top: 0; }
+.all-functions { display: grid; gap: 10px; }
+.all-function-row { align-items: center; background: #fff; border: 0; border-radius: 17px; box-shadow: var(--box-shadow); color: #191f28; display: flex; gap: 13px; min-height: 78px; padding: 13px; text-align: left; text-decoration: none; transition: transform .2s ease; width: 100%; }
+.all-function-row:hover { transform: scale(1.02); }
+.all-function-icon { align-items: center; background: #e8f8ff; border-radius: 13px; color: #5dc4fc; display: flex; flex: 0 0 46px; height: 46px; justify-content: center; }
+.all-function-copy { display: grid; flex: 1; gap: 4px; min-width: 0; }
+.all-function-copy strong { font-size: 15px; }
+.all-function-copy small { color: #8b95a1; font-size: 12px; }
+.all-function-row > svg { color: #8b95a1; flex: 0 0 auto; }
+.all-logout-row .all-function-icon { background: #fff0f1; color: #e5484d; }
+.all-logout-row:disabled { opacity: .65; }
 
 .landing-page { --landing-header-height: calc(max(20px, env(safe-area-inset-top)) + 54px); background: #f2f4f6; margin: 0 auto; max-width: 480px; min-height: 100dvh; padding: 0 20px max(28px, env(safe-area-inset-bottom)); }
 .landing-header { align-items: center; background: #f2f4f6; border-bottom: 1px solid #e5e8eb; display: flex; justify-content: space-between; padding: max(20px, env(safe-area-inset-top)) 0 14px; position: sticky; top: 0; z-index: 10; }

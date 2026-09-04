@@ -1,17 +1,18 @@
 import { ArrowLeft, Check, MessageCircle, ShieldCheck } from 'lucide-react'
 import Link from 'next/link'
 
-const kakaoClientId = process.env.NEXT_PUBLIC_KAKAO_REST_API_KEY
-const kakaoRedirectUri = process.env.NEXT_PUBLIC_KAKAO_REDIRECT_URI
-const kakaoLoginUrl = kakaoClientId && kakaoRedirectUri
-  ? `https://kauth.kakao.com/oauth/authorize?${new URLSearchParams({
-      client_id: kakaoClientId,
-      redirect_uri: kakaoRedirectUri,
-      response_type: 'code',
-    })}`
-  : null
+const loginMessages: Record<string, string> = {
+  configuration: '로그인 설정을 확인해 주세요',
+  failed: '로그인을 완료하지 못했어요. 다시 시도해 주세요',
+  invalid: '로그인 요청이 만료되었어요. 다시 시도해 주세요',
+}
 
-export default function LoginPage() {
+export default async function LoginPage({
+  searchParams,
+}: Readonly<{ searchParams: Promise<{ error?: string }> }>) {
+  const { error } = await searchParams
+  const message = error ? loginMessages[error] ?? loginMessages.failed : undefined
+
   return (
     <main className="auth-page">
       <Link className="auth-back" href="/" aria-label="홈으로 돌아가기">
@@ -33,19 +34,12 @@ export default function LoginPage() {
       </section>
 
       <section className="auth-actions" aria-label="로그인 수단">
-        {kakaoLoginUrl ? (
-          <a className="kakao-login" href={kakaoLoginUrl}>
-            <MessageCircle aria-hidden="true" fill="currentColor" size={20} />
-            카카오로 시작하기
-          </a>
-        ) : (
-          <button className="kakao-login" disabled type="button">
-            <MessageCircle aria-hidden="true" fill="currentColor" size={20} />
-            카카오로 시작하기
-          </button>
-        )}
+        <a className="kakao-login" href="/api/auth/kakao">
+          <MessageCircle aria-hidden="true" fill="currentColor" size={20} />
+          카카오로 시작하기
+        </a>
         <p className="auth-notice"><ShieldCheck size={15} /> 카카오 로그인으로 필요한 정보만 안전하게 받아요</p>
-        {!kakaoLoginUrl && <p className="auth-setup">카카오 앱 키와 Redirect URI를 설정하면 로그인을 시작할 수 있어요</p>}
+        {message && <p className="auth-setup" role="alert">{message}</p>}
       </section>
     </main>
   )
