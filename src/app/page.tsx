@@ -1,154 +1,335 @@
 'use client'
 
-import { ChangeEvent, useMemo, useState } from 'react'
+import { useEffect, useRef } from 'react'
+import { ReceiptText, Users, WalletCards } from 'lucide-react'
+import Image from 'next/image'
+import Link from 'next/link'
+import hero from '../assets/hero.png'
 import {
-  Bell,
-  Camera,
-  Check,
-  ChevronRight,
-  History,
-  ImagePlus,
-  Minus,
-  Plus,
-  ReceiptText,
-  Users,
-  WalletCards,
-} from 'lucide-react'
-import { splitAmounts } from '../lib/split'
+  adjacentPhase,
+  BENEFITS_STAGE_ONE_SCROLL,
+  BENEFITS_STAGE_TWO_SCROLL,
+  benefitsPhase,
+  HERO_EXIT_SCROLL,
+  HERO_STAGE_ONE_SCROLL,
+  HERO_STAGE_TWO_SCROLL,
+  heroPhase,
+  isSectionTransitioning,
+  nextSectionTransition,
+  type SectionTransitionState,
+} from '../lib/hero-phase'
 
-const INITIAL_TOTAL = 58_300
-const INITIAL_PEOPLE = 4
-const won = new Intl.NumberFormat('ko-KR')
+const benefits = [
+  { title: '영수증 한 장으로', description: '총 금액을 빠르게 입력해요', Icon: ReceiptText },
+  { title: '정확하게 1/N', description: '인원수만 정하면 끝이에요', Icon: Users },
+  { title: '링크 하나로', description: '친구들에게 정산을 요청해요', Icon: WalletCards },
+]
 
-export default function Home() {
-  const [receiptName, setReceiptName] = useState<string | null>(null)
-  const [total, setTotal] = useState(INITIAL_TOTAL)
-  const [people, setPeople] = useState(INITIAL_PEOPLE)
-  const [settlementStarted, setSettlementStarted] = useState(false)
-  const amounts = useMemo(() => splitAmounts(total, people), [total, people])
+export default function LandingPage() {
+  const heroSceneRef = useRef<HTMLElement>(null)
+  const benefitsSceneRef = useRef<HTMLDivElement>(null)
 
-  function onReceiptSelect(event: ChangeEvent<HTMLInputElement>) {
-    setReceiptName(event.target.files?.[0]?.name ?? null)
-  }
+  useEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+
+    const scene = heroSceneRef.current
+    const benefitsScene = benefitsSceneRef.current
+    if (!scene || !benefitsScene) return
+
+    const heroPanel = scene.querySelector<HTMLElement>('.landing-hero')
+    const benefitsPanel = benefitsScene.querySelector<HTMLElement>('.landing-benefits')
+    const header = document.querySelector<HTMLElement>('.landing-header')
+    if (!heroPanel || !benefitsPanel || !header) return
+
+    const root = document.documentElement
+    const animations = new Set<Animation>()
+    let animationFrame = 0
+    let disposed = false
+    let lastScrollY = window.scrollY
+    let lockedScrollY: number | undefined
+    let initialEntering = true
+    let stageTransitioning = false
+    let transitionState: SectionTransitionState = 'idle-hero'
+
+    const isInteractionLocked = () => initialEntering || stageTransitioning || isSectionTransitioning(transitionState)
+
+    const lockScroll = () => {
+      lockedScrollY = window.scrollY
+      root.classList.add('landing-transition-locked')
+    }
+
+    const unlockScroll = () => {
+      if (disposed) return
+      lastScrollY = window.scrollY
+      lockedScrollY = undefined
+      root.classList.remove('landing-transition-locked')
+    }
+
+    const fade = async (element: HTMLElement, from: number, to: number, settle?: () => void) => {
+      const animation = element.animate(
+        [{ opacity: from }, { opacity: to }],
+        { duration: 500, easing: 'cubic-bezier(.22, 1, .36, 1)', fill: 'forwards' },
+      )
+      animations.add(animation)
+
+      let finished = false
+      try {
+        await animation.finished
+        finished = true
+      } catch {
+        // Cleanup cancels active animations when the page unmounts.
+      } finally {
+        animations.delete(animation)
+      }
+
+      if (finished && !disposed) settle?.()
+      animation.cancel()
+      return finished && !disposed
+    }
+
+    const runInitialEntry = async () => {
+      lockScroll()
+      try {
+        await fade(heroPanel, 0, 1, () => heroPanel.classList.remove('landing-hero-initial'))
+      } finally {
+        initialEntering = false
+        unlockScroll()
+      }
+    }
+
+    const scrollToPosition = (top: number) => {
+      lockedScrollY = Math.max(0, top)
+      window.scrollTo({ top: lockedScrollY, behavior: 'auto' })
+    }
+
+    const scrollToBenefitsPhase = (phase: number) => {
+      const progress = phase === 2 ? BENEFITS_STAGE_TWO_SCROLL : BENEFITS_STAGE_ONE_SCROLL
+      const top = window.scrollY + benefitsScene.getBoundingClientRect().top - header.getBoundingClientRect().bottom + progress
+      scrollToPosition(top)
+    }
+
+    const scrollToHeroExitEdge = () => {
+      const top = window.scrollY + scene.getBoundingClientRect().top + HERO_EXIT_SCROLL - 1
+      scrollToPosition(top)
+    }
+
+    const scrollToHeroPhase = (phase: number) => {
+      const progress = phase === 2 ? HERO_STAGE_TWO_SCROLL : HERO_STAGE_ONE_SCROLL
+      const top = window.scrollY + scene.getBoundingClientRect().top + progress
+      scrollToPosition(top)
+    }
+
+    const waitForStageAnimations = async (panel: HTMLElement) => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+      const running = panel.getAnimations({ subtree: true })
+      await Promise.allSettled(running.map((animation) => animation.finished))
+      return !disposed
+    }
+
+    const runStageTransition = async (section: 'hero' | 'benefits', phase: number) => {
+      if (isInteractionLocked()) return
+
+      stageTransitioning = true
+      lockScroll()
+      const panel = section === 'hero' ? heroPanel : benefitsPanel
+      const sectionElement = section === 'hero' ? scene : benefitsScene
+      const transitionClass = section === 'hero' ? 'landing-hero-transitioning' : 'landing-benefits-transitioning'
+
+      panel.classList.add(transitionClass)
+      if (section === 'hero') scrollToHeroPhase(phase)
+      else scrollToBenefitsPhase(phase)
+      sectionElement.dataset.phase = String(phase)
+
+      try {
+        await waitForStageAnimations(panel)
+      } finally {
+        panel.classList.remove(transitionClass)
+        stageTransitioning = false
+        unlockScroll()
+      }
+    }
+
+    const runSectionTransition = async (direction: 'down' | 'up') => {
+      const startedState = nextSectionTransition(transitionState, direction)
+      if (startedState === transitionState) return
+
+      transitionState = startedState
+      lockScroll()
+
+      try {
+        if (direction === 'down') {
+          heroPanel.classList.add('landing-hero-transitioning')
+          if (!await fade(heroPanel, 1, 0, () => { scene.dataset.phase = '3' })) return
+
+          transitionState = nextSectionTransition(transitionState, 'complete')
+          scrollToBenefitsPhase(1)
+          benefitsScene.dataset.phase = '1'
+          benefitsPanel.classList.add('landing-benefits-transitioning')
+          const stageAnimations = waitForStageAnimations(benefitsPanel)
+          if (!await fade(benefitsPanel, 0, 1)) return
+          if (!await stageAnimations) return
+          transitionState = nextSectionTransition(transitionState, 'complete')
+        } else {
+          benefitsPanel.classList.add('landing-benefits-transitioning')
+          if (!await fade(benefitsPanel, 1, 0, () => { benefitsScene.dataset.phase = '0' })) return
+
+          transitionState = nextSectionTransition(transitionState, 'complete')
+          scrollToHeroExitEdge()
+          scene.dataset.phase = '2'
+          heroPanel.classList.add('landing-hero-transitioning')
+          const stageAnimations = waitForStageAnimations(heroPanel)
+          if (!await fade(heroPanel, 0, 1)) return
+          if (!await stageAnimations) return
+          transitionState = nextSectionTransition(transitionState, 'complete')
+        }
+      } finally {
+        heroPanel.classList.remove('landing-hero-transitioning')
+        benefitsPanel.classList.remove('landing-benefits-transitioning')
+        unlockScroll()
+      }
+    }
+
+    const updatePhase = () => {
+      animationFrame = 0
+      if (isInteractionLocked()) return
+
+      const scrollY = window.scrollY
+      const direction = scrollY > lastScrollY ? 'down' : scrollY < lastScrollY ? 'up' : undefined
+      lastScrollY = scrollY
+      if (!direction) return
+
+      if (transitionState === 'idle-hero') {
+        const targetHeroPhase = heroPhase(Math.max(0, -scene.getBoundingClientRect().top))
+        const currentHeroPhase = Number(scene.dataset.phase)
+
+        if (direction === 'down' && targetHeroPhase > currentHeroPhase && currentHeroPhase < 2) {
+          void runStageTransition('hero', adjacentPhase(currentHeroPhase, direction))
+        } else if (direction === 'up' && targetHeroPhase < currentHeroPhase && currentHeroPhase > 1) {
+          void runStageTransition('hero', adjacentPhase(currentHeroPhase, direction))
+        } else if (direction === 'down' && currentHeroPhase === 2 && targetHeroPhase === 3) {
+          void runSectionTransition('down')
+        }
+        return
+      }
+
+      const progress = Math.max(0, header.getBoundingClientRect().bottom - benefitsScene.getBoundingClientRect().top)
+      const nextBenefitsPhase = benefitsPhase(progress)
+      const currentBenefitsPhase = Number(benefitsScene.dataset.phase)
+
+      if (direction === 'up' && nextBenefitsPhase < currentBenefitsPhase && currentBenefitsPhase > 1) {
+        void runStageTransition('benefits', adjacentPhase(currentBenefitsPhase, direction))
+      } else if (direction === 'down' && nextBenefitsPhase > currentBenefitsPhase) {
+        void runStageTransition('benefits', adjacentPhase(currentBenefitsPhase, direction))
+      } else if (direction === 'up' && currentBenefitsPhase === 1 && nextBenefitsPhase === 0) {
+        void runSectionTransition('up')
+      }
+    }
+
+    const onScroll = () => {
+      if (isInteractionLocked()) {
+        if (lockedScrollY !== undefined && Math.abs(window.scrollY - lockedScrollY) > 1) {
+          window.scrollTo({ top: lockedScrollY, behavior: 'auto' })
+        }
+        return
+      }
+      if (!animationFrame) animationFrame = requestAnimationFrame(updatePhase)
+    }
+
+    const preventScrollInput = (event: Event) => {
+      if (isInteractionLocked() && event.cancelable) event.preventDefault()
+    }
+
+    const preventScrollKey = (event: KeyboardEvent) => {
+      if (
+        isInteractionLocked()
+        && ['ArrowDown', 'ArrowUp', 'End', 'Home', 'PageDown', 'PageUp', ' '].includes(event.key)
+      ) event.preventDefault()
+    }
+
+    root.classList.add('hero-sequence-ready')
+    scene.dataset.phase = String(Math.min(2, heroPhase(Math.max(0, -scene.getBoundingClientRect().top))))
+    const initialBenefitsPhase = benefitsPhase(
+      Math.max(0, header.getBoundingClientRect().bottom - benefitsScene.getBoundingClientRect().top),
+    )
+    if (initialBenefitsPhase > 0) {
+      transitionState = 'idle-benefits'
+      scene.dataset.phase = '3'
+      benefitsScene.dataset.phase = String(initialBenefitsPhase)
+    }
+
+    window.addEventListener('scroll', onScroll, { passive: true })
+    window.addEventListener('resize', onScroll)
+    window.addEventListener('wheel', preventScrollInput, { passive: false })
+    window.addEventListener('touchmove', preventScrollInput, { passive: false })
+    window.addEventListener('keydown', preventScrollKey)
+
+    if (initialBenefitsPhase === 0 && window.scrollY === 0) void runInitialEntry()
+    else {
+      initialEntering = false
+      heroPanel.classList.remove('landing-hero-initial')
+    }
+
+    return () => {
+      disposed = true
+      cancelAnimationFrame(animationFrame)
+      animations.forEach((animation) => animation.cancel())
+      heroPanel.classList.remove('landing-hero-transitioning')
+      benefitsPanel.classList.remove('landing-benefits-transitioning')
+      root.classList.remove('hero-sequence-ready', 'landing-transition-locked')
+      window.removeEventListener('scroll', onScroll)
+      window.removeEventListener('resize', onScroll)
+      window.removeEventListener('wheel', preventScrollInput)
+      window.removeEventListener('touchmove', preventScrollInput)
+      window.removeEventListener('keydown', preventScrollKey)
+    }
+  }, [])
 
   return (
-    <main className="app-shell" id="home">
-      <header className="topbar">
-        <a className="brand" href="#home" aria-label="다모아 홈">
-          <img alt="다모아" height="38" src="/logo/da-moa-trans.png" width="46" />
-        </a>
-        <button className="icon-button" type="button" aria-label="알림">
-          <Bell size={21} strokeWidth={2.2} />
-        </button>
+    <main className="landing-page">
+      <header className="landing-header">
+        <Link className="landing-brand" href="/" aria-label="다모아 홈">
+          <img alt="다모아" height="34" src="/logo/da-moa-trans.png" width="41" />
+        </Link>
+        <Link className="landing-login" href="/login">로그인</Link>
       </header>
 
-      <section className="welcome" aria-labelledby="welcome-heading">
-        <p>정산이 필요할 때</p>
-        <h1 id="welcome-heading">한 번에 깔끔하게<br />다모아 정산해요.</h1>
-      </section>
-
-      <section className="summary-card" aria-labelledby="summary-heading">
-        <div className="summary-heading">
-          <div>
-            <p>진행 중인 정산</p>
-            <h2 id="summary-heading">친구들과 점심</h2>
+      <section className="landing-hero-scene" aria-labelledby="landing-heading" data-phase="1" ref={heroSceneRef}>
+        <div className="landing-hero landing-hero-initial">
+          <div className="landing-hero-copy">
+            <p>더치페이, 이제 가볍게</p>
+            <h1 id="landing-heading">모임비 정산,<br /><span>다모아로 끝내요</span></h1>
+            <span>영수증부터 송금 요청까지<br />복잡한 정산을 한 곳에서</span>
           </div>
-          <span className="status-badge">3명 대기</span>
-        </div>
-        <div className="summary-amount">
-          <span>내가 받을 금액</span>
-          <strong>{won.format(amounts[0] ?? 0)}원</strong>
-        </div>
-        <a className="summary-link" href="#create">정산 이어서 하기 <ChevronRight size={18} /></a>
-      </section>
-
-      <section className="shortcuts" aria-labelledby="shortcut-heading">
-        <h2 id="shortcut-heading">빠른 정산</h2>
-        <div className="shortcut-grid">
-          <a href="#create"><span><Plus size={22} /></span>새 정산</a>
-          <a href="#create"><span><ImagePlus size={21} /></span>영수증 추가</a>
-          <a href="#history"><span><History size={21} /></span>정산 내역</a>
+          <Image alt="정산 과정을 상징하는 카드 일러스트" className="landing-hero-image" priority src={hero} />
+          <div className="landing-amount-card" aria-hidden="true">
+            <small>1인당 낼 금액</small>
+            <strong>14,575<span>원</span></strong>
+            <em>4명이 함께해요</em>
+          </div>
         </div>
       </section>
 
-      <section className="activity" id="history" aria-labelledby="activity-heading">
-        <div className="section-title">
-          <h2 id="activity-heading">최근 정산</h2>
-          <a href="#history">전체 보기</a>
-        </div>
-        <article className="activity-item">
-          <span className="activity-icon"><WalletCards size={21} /></span>
-          <div>
-            <strong>친구들과 점심</strong>
-            <small>오늘 · 4명</small>
+      <div className="landing-section-reset" aria-hidden="true" />
+
+      <div className="landing-benefits-scene" data-phase="0" ref={benefitsSceneRef}>
+        <section className="landing-benefits" aria-labelledby="benefits-heading">
+          <p>다모아로 하는 간편 정산</p>
+          <h2 id="benefits-heading">필요한 건 함께한 시간뿐이에요</h2>
+          <div className="landing-benefit-list">
+            {benefits.map(({ title, description, Icon }) => (
+              <article key={title}>
+                <span><Icon size={21} /></span>
+                <div><strong>{title}</strong><small>{description}</small></div>
+              </article>
+            ))}
           </div>
-          <b>58,300원</b>
-        </article>
+        </section>
+      </div>
+
+      <section className="landing-actions" aria-label="다모아 시작하기">
+        <Link className="landing-signup" href="/login">카카오로 시작하기</Link>
+        <p>이미 다모아를 사용 중인가요? <Link href="/login">로그인</Link></p>
       </section>
-
-      <section className="create-section" id="create" aria-labelledby="create-heading">
-        <div className="section-title">
-          <div>
-            <p>새로운 정산</p>
-            <h2 id="create-heading">영수증으로 시작하기</h2>
-          </div>
-        </div>
-
-        <label className={`receipt-card${receiptName ? ' receipt-selected' : ''}`}>
-          <input accept="image/*" capture="environment" onChange={onReceiptSelect} type="file" />
-          <span className="receipt-icon">
-            {receiptName ? <Check size={21} strokeWidth={3} /> : <Camera size={22} />}
-          </span>
-          <span className="receipt-content">
-            <strong>{receiptName ?? '영수증 촬영하기'}</strong>
-            <small>{receiptName ? '영수증을 불러왔어요' : '카메라 또는 사진 보관함에서 선택'}</small>
-          </span>
-          <ChevronRight aria-hidden="true" size={20} />
-        </label>
-        <p className="hint"><ReceiptText size={15} /> OCR 연동 전에는 금액을 직접 입력해요.</p>
-
-        <div className="split-card">
-          <label className="amount-label" htmlFor="total">총 결제 금액</label>
-          <div className="amount-field">
-            <input
-              id="total"
-              inputMode="numeric"
-              min="0"
-              onChange={(event) => setTotal(Math.max(0, Number(event.target.value) || 0))}
-              type="number"
-              value={total}
-            />
-            <span>원</span>
-          </div>
-          <div className="divider" />
-          <div className="people-row">
-            <span><Users size={18} /> 함께한 사람</span>
-            <div className="stepper" aria-label="인원 수">
-              <button aria-label="인원 한 명 줄이기" disabled={people === 1} onClick={() => setPeople((current) => current - 1)} type="button"><Minus size={16} /></button>
-              <strong>{people}명</strong>
-              <button aria-label="인원 한 명 늘리기" onClick={() => setPeople((current) => current + 1)} type="button"><Plus size={16} /></button>
-            </div>
-          </div>
-        </div>
-
-        <div className="result-card">
-          <p>1인당 낼 금액</p>
-          <strong>{won.format(amounts[0] ?? 0)}<small>원</small></strong>
-          <span>{people}명이 똑같이 나눠 내요</span>
-        </div>
-
-        <button className="settle-button" onClick={() => setSettlementStarted(true)} type="button">
-          정산 링크 만들기 <ChevronRight size={20} />
-        </button>
-        <p className="status" aria-live="polite">{settlementStarted ? '다음 단계에서 참여자와 송금 수단을 연결합니다.' : ''}</p>
-      </section>
-
-      <nav className="bottom-nav" aria-label="주요 메뉴">
-        <a aria-current="page" href="#home"><WalletCards size={20} />홈</a>
-        <a href="#create"><ReceiptText size={20} />정산</a>
-        <a href="#history"><History size={20} />내역</a>
-        <a href="#create"><Users size={20} />모임</a>
-      </nav>
     </main>
   )
 }
