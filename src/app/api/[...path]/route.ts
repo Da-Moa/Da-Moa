@@ -1,8 +1,9 @@
-import { NextRequest } from 'next/server'
+import { after, NextRequest } from 'next/server'
 import { ACCESS_TOKEN_COOKIE_NAME, readAccessToken } from '../../../lib/auth'
 import { AppError, errorResponse } from '../../../lib/errors'
 import { acceptInvite, createGroup, createInvite, getGroup, getInvite, listGroups, revokeInvite } from '../../../lib/group-store'
 import { readBytes, readJsonBody as jsonBody } from '../../../lib/http'
+import { captureRoundAudience, createRealtimeToken, publishGroupInvalidation, publishRoundInvalidation, type RoundAudience } from '../../../lib/realtime-server'
 import { addReceipt, checkExclusion, createRound, deleteExpense, excludeMember, getReceipt, getRound, getSettlement, listRounds, removeReceipt, roundCommand, saveExpense } from '../../../lib/round-store'
 
 export const runtime = 'nodejs'
@@ -11,10 +12,17 @@ async function handle(request: NextRequest, context: { params: Promise<{ path: s
   try {
     const method = request.method, { path } = await context.params
     const access = readAccessToken(request.cookies.get(ACCESS_TOKEN_COOKIE_NAME)?.value)
+    if (path[0] === 'realtime' && path[1] === 'auth' && path.length === 2 && method === 'GET') {
+      const origin = request.headers.get('origin')
+      if (origin && origin !== request.nextUrl.origin) throw new AppError(403, 'forbidden', '허용되지 않은 요청입니다')
+      return Response.json({ data: await createRealtimeToken(access) }, { headers: { 'Cache-Control': 'private, no-store', Vary: 'Cookie' } })
+    }
     if (method !== 'GET' && request.headers.get('origin') !== request.nextUrl.origin) throw new AppError(403, 'forbidden', '허용되지 않은 요청입니다')
     const key = request.headers.get('idempotency-key') ?? ''
     const query = request.nextUrl.searchParams
     let data: unknown
+    let cancelledAudience: RoundAudience | null | undefined
+    if (path[0] === 'rounds' && path.length === 2 && method === 'DELETE') cancelledAudience = await captureRoundAudience(access, path[1])
     if (path[0] === 'groups' && path.length === 1 && method === 'GET') data = await listGroups(access, query)
     else if (path[0] === 'groups' && path.length === 1 && method === 'POST') data = await createGroup(access, key, await jsonBody(request))
     else if (path[0] === 'groups' && path.length === 2 && method === 'GET') data = await getGroup(access, path[1])
@@ -46,6 +54,13 @@ async function handle(request: NextRequest, context: { params: Promise<{ path: s
       const receipt = await getReceipt(access, path[1])
       return new Response(receipt.content, { headers: { 'Content-Type': receipt.mimeType, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, no-store' } })
     } else throw new AppError(404, 'not_found', '요청한 API를 찾을 수 없어요')
+    if (method !== 'GET') {
+      if (path[0] === 'groups' && path.length === 1) after(() => publishGroupInvalidation((data as { id: string }).id))
+      else if (path[0] === 'groups' && path[2] === 'rounds') after(() => publishRoundInvalidation((data as { roundId?: string; id: string }).roundId ?? (data as { id: string }).id))
+      else if (path[0] === 'groups') after(() => publishGroupInvalidation(path[1]))
+      else if (path[0] === 'invites' && path[2] === 'accept') after(() => publishGroupInvalidation((data as { id: string }).id))
+      else if (path[0] === 'rounds') after(() => publishRoundInvalidation(path[1], path[2] === 'members', cancelledAudience))
+    }
     return Response.json({ data }, { headers: { 'Cache-Control': 'private, no-store' } })
   } catch (error) { return errorResponse(error) }
 }

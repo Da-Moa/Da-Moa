@@ -161,11 +161,12 @@ export function withdrawAccount(access: AccessToken | null) {
       ORDER BY r.created_at, r.id
     `, [account.id])
     if (rows.length) throw new AppError(409, 'unfinished_rounds', '진행 중인 정산이 있어 탈퇴할 수 없습니다', { rounds: rows })
+    const { rows: memberships } = await client.query('SELECT group_id FROM group_members WHERE user_id=$1 AND left_at IS NULL', [account.id])
     const now = currentTimestamp()
     await client.query('UPDATE users SET deleted_at = $2, updated_at = $2 WHERE id = $1', [account.id, now])
     await client.query('UPDATE refresh_sessions SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL', [account.id, now])
     await client.query('UPDATE group_members SET left_at = $2 WHERE user_id = $1 AND left_at IS NULL', [account.id, now])
-    return { ok: true }
+    return { ok: true, groupIds: memberships.map(row => String(row.group_id)) }
   })
 }
 

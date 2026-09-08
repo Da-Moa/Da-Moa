@@ -4,7 +4,7 @@
 
 ## 실행
 
-Node.js **22.18 이상**과 Docker가 필요합니다. 로컬 개발은 Docker PostgreSQL을, Vercel Preview·Production은 각 환경의 Neon `DATABASE_URL`을 사용합니다.
+Node.js **22.18 이상**과 Docker가 필요합니다. 로컬 개발은 Docker PostgreSQL을, Vercel Preview·Production은 각 환경의 Neon `DATABASE_URL`을 사용합니다. 화면 실시간 반영은 Ably WebSocket을 사용합니다.
 
 ```bash
 npm install
@@ -20,6 +20,7 @@ cp .env.example .env.local
 | `KAKAO_CLIENT_SECRET` | 카카오 콘솔에서 Client Secret을 사용하는 경우만 설정 |
 | `AUTH_JWT_SECRET` | 32바이트 이상의 임의 비밀 문자열 |
 | `DATABASE_URL` | 로컬은 `postgresql://da_moa:da_moa_local@127.0.0.1:55432/da_moa_dev_test`, Vercel은 환경별 Neon 연결 문자열 |
+| `ABLY_API_KEY` | 서버 전용 Ably API 키. `da-moa:user:*` 채널의 publish·subscribe 권한이 필요하며 개발·Preview·Production은 별도 앱/키 사용 권장 |
 
 ```bash
 npm run db:local:up
@@ -59,6 +60,8 @@ npm run dev
 개인별 물리 정산 테이블을 만들지 않습니다. 회차의 분담·개인 잔액과 공통 `보내는 사람 → 받는 사람` 송금 행을 하나의 DB 트랜잭션으로 저장합니다. 변경 요청은 `Idempotency-Key`를 사용하고 회차 변경은 `expectedVersion`도 요구합니다. 응답이 유실되면 같은 키·본문으로 재시도하며 이미 성공한 작업을 다시 적용하지 않습니다. 버전 충돌은 최신 정보를 확인한 뒤 새 제출로 처리합니다.
 
 초기 쓰기는 공통 PostgreSQL advisory transaction lock으로 직렬화합니다. 읽기는 별도 스냅샷을 사용합니다. 이 방식과 PostgreSQL의 작은 증빙 저장은 초기 구현 선택이며, 실제 쓰기 대기나 이미지 저장 비용이 문제가 될 때 잠금 세분화·비공개 객체 저장소 이행을 검토합니다.
+
+모임·회차·지출·정산·계좌 변경은 DB 커밋 후 참여자의 개인 Ably 채널로 재조회 키만 발행합니다. 브라우저는 WebSocket 이벤트를 받으면 기존 인증 API를 다시 읽습니다. 금액·계좌·영수증·초대 토큰은 메시지에 넣지 않으며, 연결이 끊기면 재연결 시 현재 화면을 다시 조회합니다. Ably가 비활성화되거나 일시 실패해도 저장 결과는 유지되고 수동 새로고침을 사용할 수 있습니다.
 
 ## 검증
 
@@ -107,7 +110,7 @@ npm run db:seed:test-accounts
 
 ## 배포
 
-배포 런타임도 Node 22.18 이상으로 맞추고 개발·Preview·Production DB를 분리합니다. Vercel Project Settings의 Preview와 Production에 각각 해당 Neon `DATABASE_URL`을 등록합니다. `vercel.json`이 빌드 전 `npm run db:migrate`를 실행하며, 마이그레이션은 기존 사용자 ID와 카카오 식별자를 보존하고 완료한 이행을 반복하지 않습니다.
+배포 런타임도 Node 22.18 이상으로 맞추고 개발·Preview·Production DB와 Ably 앱을 분리합니다. Vercel Project Settings의 Preview와 Production에 각각 해당 Neon `DATABASE_URL`과 서버 전용 `ABLY_API_KEY`를 등록합니다. `vercel.json`이 빌드 전 `npm run db:migrate`를 실행하며, 마이그레이션은 기존 사용자 ID와 카카오 식별자를 보존하고 완료한 이행을 반복하지 않습니다.
 
 기존 회원은 계좌 정보가 없으므로 첫 이행에서 기존 세션을 폐기하고 **한 번 재로그인·계좌 등록**을 요구합니다. 스키마를 먼저 이행하고 새 가입·소프트 삭제·도메인 코드를 배포합니다. 구버전의 회원 물리 삭제 코드로 되돌리거나 스키마 롤백으로 과거 자료를 삭제하지 않습니다. 배포 플랫폼의 요청 크기·실행 시간 안에서 2 MiB 이미지 업로드와 Neon 연결을 확인합니다.
 

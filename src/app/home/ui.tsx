@@ -6,6 +6,10 @@ import { usePathname } from 'next/navigation'
 import { CircleUserRound, History, House, Menu, Users, X } from 'lucide-react'
 import { ApiError, apiRequest } from '../../lib/api-client'
 import type { RoundStatus } from '../../lib/domain-types'
+import { parseInvalidateEvent, realtimeUserChannel, resourceKeysForPath, type ResourceKey } from '../../lib/realtime'
+
+type RealtimeSubscribe = (key: ResourceKey, listener: () => void) => () => void
+const RealtimeContext = createContext<RealtimeSubscribe | null>(null)
 
 export type Account = {
   id: string; displayName: string | null; email: string | null; profileImageUrl: string | null;
@@ -14,6 +18,7 @@ export type Account = {
 }
 
 export function useResource<T>(path: string | null) {
+  const subscribe = useContext(RealtimeContext)
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState<Error | null>(null)
   const [loading, setLoading] = useState(Boolean(path))
@@ -28,11 +33,20 @@ export function useResource<T>(path: string | null) {
       if (request === sequence.current) setData(value)
       return value
     } catch (cause) {
-      if (request === sequence.current) setError(cause instanceof Error ? cause : new Error('자료를 불러오지 못했어요.'))
+      if (request === sequence.current) {
+        if (cause instanceof ApiError && cause.code === 'not_found') setData(null)
+        setError(cause instanceof Error ? cause : new Error('자료를 불러오지 못했어요.'))
+      }
       return null
     } finally { if (request === sequence.current) setLoading(false) }
   }, [path])
   useEffect(() => { setData(null); void reload(); return () => { sequence.current++ } }, [reload])
+  useEffect(() => {
+    if (!path || !subscribe) return
+    const listener = () => { void reload() }
+    const cleanups = resourceKeysForPath(path).map(key => subscribe(key, listener))
+    return () => cleanups.forEach(cleanup => cleanup())
+  }, [path, reload, subscribe])
   return { data, setData, error, loading, reload }
 }
 
@@ -107,6 +121,51 @@ export function bankValues(form: HTMLFormElement) {
   return { bankName: String(values.get('bankName') ?? ''), accountNumber: String(values.get('accountNumber') ?? ''), accountHolder: String(values.get('accountHolder') ?? '') }
 }
 
+function RealtimeProvider({ accountId, enabled, reloadAccount, children }: { accountId: string; enabled: boolean; reloadAccount: () => Promise<Account | null>; children: ReactNode }) {
+  const listeners = useRef(new Map<ResourceKey, Set<() => void>>())
+  const accountReload = useRef(reloadAccount)
+  accountReload.current = reloadAccount
+  const subscribe = useCallback<RealtimeSubscribe>((key, listener) => {
+    const current = listeners.current.get(key) ?? new Set()
+    current.add(listener); listeners.current.set(key, current)
+    return () => { current.delete(listener); if (!current.size) listeners.current.delete(key) }
+  }, [])
+  useEffect(() => {
+    if (!enabled) return
+    let client: import('ably/modular').BaseRealtime | null = null
+    let channel: import('ably').RealtimeChannel | null = null
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let disposed = false
+    const pending = new Set<ResourceKey>()
+    const queue = (keys: ResourceKey[]) => {
+      keys.forEach(key => pending.add(key))
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        for (const key of pending) {
+          if (key === 'me') void accountReload.current()
+          listeners.current.get(key)?.forEach(listener => listener())
+        }
+        pending.clear()
+      }, 120)
+    }
+    void import('ably/modular').then(async ({ BaseRealtime, FetchRequest, WebSocketTransport }) => {
+      if (disposed) return
+      client = new BaseRealtime({
+        authCallback: (_params, callback) => { void apiRequest<import('ably').TokenRequest>('/api/realtime/auth').then(token => callback(null, token)).catch(error => callback(error instanceof Error ? error.message : '실시간 인증에 실패했습니다', null)) },
+        echoMessages: false, plugins: { FetchRequest, WebSocketTransport },
+      })
+      channel = client.channels.get(realtimeUserChannel(accountId))
+      const onAttached = () => queue(['me', ...listeners.current.keys()])
+      const onMessage = (message: import('ably').InboundMessage) => { const event = parseInvalidateEvent(message.data); if (event) queue(event.keys) }
+      channel.on('attached', onAttached)
+      try { await channel.subscribe('invalidate', onMessage) } catch { if (!disposed) console.error('Realtime subscription failed') }
+      if (disposed) { channel.unsubscribe('invalidate', onMessage); channel.off('attached', onAttached); client.close() }
+    }).catch(() => { if (!disposed) console.error('Realtime client failed to load') })
+    return () => { disposed = true; if (timer) clearTimeout(timer); channel?.unsubscribe(); channel?.off(); client?.close() }
+  }, [accountId, enabled])
+  return <RealtimeContext.Provider value={subscribe}>{children}</RealtimeContext.Provider>
+}
+
 export function AccountPanel() {
   const { account, reloadAccount } = useAccount()
   const action = useAction()
@@ -148,7 +207,7 @@ export function AccountPanel() {
   </div>
 }
 
-export function AppShell({ children }: { children: ReactNode }) {
+export function AppShell({ children, realtimeEnabled }: { children: ReactNode; realtimeEnabled: boolean }) {
   const pathname = usePathname() ?? '/home'
   const me = useResource<Account>('/api/me')
   const dialog = useRef<HTMLDialogElement>(null)
@@ -163,10 +222,10 @@ export function AppShell({ children }: { children: ReactNode }) {
     { href: '/home/history', label: '정산 기록', icon: History, active: pathname === '/home/history' },
     { href: '/home/all', label: '전체', icon: Menu, active: pathname === '/home/all' },
   ]
-  return <AccountContext.Provider value={{ account, reloadAccount: me.reload }}><main className="app-shell">
+  return <RealtimeProvider accountId={account.id} enabled={realtimeEnabled} reloadAccount={me.reload}><AccountContext.Provider value={{ account, reloadAccount: me.reload }}><main className="app-shell">
     <header className="topbar"><Link className="brand" href="/home" aria-label="다모아 홈"><img alt="다모아" height="38" src="/logo/da-moa-trans.png" width="46" /></Link><button aria-label="내 계좌와 계정" aria-haspopup="dialog" className="icon-button" onClick={() => dialog.current?.showModal()} type="button"><CircleUserRound size={24} /></button></header>
     <dialog className="account-dialog" aria-labelledby="account-dialog-heading" ref={dialog} onClick={event => { if (event.target === event.currentTarget) event.currentTarget.close() }}><div className="account-dialog-content"><div className="account-dialog-header"><h2 id="account-dialog-heading">내 계정</h2><button className="icon-button" aria-label="계정 창 닫기" type="button" onClick={() => dialog.current?.close()}><X size={20} /></button></div><AccountPanel /></div></dialog>
     {children}
     <nav aria-label="주 메뉴" className="bottom-nav">{links.map(({ href, label, icon: Icon, active }) => <Link key={href} href={href} aria-current={active ? 'page' : undefined}><Icon size={22} /><span>{label}</span></Link>)}</nav>
-  </main></AccountContext.Provider>
+  </main></AccountContext.Provider></RealtimeProvider>
 }

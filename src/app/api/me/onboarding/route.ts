@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { after, NextRequest, NextResponse } from 'next/server'
 import {
   ACCESS_TOKEN_COOKIE_NAME, REFRESH_TOKEN_COOKIE_NAME, RETURN_TO_COOKIE_NAME,
   authCookieOptions, refreshCookieOptions, readAccessToken, readReturnToCookie,
@@ -6,6 +6,7 @@ import {
 import { completeOnboarding } from '../../../../lib/auth-store'
 import { AppError, errorResponse } from '../../../../lib/errors'
 import { readJsonBody } from '../../../../lib/http'
+import { publishBankInvalidation } from '../../../../lib/realtime-server'
 
 export const runtime = 'nodejs'
 
@@ -16,6 +17,7 @@ export async function POST(request: NextRequest) {
     const access = readAccessToken(request.cookies.get(ACCESS_TOKEN_COOKIE_NAME)?.value)
     const returnTo = readReturnToCookie(request.cookies.get(RETURN_TO_COOKIE_NAME)?.value)
     const session = await completeOnboarding(access, input)
+    after(() => publishBankInvalidation(session.userId))
     const response = NextResponse.json({ data: { id: session.userId, returnTo } }, { headers: { 'Cache-Control': 'private, no-store' } })
     response.cookies.set(ACCESS_TOKEN_COOKIE_NAME, session.accessToken, authCookieOptions(session.accessMaxAge))
     response.cookies.set(REFRESH_TOKEN_COOKIE_NAME, session.refreshToken, refreshCookieOptions(session.refreshMaxAge))

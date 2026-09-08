@@ -12,6 +12,7 @@ import { ErrorNotice, Loading, StatusBadge, useAccount, useAction, useResource }
 function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: RoundDetail; expense: Expense | null; onSaved: () => Promise<unknown>; onCancel: () => void; reload: () => Promise<unknown> }) {
   const { account } = useAccount()
   const action = useAction()
+  const expectedVersion = useRef(round.version)
   const [mode, setMode] = useState<'ALL' | 'SELECTED'>(expense?.splitMode ?? 'ALL')
   const [participants, setParticipants] = useState(expense?.participantIds ?? [])
   const minor = expense?.amountMinor ?? ''
@@ -20,7 +21,7 @@ function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: Rou
     const values = new FormData(form)
     const body = {
       description: String(values.get('description') ?? ''), amount: String(values.get('amount') ?? ''), payerId: String(values.get('payerId') ?? ''), splitMode: mode,
-      ...(mode === 'SELECTED' ? { participantIds: values.getAll('participantIds').map(String) } : {}), expectedVersion: round.version,
+      ...(mode === 'SELECTED' ? { participantIds: values.getAll('participantIds').map(String) } : {}), expectedVersion: expectedVersion.current,
     }
     const result = await action.run(() => apiRequest<MutationResult>(`/api/rounds/${round.id}/expenses${expense ? `/${expense.id}` : ''}`, { method: expense ? 'PATCH' : 'POST', body }))
     if (result) await onSaved()
@@ -36,8 +37,9 @@ function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: Rou
       {mode === 'SELECTED' && <div className="selected-members">{round.members.filter(member => !member.excludedAt).map(member => <label className="check-row" key={member.userId}><input checked={participants.includes(member.userId)} onChange={event => setParticipants(current => event.target.checked ? [...current, member.userId] : current.filter(id => id !== member.userId))} name="participantIds" type="checkbox" value={member.userId} /><span>{member.displayName}</span></label>)}</div>}
     </fieldset>
     <p className="help-text">결제자도 부담자에 포함될 수 있어요. 본인 몫을 제외한 금액을 받아요. 영수증은 저장한 지출에 증빙으로 올릴 수 있어요.</p>
+    {round.status !== 'RECORDING' && <p className="notice notice-warning">다른 변경으로 기록 단계가 끝났어요. 입력을 확인한 뒤 창을 닫고 최신 상태를 확인해 주세요.</p>}
     <ErrorNotice error={action.error} retry={action.error instanceof ApiError && action.error.code === 'stale_round' ? () => void reload() : undefined} />
-    <div className="quick-actions"><button className="primary-button" disabled={action.busy} type="submit">{action.busy ? '저장 중…' : '지출 저장'}</button><button className="secondary-button" disabled={action.busy} type="button" onClick={onCancel}>닫기</button></div>
+    <div className="quick-actions"><button className="primary-button" disabled={action.busy || round.status !== 'RECORDING'} type="submit">{action.busy ? '저장 중…' : '지출 저장'}</button><button className="secondary-button" disabled={action.busy} type="button" onClick={onCancel}>닫기</button></div>
   </form>
 }
 
@@ -173,7 +175,7 @@ export default function RoundClient({ roundId }: { roundId: string }) {
         </div>}
       </section>
       <div className="row-between"><h2 className="section-heading">지출 내역</h2>{recording && myself && !myself.excludedAt && !editing && <button className="text-button" onClick={() => setEditing('new')} type="button"><Plus size={17} /> 지출 추가</button>}</div>
-      {recording && editing && <ExpenseForm key={editing === 'new' ? 'new' : editing.id} round={data} expense={editing === 'new' ? null : editing} reload={refresh} onSaved={async () => { setEditing(null); setCheck(null); await refresh() }} onCancel={() => setEditing(null)} />}
+      {editing && <ExpenseForm key={editing === 'new' ? 'new' : editing.id} round={data} expense={editing === 'new' ? null : editing} reload={refresh} onSaved={async () => { setEditing(null); setCheck(null); await refresh() }} onCancel={() => setEditing(null)} />}
       {data.expenses.length === 0 && <p className="empty-card">지출 내역이 없습니다. 지출을 기록한 뒤 정산을 확정해 주세요.</p>}
       {data.expenses.map(expense => <ExpenseCard key={expense.id} expense={expense} round={data} canEdit={Boolean(recording && (data.isCreator || expense.authorId === account.id && myself && !myself.excludedAt))} highlighted={check?.expenses.some(issue => issue.id === expense.id) ?? false} edit={() => { setEditing(expense); window.scrollTo({ top: 0, behavior: 'smooth' }) }} reload={refresh} />)}
       <ErrorNotice error={more.error} retry={() => void refresh()} />
