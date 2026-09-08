@@ -44,7 +44,7 @@ const domainSchemas = {
   RoundStatus: status,
   MinorAmount: minor,
   ApiError: object({
-    error: { type: 'string', example: 'stale_round', description: 'invalid_input, invalid_amount, invalid_participants, unsupported_currency, unauthorized, forbidden, onboarding_required, not_found, stale_round, invalid_round_state, idempotency_conflict, empty_expenses, member_exclusion_blocked, minimum_participants, unfinished_rounds, receipt_too_large, unsupported_receipt_type, storage_unavailable 등' },
+    error: { type: 'string', example: 'stale_round', description: 'invalid_input, invalid_amount, invalid_participants, unsupported_currency, unauthorized, forbidden, onboarding_required, not_found, stale_round, invalid_round_state, idempotency_conflict, empty_expenses, member_exclusion_blocked, minimum_participants, unfinished_rounds, unfinished_group_rounds, receipt_too_large, unsupported_receipt_type, storage_unavailable 등' },
     message: string,
     details: { type: 'object', additionalProperties: true, description: '현재 버전, 제외 차단 관련 지출 또는 탈퇴를 막는 회차 등. 계좌·인증 토큰은 포함하지 않음.' },
   }, ['error', 'message']),
@@ -99,7 +99,10 @@ const domainPaths = {
     get: operation('모임', '활성 모임 목록', { response: ref('GroupPage'), parameters: pageParameters }),
     post: operation('모임', '모임 생성', { mutation: true, request: { ...object({ name: string }, ['name']), additionalProperties: false } }),
   },
-  '/api/groups/{groupId}': { get: operation('모임', '현재 모임과 활성 멤버 후보', { response: ref('GroupDetail') }) },
+  '/api/groups/{groupId}': {
+    get: operation('모임', '현재 모임과 활성 멤버 후보', { response: ref('GroupDetail') }),
+    delete: operation('모임', '모임 나가기 또는 없애기', { mutation: true, description: '일반 참여자는 본인이 참여 중인 미종료 회차가 없을 때 현재 멤버십의 leftAt을 기록하고 나갑니다. 생성자는 본인 참여 여부와 무관하게 모임 전체의 모든 회차가 종료된 경우에만 모든 멤버십을 종료하고 초대를 폐기합니다. 완료된 회차와 모임 이름은 과거 정산 조회를 위해 보존합니다.' }),
+  },
   '/api/groups/{groupId}/rounds': {
     get: operation('모임', '본인 참여 권한이 있는 모임 회차 목록', { response: ref('RoundPage'), parameters: pageParameters }),
     post: operation('모임', '선택한 멤버로 기록 시작', { mutation: true, request: { ...object({ name: string, currency, participantIds: { type: 'array', items: id, minItems: 2, uniqueItems: true } }, ['name', 'currency', 'participantIds']), additionalProperties: false }, description: '현재 모임 생성자가 생성자 포함 최소 2명과 USD·KRW·JPY 중 통화를 선택합니다. currency는 필수이며 같은 모임에서도 회차마다 다른 통화를 선택할 수 있습니다. 생성 후 통화는 변경할 수 없고 과거 회차의 통화는 보존합니다. 미완료 회차가 있어도 생성할 수 있습니다.' }),

@@ -104,6 +104,25 @@ export async function createGroup(access: Identity, key: string, body: Record<st
   })
 }
 
+export async function leaveGroup(access: Identity, key: string, groupId: string) {
+  return domainMutation(access, key, 'group.leave', { groupId }, async (client, userId) => {
+    const group = await ownerGroup(client, groupId, userId, false)
+    if (group.creator_id === userId) {
+      const { rows } = await client.query("SELECT 1 FROM rounds WHERE group_id=$1 AND status<>'COMPLETED' LIMIT 1", [groupId])
+      if (rows.length) throw new AppError(409, 'unfinished_group_rounds', '종료되지 않은 회차가 있어 모임을 없앨 수 없어요')
+      const now = nowSeconds()
+      await client.query('UPDATE group_invites SET revoked_at=COALESCE(revoked_at,$2) WHERE group_id=$1', [groupId, now])
+      await client.query('UPDATE group_members SET left_at=COALESCE(left_at,$2) WHERE group_id=$1', [groupId, now])
+    } else {
+      const { rows } = await client.query(`SELECT 1 FROM rounds r JOIN round_members m ON m.round_id=r.id
+        WHERE r.group_id=$1 AND m.user_id=$2 AND m.excluded_at IS NULL AND r.status<>'COMPLETED' LIMIT 1`, [groupId, userId])
+      if (rows.length) throw new AppError(409, 'unfinished_rounds', '참여 중인 회차가 있어 모임에서 나갈 수 없어요')
+      await client.query('UPDATE group_members SET left_at=$3 WHERE group_id=$1 AND user_id=$2 AND left_at IS NULL', [groupId, userId, nowSeconds()])
+    }
+    return { id: groupId }
+  })
+}
+
 export async function createInvite(access: Identity, key: string, groupId: string, body: Record<string, unknown>) {
   onlyKeys(body, ['replaceInviteId'])
   if (body.replaceInviteId !== undefined) textInput(body.replaceInviteId, 128)

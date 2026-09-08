@@ -43,8 +43,12 @@ test('Route Handler contracts enforce cookies, origin, idempotency, bounded imag
     assert.equal(account.headers.get('cache-control'), 'private, no-store')
     assert.equal((await account.json()).data.bankAccount.accountNumber, '0001234')
     const groupResult = await request('groups', a.accessToken, 'POST', { name: 'HTTP 계약' })
-    assert.equal(groupResult.status, 200)
+    assert.equal(groupResult.status, 200, await groupResult.clone().text())
     const groupId = (await groupResult.json()).data.id
+    const emptyGroup = await request('groups', a.accessToken, 'POST', { name: '삭제 API 계약' })
+    const emptyGroupId = (await emptyGroup.json()).data.id
+    assert.equal((await request(`groups/${emptyGroupId}`, a.accessToken, 'DELETE')).status, 200)
+    assert.equal((await request(`groups/${emptyGroupId}`, a.accessToken)).status, 404)
     assert.equal('currency' in (await (await request(`groups/${groupId}`, a.accessToken)).json()).data, false)
     const invite = (await (await request(`groups/${groupId}/invites`, a.accessToken, 'POST', {})).json()).data
     const token = invite.sharePath.split('/').at(-1)

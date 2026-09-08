@@ -39,7 +39,7 @@ const paths = openApiDocument.paths as unknown as Record<string, Record<string, 
 
 test('every group, expense and settlement endpoint has documented authorization and mutation contracts', () => {
   const mutations = [
-    ['/api/groups', 'post'], ['/api/groups/{groupId}/rounds', 'post'],
+    ['/api/groups', 'post'], ['/api/groups/{groupId}', 'delete'], ['/api/groups/{groupId}/rounds', 'post'],
     ['/api/groups/{groupId}/invites', 'post'], ['/api/groups/{groupId}/invites/{inviteId}', 'delete'],
     ['/api/invites/{token}/accept', 'post'], ['/api/me/bank-account', 'put'],
     ['/api/rounds/{roundId}/expenses', 'post'], ['/api/rounds/{roundId}/expenses/{expenseId}', 'patch'],

@@ -1,9 +1,9 @@
 import { after, NextRequest } from 'next/server'
 import { ACCESS_TOKEN_COOKIE_NAME, readAccessToken } from '../../../lib/auth'
 import { AppError, errorResponse } from '../../../lib/errors'
-import { acceptInvite, createGroup, createInvite, getGroup, getInvite, listGroups, revokeInvite } from '../../../lib/group-store'
+import { acceptInvite, createGroup, createInvite, getGroup, getInvite, leaveGroup, listGroups, revokeInvite } from '../../../lib/group-store'
 import { readBytes, readJsonBody as jsonBody } from '../../../lib/http'
-import { captureRoundAudience, createRealtimeToken, publishGroupInvalidation, publishRoundInvalidation, type RoundAudience } from '../../../lib/realtime-server'
+import { captureGroupAudience, captureRoundAudience, createRealtimeToken, publishGroupInvalidation, publishRoundInvalidation, realtimeEnabled, type RoundAudience } from '../../../lib/realtime-server'
 import { addReceipt, checkExclusion, createRound, deleteExpense, excludeMember, getReceipt, getRound, getSettlement, listRounds, removeReceipt, roundCommand, saveExpense } from '../../../lib/round-store'
 
 export const runtime = 'nodejs'
@@ -22,10 +22,13 @@ async function handle(request: NextRequest, context: { params: Promise<{ path: s
     const query = request.nextUrl.searchParams
     let data: unknown
     let cancelledAudience: RoundAudience | null | undefined
+    let departingGroupAudience: string[] | undefined
     if (path[0] === 'rounds' && path.length === 2 && method === 'DELETE') cancelledAudience = await captureRoundAudience(access, path[1])
+    if (path[0] === 'groups' && path.length === 2 && method === 'DELETE') departingGroupAudience = await captureGroupAudience(access, path[1])
     if (path[0] === 'groups' && path.length === 1 && method === 'GET') data = await listGroups(access, query)
     else if (path[0] === 'groups' && path.length === 1 && method === 'POST') data = await createGroup(access, key, await jsonBody(request))
     else if (path[0] === 'groups' && path.length === 2 && method === 'GET') data = await getGroup(access, path[1])
+    else if (path[0] === 'groups' && path.length === 2 && method === 'DELETE') data = await leaveGroup(access, key, path[1])
     else if (path[0] === 'groups' && path.length === 3 && path[2] === 'rounds' && method === 'GET') data = await listRounds(access, query, path[1])
     else if (path[0] === 'groups' && path.length === 3 && path[2] === 'rounds' && method === 'POST') data = await createRound(access, key, path[1], await jsonBody(request))
     else if (path[0] === 'groups' && path.length === 3 && path[2] === 'invites' && method === 'POST') data = await createInvite(access, key, path[1], await jsonBody(request))
@@ -54,10 +57,10 @@ async function handle(request: NextRequest, context: { params: Promise<{ path: s
       const receipt = await getReceipt(access, path[1])
       return new Response(receipt.content, { headers: { 'Content-Type': receipt.mimeType, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, no-store' } })
     } else throw new AppError(404, 'not_found', '요청한 API를 찾을 수 없어요')
-    if (method !== 'GET') {
+    if (method !== 'GET' && realtimeEnabled()) {
       if (path[0] === 'groups' && path.length === 1) after(() => publishGroupInvalidation((data as { id: string }).id))
       else if (path[0] === 'groups' && path[2] === 'rounds') after(() => publishRoundInvalidation((data as { roundId?: string; id: string }).roundId ?? (data as { id: string }).id))
-      else if (path[0] === 'groups') after(() => publishGroupInvalidation(path[1]))
+      else if (path[0] === 'groups') after(() => publishGroupInvalidation(path[1], departingGroupAudience))
       else if (path[0] === 'invites' && path[2] === 'accept') after(() => publishGroupInvalidation((data as { id: string }).id))
       else if (path[0] === 'rounds') after(() => publishRoundInvalidation(path[1], path[2] === 'members', cancelledAudience))
     }

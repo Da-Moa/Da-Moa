@@ -12,6 +12,7 @@ export default function GroupClient({ groupId }: { groupId: string }) {
   const router = useRouter()
   const group = useResource<GroupDetail>(`/api/groups/${groupId}`)
   const action = useAction()
+  const departure = useAction()
   const [invite, setInvite] = useState<{ id: string; path: string | null } | null>(null)
   const data = group.data
   async function inviteMembers(replaceInviteId?: string) {
@@ -28,6 +29,14 @@ export default function GroupClient({ groupId }: { groupId: string }) {
     const participantIds = [...new Set([data!.creatorId, ...values.getAll('participantIds').map(String)])]
     const result = await action.run(() => apiRequest<MutationResult>(`/api/groups/${groupId}/rounds`, { method: 'POST', body: { name: String(values.get('name') ?? ''), currency: String(values.get('currency') ?? ''), participantIds } }))
     if (result) router.push(`/home/rounds/${result.roundId ?? result.id}`)
+  }
+  async function leave() {
+    const prompt = data!.isCreator
+      ? `“${data!.name}” 모임을 없앨까요?\n종료되지 않은 회차가 있으면 없앨 수 없어요. 모임은 목록에서 사라지지만 완료된 정산 기록은 유지돼요.`
+      : `“${data!.name}” 모임에서 나갈까요?\n참여 중인 회차가 있으면 나갈 수 없어요. 다시 참여하려면 새 초대 링크가 필요하며 과거 정산 기록은 유지돼요.`
+    if (!window.confirm(prompt)) return
+    const result = await departure.run(() => apiRequest(`/api/groups/${groupId}`, { method: 'DELETE' }))
+    if (result) router.replace('/home/groups')
   }
   return <>
     <Link className="back-link" href="/home/groups">← 내 모임</Link>
@@ -53,6 +62,7 @@ export default function GroupClient({ groupId }: { groupId: string }) {
         <button className="primary-button" disabled={action.busy || data.members.length < 2} type="submit">{action.busy ? '처리 중…' : '이 멤버로 기록 시작'}</button>
       </form>}
       <h2 className="section-heading">내가 참여한 회차</h2><RoundList endpoint={`/api/groups/${groupId}/rounds`} />
+      <section className="domain-card stack"><h2>모임 관리</h2><p className="help-text">{data.isCreator ? '모임 전체의 회차가 모두 종료되면 없앨 수 있으며, 완료된 정산 기록은 유지돼요.' : '내가 참여 중인 미종료 회차가 있으면 나갈 수 없으며, 과거 정산 기록은 유지돼요.'}</p><ErrorNotice error={departure.error} /><button className="secondary-button danger-text" disabled={departure.busy} onClick={() => void leave()} type="button">{departure.busy ? '처리 중…' : data.isCreator ? '모임 없애기' : '모임 나가기'}</button></section>
     </div>}
   </>
 }

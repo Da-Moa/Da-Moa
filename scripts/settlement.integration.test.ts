@@ -4,7 +4,7 @@ import test from 'node:test'
 import { readAccessToken, type AccessToken } from '../src/lib/auth.ts'
 import { completeOnboarding, signInKakao, updateBankAccount, withdrawAccount } from '../src/lib/auth-store.ts'
 import { createDatabaseClient } from '../src/lib/db.ts'
-import { acceptInvite, createGroup, createInvite, getGroup, getInvite, listGroups } from '../src/lib/group-store.ts'
+import { acceptInvite, createGroup, createInvite, getGroup, getInvite, leaveGroup, listGroups } from '../src/lib/group-store.ts'
 import { addReceipt, checkExclusion, createRound, deleteExpense, excludeMember, getReceipt, getRound, getSettlement, listRounds, removeReceipt, roundCommand, saveExpense } from '../src/lib/round-store.ts'
 import type { MutationResult } from '../src/lib/domain-types.ts'
 import { applyMigrations } from './migrations.mjs'
@@ -61,6 +61,36 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       await assert.rejects(createRound(a, key(), g.id, { name: '한 명', currency: 'KRW', participantIds: [a.userId] }), code('minimum_participants'))
       await assert.rejects(createRound(b, key(), g.id, { name: '권한 없음', currency: 'KRW', participantIds: [a.userId, b.userId] }), code('forbidden'))
       await assert.rejects(createRound(a, key(), g.id, { name: '외부인', currency: 'KRW', participantIds: [a.userId, outsider.userId] }), code('invalid_participants'))
+    })
+
+    await t.test('participants leave without unfinished participation and creators close groups after every round completes', async () => {
+      const leaving = await createGroup(a, key(), { name: '나가기 검증' })
+      const invitation = await createInvite(a, key(), leaving.id, {})
+      const invitationToken = invitation.sharePath!.split('/').at(-1)!
+      await acceptInvite(b, key(), invitationToken)
+      const past = await createRound(a, key(), leaving.id, { name: '과거 회차', currency: 'KRW', participantIds: [a.userId, b.userId] })
+      await assert.rejects(leaveGroup(b, key(), leaving.id), code('unfinished_rounds'))
+      await assert.rejects(leaveGroup(a, key(), leaving.id), code('unfinished_group_rounds'))
+      await saveExpense(a, key(), past.id, { description: '완료할 지출', amount: '2', payerId: a.userId, splitMode: 'ALL', expectedVersion: 1 })
+      for (const action of ['confirm', 'send', 'complete']) await roundCommand(a, key(), past.id, action, { expectedVersion: (await getRound(a, past.id, query())).version })
+      await leaveGroup(b, key(), leaving.id)
+      await assert.rejects(getGroup(b, leaving.id), code('not_found'))
+      assert.equal((await listGroups(b, query())).items.some(group => group.id === leaving.id), false)
+      assert.equal((await getRound(b, past.id, query())).id, past.id)
+      await leaveGroup(a, key(), leaving.id)
+      await assert.rejects(getGroup(a, leaving.id), code('not_found'))
+      assert.equal((await getRound(a, past.id, query())).groupName, '나가기 검증')
+      await assert.rejects(getInvite(a, invitationToken), code('not_found'))
+
+      const empty = await createGroup(c, key(), { name: '삭제할 빈 모임' })
+      const emptyInvite = await createInvite(c, key(), empty.id, {})
+      await acceptInvite(d, key(), emptyInvite.sharePath!.split('/').at(-1)!)
+      const deletionKey = key()
+      assert.equal((await leaveGroup(c, deletionKey, empty.id)).id, empty.id)
+      assert.equal((await leaveGroup(c, deletionKey, empty.id)).id, empty.id)
+      await assert.rejects(getGroup(c, empty.id), code('not_found'))
+      await assert.rejects(getGroup(d, empty.id), code('not_found'))
+      await assert.rejects(getInvite(d, emptyInvite.sharePath!.split('/').at(-1)!), code('not_found'))
     })
 
     await t.test('empty rounds, author/owner edits, partial edits and immutable completed data', async () => {

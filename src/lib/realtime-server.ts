@@ -61,6 +61,16 @@ export async function captureRoundAudience(access: AccessToken | null, roundId: 
   })
 }
 
+export async function captureGroupAudience(access: AccessToken | null, groupId: string): Promise<string[] | undefined> {
+  if (!realtimeEnabled()) return undefined
+  return withReadTransaction(async client => {
+    const account = await requireAccount(client, access)
+    const { rows } = await client.query(`SELECT member.user_id FROM group_members viewer JOIN group_members member ON member.group_id=viewer.group_id AND member.left_at IS NULL
+      WHERE viewer.group_id=$1 AND viewer.user_id=$2 AND viewer.left_at IS NULL`, [groupId, account.id])
+    return rows.map(row => String(row.user_id))
+  })
+}
+
 export async function publishRoundInvalidation(roundId: string, includeGroupMembers = false, captured?: RoundAudience | null) {
   if (!realtimeEnabled()) return
   try {
@@ -73,14 +83,15 @@ export async function publishRoundInvalidation(roundId: string, includeGroupMemb
   } catch { console.error('Realtime round invalidation failed') }
 }
 
-export async function publishGroupInvalidation(groupId: string) {
+export async function publishGroupInvalidation(groupId: string, capturedUserIds?: string[]) {
   if (!realtimeEnabled()) return
   try {
-    const users = await withReadTransaction(async client => {
+    const currentUserIds = await withReadTransaction(async client => {
       const { rows } = await client.query(`SELECT m.user_id FROM group_members m JOIN users u ON u.id=m.user_id
         WHERE m.group_id=$1 AND m.left_at IS NULL AND u.deleted_at IS NULL`, [groupId])
       return rows.map(row => String(row.user_id))
     })
+    const users = [...new Set([...(capturedUserIds ?? []), ...currentUserIds])]
     await send([{ userIds: users, keys: ['groups', `group:${groupId}`] }])
   } catch { console.error('Realtime group invalidation failed') }
 }
