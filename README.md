@@ -4,7 +4,7 @@
 
 ## 실행
 
-Node.js **22.18 이상**이 필요합니다. Neon 연결은 Node의 기본 WebSocket을 사용하며, `localhost`·`127.0.0.1`·`[::1]`의 PostgreSQL에는 TLS 없는 로컬 TCP 연결을 사용합니다.
+Node.js **22.18 이상**과 Docker가 필요합니다. 로컬 개발은 Docker PostgreSQL을, Vercel Preview·Production은 각 환경의 Neon `DATABASE_URL`을 사용합니다.
 
 ```bash
 npm install
@@ -19,12 +19,16 @@ cp .env.example .env.local
 | `KAKAO_REDIRECT_URI` | 로컬에서는 `http://localhost:3000/auth/v1/kakao`. 카카오 콘솔에 같은 URI 등록 |
 | `KAKAO_CLIENT_SECRET` | 카카오 콘솔에서 Client Secret을 사용하는 경우만 설정 |
 | `AUTH_JWT_SECRET` | 32바이트 이상의 임의 비밀 문자열 |
-| `DATABASE_URL` | 개발용 Neon 또는 로컬 PostgreSQL 연결 문자열. `POSTGRES_URL`도 대체 변수로 지원 |
+| `DATABASE_URL` | 로컬은 `postgresql://da_moa:da_moa_local@127.0.0.1:55432/da_moa_dev_test`, Vercel은 환경별 Neon 연결 문자열 |
 
 ```bash
+npm run db:local:up
 npm run db:migrate
+npm run db:seed:test-accounts
 npm run dev
 ```
+
+`npm run db:local:down`은 컨테이너만 중지하고 DB 데이터는 Docker volume에 유지합니다. `.env.local`은 Git·Vercel 배포에 포함되지 않습니다.
 
 [http://localhost:3000](http://localhost:3000)에서 시작합니다. API 문서는 `/api/docs`, OpenAPI JSON은 `/api/openapi.json`에서 확인할 수 있습니다. [intent.md](intent.md)는 정책 결정 기록, [spec.md](spec.md)는 요구사항·상태·권한·인수 기준입니다. 금액 부호는 최신 명세를 따라 **부담액 − 결제액**, 양수는 보낼 돈·음수는 받을 돈입니다.
 
@@ -91,10 +95,9 @@ node --import tsx scripts/browser-check.mjs
 
 ### 개발 테스트 계정
 
-화면·DB 확인용 가입 완료 회원 3명은 테스트 DB에 반복해서 시드할 수 있습니다. 로컬 주소를 사용할 때는 데이터베이스 이름에 `test`가 포함되어야 합니다.
+화면·DB 확인용 가입 완료 회원 3명은 로컬 개발 DB에 반복해서 시드할 수 있습니다.
 
 ```bash
-export TEST_DATABASE_URL='postgresql://사용자:비밀번호@127.0.0.1:5432/da_moa_test'
 npm run db:seed:test-accounts
 ```
 
@@ -104,7 +107,7 @@ npm run db:seed:test-accounts
 
 ## 배포
 
-배포 런타임도 Node 22.18 이상으로 맞추고 개발·프리뷰·운영 DB를 분리합니다. 빌드 전에 `npm run db:migrate`를 실행합니다. 마이그레이션은 기존 사용자 ID와 카카오 식별자를 보존하며 한 번 실행한 이행 작업을 반복하지 않습니다.
+배포 런타임도 Node 22.18 이상으로 맞추고 개발·Preview·Production DB를 분리합니다. Vercel Project Settings의 Preview와 Production에 각각 해당 Neon `DATABASE_URL`을 등록합니다. `vercel.json`이 빌드 전 `npm run db:migrate`를 실행하며, 마이그레이션은 기존 사용자 ID와 카카오 식별자를 보존하고 완료한 이행을 반복하지 않습니다.
 
 기존 회원은 계좌 정보가 없으므로 첫 이행에서 기존 세션을 폐기하고 **한 번 재로그인·계좌 등록**을 요구합니다. 스키마를 먼저 이행하고 새 가입·소프트 삭제·도메인 코드를 배포합니다. 구버전의 회원 물리 삭제 코드로 되돌리거나 스키마 롤백으로 과거 자료를 삭제하지 않습니다. 배포 플랫폼의 요청 크기·실행 시간 안에서 2 MiB 이미지 업로드와 Neon 연결을 확인합니다.
 
