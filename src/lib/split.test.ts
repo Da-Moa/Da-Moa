@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { calculateBase, finalizeSettlement } from './split.ts'
+import { calculateBase, finalizeSettlement, previewSettlement } from './split.ts'
 
 const expense = (payerId: string, amountMinor: string, participantIds: string[], id = 'expense') => ({ id, payerId, amountMinor, participantIds })
 
@@ -55,6 +55,24 @@ test('base allocation defers remainder and final draw selects different recipien
       }
     }
   }
+})
+
+test('preview nets base shares and leaves every remainder unassigned', () => {
+  const shared = previewSettlement([expense('B', '6001', ['A', 'B', 'C'])], ['A', 'B', 'C'])
+  assert.equal(shared.pendingRemainderMinor, '1')
+  assert.deepEqual(shared.transfers, [
+    { senderId: 'A', receiverId: 'B', amountMinor: '2000' },
+    { senderId: 'C', receiverId: 'B', amountMinor: '2000' },
+  ])
+
+  const separate = previewSettlement([expense('B', '6001', ['A', 'C'])], ['A', 'B', 'C'])
+  assert.equal(separate.pendingRemainderMinor, '1')
+  assert.deepEqual(separate.transfers.map(row => row.amountMinor), ['3000', '3000'])
+
+  const tiny = previewSettlement([expense('A', '1', ['A', 'B', 'C'])], ['A', 'B', 'C'])
+  assert.equal(tiny.pendingRemainderMinor, '1')
+  assert.deepEqual(tiny.transfers, [])
+  assert.equal(tiny.balances.reduce((sum, row) => sum + BigInt(row.balanceMinor), 0n), 0n)
 })
 
 test('invalid inputs cannot create incomplete or duplicate ledgers', () => {

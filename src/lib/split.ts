@@ -8,16 +8,25 @@ type SettlementExpense = { id: string; payerId: string; amountMinor: string; par
 type FinalShare = { expenseId: string; userId: string; amountMinor: string; receivedRemainder: boolean }
 type FinalBalance = { userId: string; paidMinor: string; burdenMinor: string; balanceMinor: string }
 type FinalTransfer = { senderId: string; receiverId: string; amountMinor: string }
+type SettlementResult = { shares: FinalShare[]; balances: FinalBalance[]; transfers: FinalTransfer[] }
+
+function settlementAmount(value: string, allowZero = false) {
+  if (typeof value !== 'string' || value !== value.trim() || !/^\d+$/.test(value)) throw new Error('invalid_amount')
+  const amount = BigInt(value)
+  if (amount < 0n || (!allowZero && amount === 0n)) throw new Error('invalid_amount')
+  return amount
+}
 
 /**
  * Pure calculation. The server supplies crypto.randomInt only after locking the round;
  * the caller commits this entire result atomically and never redraws a saved result.
  */
-export function finalizeSettlement(
+function settle(
   expenses: SettlementExpense[],
   memberIds: string[],
   draw?: (max: number) => number,
-): { shares: FinalShare[]; balances: FinalBalance[]; transfers: FinalTransfer[] } {
+  allowZero = false,
+): SettlementResult {
   const members = [...memberIds].sort()
   if (!members.length || new Set(members).size !== members.length || members.some(id => typeof id !== 'string' || !id)) {
     throw new Error('invalid_participants')
@@ -35,9 +44,8 @@ export function finalizeSettlement(
     if (!payer || new Set(participants).size !== participants.length || participants.some(id => !totals.has(id))) {
       throw new Error('invalid_participants')
     }
-    if (typeof expense.amountMinor !== 'string' || expense.amountMinor !== expense.amountMinor.trim() || !/^\d+$/.test(expense.amountMinor)) throw new Error('invalid_amount')
-    const total = BigInt(expense.amountMinor)
-    const { base, remainder } = calculateBase(total, participants.length)
+    const total = settlementAmount(expense.amountMinor, allowZero)
+    const { base, remainder } = total === 0n ? { base: 0n, remainder: 0 } : calculateBase(total, participants.length)
     if (remainder && !draw) throw new Error('remainder_draw_required')
     const candidates = [...participants]
     const winners = new Set<string>()
@@ -79,4 +87,19 @@ export function finalizeSettlement(
   }
   if (receiverIndex !== receivers.length) throw new Error('unbalanced_settlement')
   return { shares, balances, transfers }
+}
+
+export function finalizeSettlement(expenses: SettlementExpense[], memberIds: string[], draw?: (max: number) => number): SettlementResult {
+  return settle(expenses, memberIds, draw)
+}
+
+export function previewSettlement(expenses: SettlementExpense[], memberIds: string[]): SettlementResult & { pendingRemainderMinor: string } {
+  let pending = 0n
+  const allocated = expenses.map(expense => {
+    const total = settlementAmount(expense.amountMinor)
+    const { base, remainder } = calculateBase(total, expense.participantIds.length)
+    pending += BigInt(remainder)
+    return { ...expense, amountMinor: (base * BigInt(expense.participantIds.length)).toString() }
+  })
+  return { ...settle(allocated, memberIds, undefined, true), pendingRemainderMinor: pending.toString() }
 }

@@ -4,8 +4,8 @@ import { withReadTransaction, type Database } from './db'
 import { AppError, badInput } from './errors'
 import { domainMutation, idsInput, missing, nowSeconds, onlyKeys, ownerGroup, pageOf, pagination, textInput, type Identity } from './group-store'
 import { parseAmount, requireCurrency, type Currency } from './money'
-import { calculateBase, finalizeSettlement } from './split'
-import type { ExclusionCheck, Expense, Member, MutationResult, RoundDetail, RoundStatus, RoundSummary, SettlementDTO } from './domain-types'
+import { calculateBase, finalizeSettlement, previewSettlement } from './split'
+import type { ExclusionCheck, Expense, Member, MutationResult, RoundDetail, RoundStatus, RoundSummary, SettlementDTO, SettlementTransfer } from './domain-types'
 
 type Row = Record<string, any>
 
@@ -62,6 +62,13 @@ async function expensesFor(client: Database, roundId: string, query?: URLSearchP
   return limit === null ? { items, nextCursor: null } : pageOf(items, limit, row => row)
 }
 
+async function settlementExpensesFor(client: Database, roundId: string): Promise<Pick<Expense, 'id' | 'payerId' | 'amountMinor' | 'splitMode' | 'participantIds'>[]> {
+  const { rows } = await client.query(`SELECT e.id,e.payer_id,e.amount_minor,e.split_mode,
+    ARRAY(SELECT s.user_id FROM expense_shares s WHERE s.expense_id=e.id ORDER BY s.user_id) AS participant_ids
+    FROM expenses e WHERE e.round_id=$1 ORDER BY e.id`, [roundId])
+  return rows.map(row => ({ id: row.id, payerId: row.payer_id, amountMinor: row.amount_minor, splitMode: row.split_mode, participantIds: row.participant_ids }))
+}
+
 function summary(row: Row): RoundSummary {
   return {
     id: row.id, groupId: row.group_id, groupName: row.group_name, name: row.name, currency: row.currency,
@@ -96,11 +103,19 @@ export async function getRound(access: Identity, roundId: string, query: URLSear
     const expenses = await expensesFor(client, roundId, query)
     const { rows: totals } = await client.query('SELECT COALESCE(sum(amount_minor),0)::text AS total_minor FROM expenses WHERE round_id=$1', [roundId])
     const { rows: balances } = await client.query('SELECT balance_minor FROM settlement_balances WHERE round_id=$1 AND user_id=$2', [roundId, account.id])
-    const transfers = round.finalized_at === null ? [] : (await client.query('SELECT sender_id,receiver_id,amount_minor FROM settlement_transfers WHERE round_id=$1 ORDER BY sender_id,receiver_id', [roundId])).rows
+    let transfers: SettlementTransfer[] = [], pendingRemainderMinor = '0'
+    if (round.finalized_at === null) {
+      const allExpenses = !query.has('cursor') && expenses.nextCursor === null ? expenses.items : await settlementExpensesFor(client, roundId)
+      if (allExpenses.length) ({ transfers, pendingRemainderMinor } = previewSettlement(allExpenses, members.map(member => member.userId)))
+    } else {
+      const { rows } = await client.query('SELECT sender_id,receiver_id,amount_minor FROM settlement_transfers WHERE round_id=$1 AND (sender_id=$2 OR receiver_id=$2) ORDER BY sender_id,receiver_id', [roundId, account.id])
+      transfers = rows.map(row => ({ senderId: row.sender_id, receiverId: row.receiver_id, amountMinor: row.amount_minor }))
+    }
+    transfers = transfers.filter(transfer => transfer.senderId === account.id || transfer.receiverId === account.id)
     return {
       ...summary({ ...round, ...totals[0], ...balances[0], member_count: members.filter(m => m.excludedAt === null).length }),
       creatorId: round.creator_id, isCreator: round.is_creator, members, expenses: expenses.items, expensesNextCursor: expenses.nextCursor,
-      transfers: transfers.map(row => ({ senderId: row.sender_id, receiverId: row.receiver_id, amountMinor: row.amount_minor })),
+      transfers, pendingRemainderMinor,
     }
   })
 }
@@ -233,7 +248,7 @@ export async function excludeMember(access: Identity, key: string, roundId: stri
 async function validatedExpenses(client: Database, roundId: string) {
   const members = await membersFor(client, roundId), active = members.filter(m => m.excludedAt === null).map(m => m.userId).sort()
   if (active.length < 2) throw new AppError(409, 'minimum_participants', '회차는 최소 2명이어야 합니다')
-  const { items } = await expensesFor(client, roundId)
+  const items = await settlementExpensesFor(client, roundId)
   if (!items.length) throw new AppError(409, 'empty_expenses', '지출 내역이 없습니다')
   for (const expense of items) {
     if (!expense.participantIds.length || expense.participantIds.some(id => !active.includes(id)) || !members.some(m => m.userId === expense.payerId) || (expense.splitMode === 'ALL' && JSON.stringify(expense.participantIds.slice().sort()) !== JSON.stringify(active))) {

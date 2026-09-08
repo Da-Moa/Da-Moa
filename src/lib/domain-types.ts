@@ -20,7 +20,7 @@ export type Expense = {
 export type SettlementTransfer = { senderId: string; receiverId: string; amountMinor: string }
 export type RoundDetail = RoundSummary & {
   creatorId: string; isCreator: boolean; members: Member[]; expenses: Expense[];
-  expensesNextCursor: string | null; transfers: SettlementTransfer[]
+  expensesNextCursor: string | null; transfers: SettlementTransfer[]; pendingRemainderMinor: string
 }
 export type ExclusionCheck = {
   allowed: boolean; reason: string | null;

@@ -2,12 +2,14 @@
 
 import { useEffect } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { ApiError, apiRequest } from '../../lib/api-client'
 import type { SettlementDTO } from '../../lib/domain-types'
 import { formatMoney } from '../../lib/money'
 import { CopyLink, ErrorNotice, Loading, StatusBadge, useAction, useResource } from '../home/ui'
 
 export default function SettlementClient({ roundId }: { roundId: string }) {
+  const router = useRouter()
   const settlement = useResource<SettlementDTO>(`/api/rounds/${roundId}/settlement`)
   const action = useAction()
   const data = settlement.data
@@ -23,7 +25,7 @@ export default function SettlementClient({ roundId }: { roundId: string }) {
     if (!data) return
     if (name === 'complete' && !window.confirm('이 회차의 정산을 종료할까요? 실제 입금 확인은 직접 진행해 주세요. 종료 후 모든 정산 기록은 읽기 전용이며 참여자의 탈퇴 제한이 해제돼요.')) return
     const result = await action.run(() => apiRequest(`/api/rounds/${roundId}/${name}`, { method: 'POST', body: { expectedVersion: data.version } }))
-    if (result) await reload()
+    if (result) { if (name === 'complete') router.push('/home/history'); else await reload() }
   }
   return <>
     <Link className="back-link" href={`/home/rounds/${roundId}`}>← 지출 내역 보기</Link>
