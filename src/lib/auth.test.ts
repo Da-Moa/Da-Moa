@@ -4,6 +4,7 @@ import type { KeyObject } from 'node:crypto'
 import test from 'node:test'
 import {
   ACCESS_TOKEN_MAX_AGE_SECONDS,
+  ONBOARDING_MAX_AGE_SECONDS,
   authCookieOptions,
   createAccessToken,
   createKakaoAuthorizationRequest,
@@ -171,4 +172,9 @@ test('access and refresh JWTs reject tampering, expiry, and token-type confusion
   assert.equal(authCookieOptions(ACCESS_TOKEN_MAX_AGE_SECONDS).maxAge, ACCESS_TOKEN_MAX_AGE_SECONDS)
   assert.equal(refreshCookieOptions(REFRESH_TOKEN_MAX_AGE_SECONDS).maxAge, REFRESH_TOKEN_MAX_AGE_SECONDS)
   assert.equal(refreshCookieOptions(REFRESH_TOKEN_MAX_AGE_SECONDS).path, '/api/auth')
+
+  const onboarding = createAccessToken('user-id', 'limited-session', TEST_SECRET, issuedAt, ONBOARDING_MAX_AGE_SECONDS)
+  assert.ok(verifyAccessToken(onboarding, TEST_SECRET, issuedAt + ACCESS_TOKEN_MAX_AGE_SECONDS), 'the onboarding form must not lose its session at the normal five-minute access limit')
+  assert.ok(verifyAccessToken(onboarding, TEST_SECRET, issuedAt + ONBOARDING_MAX_AGE_SECONDS - 1))
+  assert.equal(verifyAccessToken(onboarding, TEST_SECRET, issuedAt + ONBOARDING_MAX_AGE_SECONDS), null)
 })

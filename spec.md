@@ -36,7 +36,6 @@ OCR, 계좌 검증 API, 실제 송금·입금 확인, 외부 메시지 발송, �
 | 정산 종료 시점 | 잠금과 최종 금액 저장이 완료된 회차에서만 가능 |
 | 사용자 제외 | 선택한 회차에서 제외하면서 현재 모임 멤버십도 이탈 처리. 다른 회차의 구성은 유지 |
 | 탈퇴 차단 관련성 | 제외 여부와 무관하게 참여 이력이 있는 모든 미종료 회차. 수취인으로 남은 제외자도 포함 |
-| 모임 통화 수정 | 이번 구현은 모임 기준 통화 수정 기능을 제공하지 않음. 모든 회차는 생성 시 기준 통화를 복사 |
 | 영수증 저장 | 기존 PostgreSQL의 `BYTEA`. 파일당 최대 2 MiB, JPEG·PNG·WebP 지원, 여러 파일은 각각 업로드 |
 | 초대 | 생성자 발급·폐기, 발급 후 7일 유효한 다회 수락 링크. 원문 토큰은 저장하지 않음 |
 | 동시 쓰기 | 초기에는 공통 DB 트랜잭션 잠금 하나로 직렬화. 읽기는 직렬화하지 않음 |
@@ -70,7 +69,7 @@ OCR, 계좌 검증 API, 실제 송금·입금 확인, 외부 메시지 발송, �
 | FR-01 | 가입 완료한 활성 회원만 모임 생성·초대 수락·기록 등 일반 기능을 사용한다. 가입 시 은행·계좌번호·예금주가 필요하다. |
 | FR-02 | 모임 생성자는 자동 멤버이며 교체·제외할 수 없다. 초대 링크 열기와 참여 수락은 구분한다. |
 | FR-03 | 회차 생성자는 모임 생성자다. 활성 멤버 후보에서 생성자 포함 최소 2명을 선택한다. 미완료 회차 수를 하나로 제한하지 않는다. |
-| FR-04 | 회차 참여자와 통화는 생성 시 저장한다. 일반적인 모임 가입·이탈은 다음 회차부터 반영한다. |
+| FR-04 | 회차 생성 시 참여자와 USD·KRW·JPY 중 선택한 통화를 저장한다. 같은 모임에서 회차마다 다른 통화를 선택할 수 있고 생성 후에는 변경할 수 없다. 일반적인 모임 가입·이탈은 다음 회차부터 반영한다. |
 | FR-05 | 기록 단계에서 해당 회차의 제외되지 않은 참여자가 지출을 작성한다. 작성자 또는 현재 모임 생성자만 수정·삭제한다. |
 | FR-06 | 지출은 양의 정확한 금액, 결제자 한 명, 중복 없는 1명 이상의 부담자와 분배 방식을 가진다. 작성자와 결제자는 별개다. |
 | FR-07 | 생성자가 확정한다. 지출 0건이면 ‘지출 내역이 없습니다’와 함께 거부한다. 빈 회차 생성과 마지막 지출 삭제는 허용한다. |
@@ -116,7 +115,7 @@ stateDiagram-v2
 
 | 명령 | 사전 조건 | 같은 트랜잭션에서 처리할 내용 |
 |---|---|---|
-| 기록 시작 | 활성 후보 최소 2명, 생성자 포함 | 회차·참여자 이름 스냅샷 생성, 통화 복사, `version=1` |
+| 기록 시작 | 활성 후보 최소 2명, 생성자 포함, 지원 통화 선택 | 회차와 선택한 통화·참여자 이름 스냅샷 저장, `version=1` |
 | 지출 작성·수정·삭제 | `RECORDING`, 작성 권한, 유효한 결제자·부담자 | 지출·분배·증빙 관계 변경, 회차 버전 증가 |
 | 확정 | `RECORDING`, 지출 1건 이상, 참여자 최소 2명 | 모든 지출 재검증, 몫·나머지 저장, `CONFIRMED` 전환 |
 | 재오픈 | `CONFIRMED`, 잠금·종료 시점 없음 | `RECORDING` 전환, 확정 계산값 제거. 지출 원본·영수증은 유지 |
@@ -145,10 +144,10 @@ stateDiagram-v2
 |---|---|
 | `users` 확장 | 기존 ID·`UNIQUE(provider, provider_subject)` 유지. `deleted_at`, `onboarding_completed_at`, `bank_name`, `account_number`, `account_holder`, `bank_updated_at` 추가. 계좌번호는 문자열 |
 | `refresh_sessions` 확장 | `purpose TEXT NOT NULL DEFAULT 'app'`, 값은 `app/onboarding`. 기존 만료·폐기·해시 구조 유지 |
-| `groups` | `id`, `creator_id → users`, `name`, `base_currency`, `created_at`. 통화 `USD/KRW/JPY` CHECK |
+| `groups` | `id`, `creator_id → users`, `name`, `created_at` |
 | `group_members` | `(group_id, user_id)` PK, `joined_at`, `left_at`. 활성은 `left_at IS NULL`. 재초대 수락 시 같은 관계 행을 활성화 |
 | `group_invites` | `id`, `group_id`, `created_by`, `token_hash UNIQUE`, `created_at`, `expires_at`, `revoked_at`. 만료는 생성 이후 |
-| `rounds` | `id`, `group_id`, `name`, `currency`, `status`, `version`, `created_at`, `confirmed_at`, `locked_at`, `finalized_at`, `completed_at` |
+| `rounds` | `id`, `group_id`, `name`, `currency`, `status`, `version`, `created_at`, `confirmed_at`, `locked_at`, `finalized_at`, `completed_at`. `currency`는 `USD/KRW/JPY` CHECK |
 | `round_members` | `(round_id, user_id)` PK, `display_name_snapshot`, `joined_at`, `excluded_at`. 제외해도 행 삭제 금지 |
 | `expenses` | `id`, `round_id`, `author_id`, `payer_id`, `description`, `amount_minor`, `split_mode`(`ALL/SELECTED`), `base_share_minor` nullable, `remainder_units` nullable, `created_at`, `updated_at`, `updated_by` |
 | `expense_shares` | `(expense_id, user_id)` PK, `round_id`, `final_amount_minor` nullable, `received_remainder` nullable. 행 자체가 실제 부담자 목록 |
@@ -174,6 +173,8 @@ stateDiagram-v2
 ## 6. 금액 계산과 결과 저장
 
 ### 6.1 입력·계산·표시
+
+생성자는 회차 생성 요청에 `currency`를 반드시 지정한다. USD·KRW·JPY만 허용하며 누락·비지원 값은 거부한다. 같은 모임의 이전 회차가 KRW여도 다음 회차는 USD 또는 JPY로 생성할 수 있다. 회차 생성 후에는 통화를 변경하지 않으며 과거 회차의 통화·지출·정산 결과를 그대로 보존한다. 모임 생성 입력과 모임·초대 조회 응답에는 통화를 포함하지 않는다.
 
 | 통화 | 입력 예 | 내부 최소 단위 | 거부 예 |
 |---|---|---|---|
@@ -318,7 +319,7 @@ JWT만 유효한 탈퇴·로그아웃 세션을 승인하지 않는다. 재가�
 
 이 정책 조합의 결과로, 생성자가 탈퇴한 모임은 과거 조회만 유지되고 새 초대·새 회차를 만들 관리자가 없어진다. 원생성자도 재가입만으로 그 모임의 관리 권한을 되찾지 않는다. 현재 범위에 해당 모임의 관리 복구 경로는 없으며 새 모임을 만들 수 있다. 이 제한을 탈퇴 안내에 표시한다.
 
-계좌는 본인 한 개를 현재값으로 관리한다. 문자열 길이·공백·허용 형식은 검사하되 실제 계좌·본인 소유라고 표시하지 않는다. 계좌번호의 선행 0을 보존한다. USD·JPY 모임 사용자도 가입 시 계좌 등록 요건은 동일하다.
+계좌는 본인 한 개를 현재값으로 관리한다. 문자열 길이·공백·허용 형식은 검사하되 실제 계좌·본인 소유라고 표시하지 않는다. 계좌번호의 선행 0을 보존한다. USD·JPY 회차에 참여하는 사용자도 가입 시 계좌 등록 요건은 동일하다.
 
 ### 9.3 탈퇴
 
@@ -342,7 +343,7 @@ JWT만 유효한 탈퇴·로그아웃 세션을 승인하지 않는다. 재가�
 |---|---|
 | `/home` | 본인의 실제 진행 회차와 본인 금액 상태. 추첨 전에는 미확정 표시 |
 | `/home/groups` | 활성 모임 목록·모임 생성 |
-| `/home/groups/[groupId]` | 현재 멤버·초대 링크 관리·회차 목록·생성자의 기록 시작 |
+| `/home/groups/[groupId]` | 현재 멤버·초대 링크 관리·회차 목록·생성자의 참여자와 통화 선택 후 기록 시작 |
 | `/home/rounds/[roundId]` | 기록 목록·작성·증빙, 권한별 수정·삭제·제외, 확정·재오픈·취소·전송 |
 | `/home/history` | 참여 이력으로 조회한 회차 목록. 현재 멤버십 없는 과거 회차도 포함 |
 | `/home/all` 및 계정 대화상자 | 기존 내비게이션·계좌 수정·로그아웃·탈퇴 유지 |
@@ -371,13 +372,13 @@ JWT만 유효한 탈퇴·로그아웃 세션을 승인하지 않는다. 재가�
 | `POST /api/me/onboarding` | 제한 세션으로 은행·계좌번호·예금주, 재가입 확인 제출. 새 app 쿠키 발급 |
 | `PUT /api/me/bank-account` | 본인의 현재 계좌 갱신 |
 | `POST /api/auth/withdraw` | 기존 경로 유지. 미종료 회차 409 또는 소프트 삭제 |
-| `GET /api/groups` / `POST /api/groups` | 활성 모임 목록 / `{ name, currency }`로 모임·생성자 멤버십 생성 |
+| `GET /api/groups` / `POST /api/groups` | 활성 모임 목록 / `{ name }`으로 모임·생성자 멤버십 생성 |
 | `GET /api/groups/[groupId]` | 권한 있는 현재 멤버용 모임·멤버 후보 |
 | `GET /api/groups/[groupId]/rounds` | 본인 조회 권한이 있는 모임 회차 목록 |
 | `POST /api/groups/[groupId]/invites` | 생성자에게 초대 원문 링크를 한 번 반환. 재발급 시 `{ replaceInviteId }`의 기존 초대 폐기와 새 발급을 함께 처리 |
 | `DELETE /api/groups/[groupId]/invites/[inviteId]` | 생성자가 초대 폐기 |
 | `GET /api/invites/[token]` / `POST /api/invites/[token]/accept` | 인증 후 안전한 모임 미리보기 / 명시적 참여 수락 |
-| `POST /api/groups/[groupId]/rounds` | `{ name, participantIds }`. 생성자 포함 최소 2명, 서버에서 통화 복사 |
+| `POST /api/groups/[groupId]/rounds` | `{ name, currency, participantIds }`. 모든 필드 필수. 생성자 포함 최소 2명, `currency`는 USD·KRW·JPY 중 선택 |
 | `GET /api/rounds` | 본인 참여 회차 목록. 상태 필터로 진행·과거 화면 구성 |
 | `GET /api/rounds/[roundId]` | 회차·참여자·지출·기본 분배·상태·version. 타인 계좌 없음 |
 | `POST /api/rounds/[roundId]/expenses` | `{ description, amount, payerId, splitMode, participantIds?, expectedVersion }` |
@@ -491,6 +492,7 @@ Server Component도 같은 인증·권한 함수를 거쳐 최소 데이터만 �
 5. 로컬·CI·Vercel의 Node 실행 기준을 일치시키고 네이티브 WebSocket 사용을 확인한다. Node 20을 그대로 지원하는 것처럼 `engines`를 남기지 않는다. 이번 안은 Node 상향으로 추가 WebSocket 패키지를 피한다.
 6. 개발·프리뷰·운영 DB를 분리하고 배포 플랫폼 요청 크기·실행 시간 안에서 증빙 업로드와 Neon 트랜잭션을 검증한다. 운영 데이터로 경합·삭제 테스트를 하지 않는다.
 7. 문서·OpenAPI·README의 ‘물리 탈퇴’, 고정 원화 계산기, OCR 동작처럼 읽히는 문구를 실제 구현에 맞게 고친다.
+8. 회차별 통화 선택으로 전환할 때 기존 `001~003` 마이그레이션 파일을 수정하지 않고 `004`를 추가한다. `groups.base_currency`를 제거하고 `rounds.currency` 및 기존 회차의 금액·상태·정산 결과는 변경하지 않는다. 이미 적용된 인증 이행과 세션 폐기는 반복하지 않는다.
 
 ### 12.3 구현 순서와 각 완료 조건
 
@@ -515,9 +517,9 @@ Server Component도 같은 인증·권한 함수를 거쳐 최소 데이터만 �
 | AC-05 | KRW 10,001 / 3명, KRW 1 / 3명 | 각각 서로 다른 2명에 +1, 한 명만 1·나머지 0. 0원 송금 없음 |
 | AC-06 | USD 10.00 / 3명 | 내부 1,000센트, 최종 334·333·333. 표시 3.34·3.33·3.33 |
 | AC-07 | KRW `"9007199254740993"` 등 Number 안전 범위 초과 | 입력·DB·계산·응답·화면에서 자릿수 손실 없음 |
-| AC-08 | 0·음수·과도한 소수·NaN·Infinity·지수표기·비지원 통화 | 서버 거부. 유효한 다른 값으로 자동 변환해 저장하지 않음 |
+| AC-08 | 0·음수·과도한 소수·NaN·Infinity·지수표기·비지원 통화·회차 생성의 통화 누락 | 서버 거부. 유효한 다른 값으로 자동 변환해 저장하지 않음 |
 | AC-09 | 모든 개인 잔액 0 | 송금 행 없음, ‘송금할 금액 없음’. 자동 종료하지 않음 |
-| AC-10 | 여러 회차·통화 | 이전 회차 금액을 다음 회차와 합산·상계하지 않음 |
+| AC-10 | 같은 모임에서 KRW·USD·JPY 회차 생성 | 각 회차가 선택한 통화를 유지. 생성 후 통화 변경을 거부하고 과거 회차의 통화·금액을 보존하며 회차 간 합산·상계하지 않음 |
 
 추첨 테스트는 특정 사용자가 항상 당첨된다고 가정하지 않는다. 고정된 난수 입력으로 알고리즘 경계값을 확인하고 실제 결과에서는 서로 다른 당첨자 수·배분 합계·중복 요청 결과의 동일성을 확인한다.
 

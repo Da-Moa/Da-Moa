@@ -25,19 +25,23 @@ function clearAuthCookies(response: NextResponse) {
 function unauthorizedResponse() {
   const response = NextResponse.json({ error: 'unauthorized' }, { status: 401 })
   clearAuthCookies(response)
-  response.headers.set('Cache-Control', 'no-store')
+  response.headers.set('Cache-Control', 'private, no-store')
   return response
 }
 
 function unavailableResponse() {
   const response = NextResponse.json({ error: 'refresh_unavailable' }, { status: 503 })
-  response.headers.set('Cache-Control', 'no-store')
+  response.headers.set('Cache-Control', 'private, no-store')
   return response
 }
 
 export async function POST(request: NextRequest) {
   const origin = request.headers.get('origin')
-  if (origin && origin !== request.nextUrl.origin) return unauthorizedResponse()
+  if (origin !== request.nextUrl.origin) {
+    return NextResponse.json({ error: 'forbidden', message: '허용되지 않은 요청입니다' }, {
+      status: 403, headers: { 'Cache-Control': 'private, no-store' },
+    })
+  }
 
   const token = request.cookies.get(REFRESH_TOKEN_COOKIE_NAME)?.value
   const refresh = readRefreshToken(token)
@@ -71,7 +75,7 @@ export async function POST(request: NextRequest) {
       nextRefreshToken,
       refreshCookieOptions(REFRESH_TOKEN_MAX_AGE_SECONDS),
     )
-    response.headers.set('Cache-Control', 'no-store')
+    response.headers.set('Cache-Control', 'private, no-store')
     return response
   } catch {
     return unavailableResponse()

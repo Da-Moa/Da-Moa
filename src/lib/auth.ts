@@ -28,6 +28,8 @@ export const ACCESS_TOKEN_COOKIE_NAME = 'da_moa_access'
 export const ACCESS_TOKEN_MAX_AGE_SECONDS = 5 * 60
 export const REFRESH_TOKEN_COOKIE_NAME = 'da_moa_refresh'
 export const REFRESH_TOKEN_MAX_AGE_SECONDS = 14 * 24 * 60 * 60
+export const ONBOARDING_MAX_AGE_SECONDS = 10 * 60
+export const RETURN_TO_COOKIE_NAME = 'da_moa_return_to'
 
 type JsonObject = Record<string, unknown>
 
@@ -441,8 +443,9 @@ export function createAccessToken(
   sessionId: string,
   secret = getSessionSecret(),
   issuedAt = currentTimestamp(),
+  maxAge = ACCESS_TOKEN_MAX_AGE_SECONDS,
 ) {
-  return createToken('access', userId, sessionId, ACCESS_TOKEN_MAX_AGE_SECONDS, secret, issuedAt)
+  return createToken('access', userId, sessionId, maxAge, secret, issuedAt)
 }
 
 export function createRefreshToken(
@@ -450,8 +453,9 @@ export function createRefreshToken(
   sessionId: string,
   secret = getSessionSecret(),
   issuedAt = currentTimestamp(),
+  maxAge = REFRESH_TOKEN_MAX_AGE_SECONDS,
 ) {
-  return createToken('refresh', userId, sessionId, REFRESH_TOKEN_MAX_AGE_SECONDS, secret, issuedAt)
+  return createToken('refresh', userId, sessionId, maxAge, secret, issuedAt)
 }
 
 export function verifyAccessToken(
@@ -488,6 +492,40 @@ export function readRefreshToken(token: string | undefined): RefreshToken | null
 
 export function hashRefreshToken(token: string) {
   return createHash('sha256').update(token).digest('hex')
+}
+
+export function safeReturnTo(value: unknown): string {
+  if (typeof value !== 'string' || value.length > 512 || value !== value.trim()) return '/home'
+  // Only literal local paths are accepted; encoded separators and redirect loops cannot pass.
+  return /^(?:\/home(?:\/[A-Za-z0-9_-]+)*|\/(?:invites|settlements)\/[A-Za-z0-9_-]+)$/.test(value)
+    ? value : '/home'
+}
+
+export function createReturnToCookie(
+  value: unknown,
+  state: string,
+  secret = getSessionSecret(),
+  now = currentTimestamp(),
+) {
+  const payload = encodeJson({ path: safeReturnTo(value), state, exp: now + ONBOARDING_MAX_AGE_SECONDS })
+  return `${payload}.${signHs256(`return-to:${payload}`, secret)}`
+}
+
+export function readReturnToCookie(
+  token: string | undefined,
+  expectedState?: string,
+  secret?: string,
+  now = currentTimestamp(),
+): string {
+  if (!token) return '/home'
+  const parts = token.split('.')
+  let signature: string
+  try { signature = signHs256(`return-to:${parts[0]}`, secret ?? getSessionSecret()) } catch { return '/home' }
+  if (parts.length !== 2 || !safeEqual(parts[1], signature)) return '/home'
+  const payload = decodeJson(parts[0])
+  if (!payload || !isTimestamp(payload.exp) || payload.exp <= now
+      || typeof payload.state !== 'string' || (expectedState !== undefined && payload.state !== expectedState)) return '/home'
+  return safeReturnTo(payload.path)
 }
 
 export { OIDC_MAX_AGE_SECONDS }

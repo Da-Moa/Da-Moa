@@ -20,8 +20,8 @@ import {
 } from '../lib/hero-phase'
 
 const benefits = [
-  { title: '영수증 한 장으로', description: '총 금액을 빠르게 입력해요', Icon: ReceiptText },
-  { title: '정확하게 1/N', description: '인원수만 정하면 끝이에요', Icon: Users },
+  { title: '지출과 증빙을 함께', description: '금액을 입력하고 영수증을 보관해요', Icon: ReceiptText },
+  { title: '함께 쓴 만큼 1/N', description: '결제자와 부담할 멤버를 골라요', Icon: Users },
   { title: '링크 하나로', description: '친구들에게 정산을 요청해요', Icon: WalletCards },
 ]
 
@@ -298,7 +298,7 @@ export default function LandingPage() {
           <div className="landing-hero-copy">
             <p>더치페이, 이제 가볍게</p>
             <h1 id="landing-heading">모임비 정산,<br /><span>다모아로 끝내요</span></h1>
-            <span>영수증부터 송금 요청까지<br />복잡한 정산을 한 곳에서</span>
+            <span>지출 기록부터 개인별 금액 안내까지<br />모임의 정산을 한 곳에서</span>
           </div>
           <Image alt="정산 과정을 상징하는 카드 일러스트" className="landing-hero-image" priority src={hero} />
           <div className="landing-amount-card" aria-hidden="true">

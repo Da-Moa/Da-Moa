@@ -23,7 +23,7 @@ export default function RefreshSession() {
         return
       }
       if (response.status === 401) {
-        router.replace('/login')
+        router.replace(`/login?returnTo=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`)
         return
       }
       setRefreshFailed(true)

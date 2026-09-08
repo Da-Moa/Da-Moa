@@ -3,15 +3,17 @@
   "private": true,
   "version": "0.0.0",
   "engines": {
-    "node": ">=20.9.0"
+    "node": ">=22.18.0"
   },
   "type": "module",
   "scripts": {
-    "db:migrate": "node scripts/migrate-auth.mjs",
+    "db:migrate": "node --import tsx scripts/migrate-auth.mjs",
+    "db:seed:test-accounts": "node --import tsx scripts/seed-test-accounts.mjs",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "tsx --test src/lib/*.test.ts"
+    "test": "node --import tsx --test src/lib/*.test.ts",
+    "test:integration": "node --import tsx --test --test-concurrency=1 scripts/*.integration.test.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",

@@ -1,11 +1,13 @@
 import { ArrowLeft, Check, MessageCircle } from 'lucide-react'
 import Link from 'next/link'
 import { getLoginMessage } from '../../lib/login-message'
+import { safeReturnTo } from '../../lib/auth'
+import { TEST_ACCOUNTS } from '../../lib/test-accounts'
 
 export default async function LoginPage({
   searchParams,
-}: Readonly<{ searchParams: Promise<{ error?: string }> }>) {
-  const { error } = await searchParams
+}: Readonly<{ searchParams: Promise<{ error?: string; returnTo?: string }> }>) {
+  const { error, returnTo } = await searchParams
   const message = getLoginMessage(error)
 
   return (
@@ -29,10 +31,18 @@ export default async function LoginPage({
       </section>
 
       <section className="auth-actions" aria-label="로그인 수단">
-        <a className="kakao-login" href="/api/auth/kakao">
+        <a className="kakao-login" href={`/api/auth/kakao?returnTo=${encodeURIComponent(safeReturnTo(returnTo))}`}>
           <MessageCircle aria-hidden="true" fill="currentColor" size={20} />
           카카오로 시작하기
         </a>
+        {process.env.NODE_ENV !== 'production' && <div className="test-account-list stack">
+          <p className="help-text">개발 테스트 계정</p>
+          {TEST_ACCOUNTS.map(account => <form action="/api/auth/test-login" method="post" key={account.key}>
+            <input name="key" type="hidden" value={account.key} />
+            <input name="returnTo" type="hidden" value={safeReturnTo(returnTo)} />
+            <button className="secondary-button" type="submit">{account.displayName}로 로그인</button>
+          </form>)}
+        </div>}
         {message && <p className="auth-setup" role="alert">{message}</p>}
       </section>
     </main>
