@@ -345,7 +345,7 @@ JWT만 유효한 탈퇴·로그아웃 세션을 승인하지 않는다. 재가�
 | `/home` | 본인의 실제 진행 회차와 본인 금액 상태. 추첨 전에는 미확정 표시 |
 | `/home/groups` | 활성 모임 목록·모임 생성 |
 | `/home/groups/[groupId]` | 현재 멤버·초대 링크 관리·회차 목록·생성자의 참여자와 통화 선택 후 기록 시작 |
-| `/home/rounds/[roundId]` | 기록 목록·작성·증빙, 권한별 수정·삭제·제외, 확정·재오픈·취소·전송 |
+| `/home/rounds/[roundId]` | 기록 목록·작성·증빙, 참여자 노드와 최종 송금 관계도, 권한별 수정·삭제·제외, 확정·재오픈·취소·전송 |
 | `/home/history` | 참여 이력으로 조회한 회차 목록. 현재 멤버십 없는 과거 회차도 포함 |
 | `/home/all` 및 계정 대화상자 | 기존 내비게이션·계좌 수정·로그아웃·탈퇴 유지 |
 | `/onboarding` | 은행·계좌번호·예금주 등록, 재가입 안내 |
@@ -381,7 +381,7 @@ JWT만 유효한 탈퇴·로그아웃 세션을 승인하지 않는다. 재가�
 | `GET /api/invites/[token]` / `POST /api/invites/[token]/accept` | 인증 후 안전한 모임 미리보기 / 명시적 참여 수락 |
 | `POST /api/groups/[groupId]/rounds` | `{ name, currency, participantIds }`. 모든 필드 필수. 생성자 포함 최소 2명, `currency`는 USD·KRW·JPY 중 선택 |
 | `GET /api/rounds` | 본인 참여 회차 목록. 상태 필터로 진행·과거 화면 구성 |
-| `GET /api/rounds/[roundId]` | 회차·참여자·지출·기본 분배·상태·version. 타인 계좌 없음 |
+| `GET /api/rounds/[roundId]` | 회차·참여자·지출·기본 분배·상태·version. 최종화 후 전체 송금 관계·금액을 포함하고 계좌정보는 없음 |
 | `POST /api/rounds/[roundId]/expenses` | `{ description, amount, payerId, splitMode, participantIds?, expectedVersion }` |
 | `PATCH /api/rounds/[roundId]/expenses/[expenseId]` | 편집 가능한 지출 필드와 expectedVersion. 작성자·회차·통화 변경 필드는 없음 |
 | `DELETE /api/rounds/[roundId]/expenses/[expenseId]` | expectedVersion. 지출·부담자·증빙 삭제 |
@@ -556,6 +556,7 @@ Server Component도 같은 인증·권한 함수를 거쳐 최소 데이터만 �
 - 초대·정산 목적지가 로그인·가입·갱신을 거쳐 유지된다. 악성 `returnTo`, 만료·폐기된 초대와 활성 생성자가 없는 모임의 초대 수락은 거부한다. 조회 링크로 멤버십이 생기지 않는다.
 - B가 A·C에게 지급할 때 B의 HTML·RSC·API에 D·E 계좌가 없다. 생성자도 예외가 없다. USD·JPY에는 계좌가 없다.
 - 계좌 변경 후 링크 재진입·새로고침에서 최신값, 원본 금액·추첨 결과는 동일하다. DB 조회 장애는 재시도 가능하고 계좌 조회 성공으로 표시하지 않는다.
+- 회차 화면은 모든 참여자와 최종 송금 행을 방향·이름·금액이 있는 관계도로 표시한다. 추첨 전에는 미확정 금액을 계산하거나 표시하지 않고, 제외된 과거 참여자도 기록에서 제거하지 않는다.
 - 참여자 한 명이 지출·증빙·정산 상태를 바꾸면 같은 회차를 연 다른 참여자의 화면이 WebSocket 이벤트 후 기존 API를 재조회해 반영한다. 계좌 변경도 해당 수취인에게 송금할 사용자의 열린 정산 화면에 반영한다.
 - WebSocket 토큰은 본인 채널 구독만 허용하고 이벤트에는 금액·계좌·지출·영수증·초대 토큰이 없다. 연결 단절 중 누락은 재연결 재조회로 복구하며 Ably 장애가 커밋된 변경을 롤백하거나 5xx로 바꾸지 않는다.
 - 지출 입력 폼을 연 상태에서 실시간 변경을 받아도 폼 시작 버전으로 제출하여 `stale_round` 검사가 유지되고, 원격 확정으로 저장 불가가 되면 입력을 즉시 버리지 않는다.

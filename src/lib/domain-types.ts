@@ -17,7 +17,11 @@ export type Expense = {
   shares: { userId: string; amountMinor: string | null; receivedRemainder: boolean | null }[];
   receipts: Receipt[]; createdAt: number; updatedAt: number
 }
-export type RoundDetail = RoundSummary & { creatorId: string; isCreator: boolean; members: Member[]; expenses: Expense[]; expensesNextCursor: string | null }
+export type SettlementTransfer = { senderId: string; receiverId: string; amountMinor: string }
+export type RoundDetail = RoundSummary & {
+  creatorId: string; isCreator: boolean; members: Member[]; expenses: Expense[];
+  expensesNextCursor: string | null; transfers: SettlementTransfer[]
+}
 export type ExclusionCheck = {
   allowed: boolean; reason: string | null;
   expenses: { id: string; description: string; amountMinor: string; authorId: string; authorName: string; reason: string }[]

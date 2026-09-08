@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { ImagePlus, Pencil, Plus, Trash2 } from 'lucide-react'
+import { ArrowRight, ImagePlus, Pencil, Plus, Trash2 } from 'lucide-react'
 import { ApiError, apiRequest } from '../../lib/api-client'
 import type { ExclusionCheck, Expense, MutationResult, Receipt, RoundDetail } from '../../lib/domain-types'
 import { formatMoney } from '../../lib/money'
@@ -105,6 +105,11 @@ const exclusionReason: Record<string, string> = {
   selected_participant: '특정 사용자 분배의 부담자예요. 해당 기록을 먼저 수정해 주세요.',
 }
 
+function ParticipantAvatar({ name }: { name: string }) {
+  const label = name.trim().split(/\s+/).at(-1) ?? name
+  return <span aria-hidden="true" className="participant-avatar">{Array.from(label)[0] ?? '?'}</span>
+}
+
 export default function RoundClient({ roundId }: { roundId: string }) {
   const router = useRouter()
   const { account } = useAccount()
@@ -159,6 +164,11 @@ export default function RoundClient({ roundId }: { roundId: string }) {
     })
   }
   const nameOf = (id: string) => data?.members.find(member => member.userId === id)?.displayName ?? '참여자'
+  const flowWaitingMessage = data?.status === 'RECORDING'
+    ? '지출 기록을 마치면 최종 송금 관계를 계산해요.'
+    : data?.status === 'CONFIRMED'
+      ? '전송을 확인한 뒤 최종 송금 관계를 표시해요.'
+      : '나머지 금액 추첨이 끝나면 최종 송금 관계를 표시해요.'
   return <>
     <Link className="back-link" href="/home/history">← 내 회차 목록</Link>
     <ErrorNotice error={resource.error} retry={() => void refresh()} />
@@ -167,7 +177,18 @@ export default function RoundClient({ roundId }: { roundId: string }) {
       <section className="domain-card"><div className="row-between"><span>전체 지출</span><strong className="large-money">{formatMoney(data.totalMinor, data.currency)}</strong></div><p className="help-text">{data.memberCount}명 참여 · {data.currency} · 회차별 별도 정산</p></section>
       {data.status === 'CONFIRMED' && <p className="notice">지출을 확정했어요. 수정하려면 생성자가 기록 단계를 다시 열어 주세요. 전송 후에는 수정할 수 없어요.</p>}
       {(data.status === 'LOCKED' || data.status === 'COMPLETED') && <div className="notice"><p>{data.status === 'COMPLETED' ? '종료된 회차예요. 모든 정산 기록은 읽기 전용이에요.' : data.finalizedAt ? '기록이 잠겼어요. 본인의 최종 정산 안내를 확인해 주세요.' : '기록이 잠겼어요. 생성자가 나머지를 한 번 추첨하면 최종 금액을 확인할 수 있어요.'}</p><Link className="primary-button" href={`/settlements/${roundId}`} prefetch={false}>내 정산 안내 보기</Link></div>}
-      <section className="domain-card stack"><h2>회차 참여자</h2><ul className="member-list">{data.members.map(member => <li key={member.userId}><span>{member.displayName}{member.userId === account.id ? ' (나)' : ''}{member.userId === data.creatorId && <small className="subtle-tag">생성자</small>}{member.excludedAt && <small className="subtle-tag">제외됨 · 기록 보존</small>}</span>{data.isCreator && !member.excludedAt && member.userId !== data.creatorId && ['RECORDING', 'CONFIRMED'].includes(data.status) && <button className="text-button" disabled={action.busy} onClick={() => void checkExclusion(member.userId)} type="button">제외 검토</button>}</li>)}</ul>
+      <section className="domain-card stack participant-section"><div><h2>회차 참여자</h2><p className="help-text">참여자와 최종 송금 방향을 한눈에 확인하세요.</p></div>
+        <ul aria-label="회차 참여자" className="participant-grid">{data.members.map(member => <li className={`participant-card${member.excludedAt !== null ? ' participant-excluded' : ''}`} key={member.userId}><ParticipantAvatar name={member.displayName} /><span className="participant-name"><strong>{member.displayName}{member.userId === account.id ? ' (나)' : ''}</strong><span>{member.userId === data.creatorId && <small className="subtle-tag">생성자</small>}{member.excludedAt !== null && <small className="subtle-tag">제외됨 · 기록 보존</small>}</span></span>{data.isCreator && member.excludedAt === null && member.userId !== data.creatorId && ['RECORDING', 'CONFIRMED'].includes(data.status) && <button className="text-button" disabled={action.busy} onClick={() => void checkExclusion(member.userId)} type="button">제외 검토</button>}</li>)}</ul>
+        <div className="settlement-flow stack"><div className="row-between"><h3>송금 관계</h3>{data.finalizedAt !== null && <small className="subtle-tag">최종 {data.transfers.length}건</small>}</div>
+          {data.finalizedAt === null ? <p className="flow-empty">{flowWaitingMessage}</p> : data.transfers.length === 0 ? <p className="flow-empty">서로 주고받을 금액이 없어요.</p> : <ul aria-label="최종 송금 관계" className="transfer-list">{data.transfers.map(transfer => {
+            const sender = nameOf(transfer.senderId), receiver = nameOf(transfer.receiverId), amount = formatMoney(transfer.amountMinor, data.currency)
+            return <li aria-label={`보내는 사람 ${sender}, 받는 사람 ${receiver}, 금액 ${amount}`} className="transfer-row" key={`${transfer.senderId}:${transfer.receiverId}`}>
+              <span className="transfer-person"><ParticipantAvatar name={sender} /><small>보내는 사람</small><strong>{sender}{transfer.senderId === account.id ? ' (나)' : ''}</strong></span>
+              <span className="transfer-direction"><strong className="money">{amount}</strong><span aria-hidden="true"><span className="transfer-line" /><ArrowRight size={18} /></span><small>보내요</small></span>
+              <span className="transfer-person"><ParticipantAvatar name={receiver} /><small>받는 사람</small><strong>{receiver}{transfer.receiverId === account.id ? ' (나)' : ''}</strong></span>
+            </li>
+          })}</ul>}
+        </div>
         {check && <div className={`notice${check.allowed ? '' : ' notice-warning'}`} role="status"><strong>{nameOf(check.userId)} 제외 검토</strong>{!check.allowed && <p>{check.expenses.length ? '해당 사용자와 연관된 정산이 있습니다.' : exclusionReason[check.reason ?? ''] ?? '현재 이 참여자를 제외할 수 없어요.'}</p>}
           {check.expenses.length > 0 && <><p>아래 내역을 작성자 또는 모임 생성자가 수정한 뒤 다시 제외해 주세요.</p><ul className="exclusion-issues">{check.expenses.map(expense => <li key={expense.id}><a href={`#expense-${expense.id}`}><strong>{expense.description}</strong></a><span>{formatMoney(expense.amountMinor, data.currency)} · 작성 {expense.authorName}</span><b>제외 전 수정 필요</b><small>{exclusionReason[expense.reason] ?? '결제·부담 관계를 먼저 수정해 주세요.'}</small></li>)}</ul><p className="help-text">목록에 안 보이는 지출은 아래 ‘지출 더 보기’로 확인할 수 있어요.</p></>}
           {check.allowed && (recording ? <button className="secondary-button" disabled={action.busy} onClick={() => void exclude()} type="button">이 사용자 제외하기</button> : <p>생성자가 ‘기록 단계로 다시 열기’를 누른 다음 다시 제외해 주세요.</p>)}

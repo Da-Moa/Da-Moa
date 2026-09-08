@@ -90,6 +90,10 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       assert.equal(sb.incoming.length, 2)
       assert.equal(sb.outgoing.length, 0)
       assert.equal(JSON.stringify(sa).includes('D은행'), false)
+      assert.deepEqual((await get(r.id)).transfers, [
+        { senderId: a.userId, receiverId: b.userId, amountMinor: '2000' },
+        { senderId: c.userId, receiverId: b.userId, amountMinor: '2000' },
+      ].sort((left, right) => left.senderId.localeCompare(right.senderId)))
       await command(r.id, 'complete')
       for (const action of ['reopen', 'cancel', 'confirm', 'send']) await assert.rejects(command(r.id, action), code('invalid_round_state'))
       await updateBankAccount(b, key(), { bankName: '최신 은행', accountNumber: '00009999', accountHolder: 'B 최신' })

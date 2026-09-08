@@ -96,7 +96,12 @@ export async function getRound(access: Identity, roundId: string, query: URLSear
     const expenses = await expensesFor(client, roundId, query)
     const { rows: totals } = await client.query('SELECT COALESCE(sum(amount_minor),0)::text AS total_minor FROM expenses WHERE round_id=$1', [roundId])
     const { rows: balances } = await client.query('SELECT balance_minor FROM settlement_balances WHERE round_id=$1 AND user_id=$2', [roundId, account.id])
-    return { ...summary({ ...round, ...totals[0], ...balances[0], member_count: members.filter(m => m.excludedAt === null).length }), creatorId: round.creator_id, isCreator: round.is_creator, members, expenses: expenses.items, expensesNextCursor: expenses.nextCursor }
+    const transfers = round.finalized_at === null ? [] : (await client.query('SELECT sender_id,receiver_id,amount_minor FROM settlement_transfers WHERE round_id=$1 ORDER BY sender_id,receiver_id', [roundId])).rows
+    return {
+      ...summary({ ...round, ...totals[0], ...balances[0], member_count: members.filter(m => m.excludedAt === null).length }),
+      creatorId: round.creator_id, isCreator: round.is_creator, members, expenses: expenses.items, expensesNextCursor: expenses.nextCursor,
+      transfers: transfers.map(row => ({ senderId: row.sender_id, receiverId: row.receiver_id, amountMinor: row.amount_minor })),
+    }
   })
 }
 
