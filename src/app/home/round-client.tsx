@@ -253,12 +253,8 @@ export default function RoundClient({ roundId }: { roundId: string }) {
         {data.expensesNextCursor && <button className="secondary-button" disabled={more.busy} onClick={() => void loadMore()} type="button">{more.busy ? '불러오는 중…' : '지출 더 보기'}</button>}
       </div>
       <ErrorNotice error={action.error} retry={action.error instanceof ApiError && action.error.code === 'stale_round' ? () => void refresh() : undefined} />
-      {data.isCreator && <section className="domain-card stack"><h2>회차 생성자 정산 관리</h2>
-        {recording && <><button className="primary-button" disabled={action.busy || Boolean(editing)} onClick={() => void command('confirm')} type="button">{action.busy ? '처리 중…' : '정산 확정'}</button>{editing && <p className="help-text">작성 중인 지출을 저장하거나 닫은 뒤 확정해 주세요.</p>}<button className="text-button danger-text" disabled={action.busy} onClick={() => void cancel()} type="button">회차 전체 취소</button></>}
-        {data.status === 'CONFIRMED' && <><button className="primary-button" disabled={action.busy} onClick={() => void command('send')} type="button">전송 안내 확인</button><button className="secondary-button" disabled={action.busy} onClick={() => void command('reopen')} type="button">기록 단계로 다시 열기</button></>}
-        {data.status === 'LOCKED' && <Link className="primary-button" href={`/settlements/${roundId}`} prefetch={false}>{data.finalizedAt ? '정산 안내 · 종료하기' : '나머지 추첨하러 가기'}</Link>}
-        {data.status === 'COMPLETED' && <p className="help-text">정산 종료 처리됐어요. 다시 열기·수정·삭제할 수 없어요.</p>}
-      </section>}
+      {data.isCreator && recording && <div className="stack"><button className="primary-button" disabled={action.busy || Boolean(editing)} onClick={() => void command('confirm')} type="button">{action.busy ? '처리 중…' : '정산 확정'}</button><button className="secondary-button danger-outline-button" disabled={action.busy} onClick={() => void cancel()} type="button">회차 전체 취소</button></div>}
+      {data.isCreator && data.status === 'CONFIRMED' && <div className="stack"><button className="primary-button" disabled={action.busy} onClick={() => void command('send')} type="button">전송 안내 확인</button><button className="secondary-button" disabled={action.busy} onClick={() => void command('reopen')} type="button">기록 단계로 다시 열기</button></div>}
     </div>}
   </>
 }

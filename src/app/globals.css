@@ -15,8 +15,9 @@
 html { background: #f2f4f6; }
 body { margin: 0; min-width: 320px; }
 button, input { font: inherit; }
-button { cursor: pointer; }
+button { cursor: pointer; transition: background-color .15s ease; }
 button:disabled { cursor: not-allowed; }
+button:not(:disabled):hover { background-color: #e8edf2; }
 a { color: inherit; }
 a:focus-visible, button:focus-visible, input:focus-visible, .expense-card:focus-visible { outline: 3px solid #5dc4fc; outline-offset: 3px; }
 
@@ -34,6 +35,7 @@ a:focus-visible, button:focus-visible, input:focus-visible, .expense-card:focus-
 .brand:hover { transform: scale(1.08); }
 .brand img { display: block; }
 .icon-button { align-items: center; background: transparent; border: 0; border-radius: 50%; color: #4e5968; display: flex; justify-content: center; padding: 7px; }
+.icon-button:not(:disabled):hover { background: #e5e8eb; }
 .account-dialog { background: #fff; border: 1px solid var(--box-border-color); border-radius: 20px; box-shadow: var(--box-shadow); color: #191f28; margin: auto; max-width: calc(100% - 40px); padding: 0; width: 400px; }
 .account-dialog::backdrop { background: rgba(25, 31, 40, .42); }
 .account-dialog-content { padding: 22px; }
@@ -296,9 +298,14 @@ select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3
 .primary-button { background: #146db0; border-color: #0d5f9c; color: #fff; }
 .secondary-button { background: #eef2f6; border-color: var(--box-border-color); color: #334256; }
 .primary-button:disabled, .secondary-button:disabled { opacity: .55; }
-.text-button { align-items: center; background: none; border: 0; color: #146db0; display: inline-flex; font-size: 13px; font-weight: 700; gap: 4px; justify-content: center; min-height: 38px; padding: 5px 2px; }
+.primary-button:not(:disabled):hover { background: #0d5f9c; }
+.secondary-button:not(:disabled):hover { background: #dfe6ed; }
+.danger-outline-button { background: transparent; border-color: #e5484d; color: #bc3140; }
+.text-button { align-items: center; background: none; border: 0; color: #146db0; display: inline-flex; font-size: 13px; font-weight: 700; gap: 4px; justify-content: center; min-height: 38px; padding: 5px 10px; }
 .text-button:disabled { opacity: .5; }
+.text-button:not(:disabled):hover { background: #e8f0f7; border-radius: 8px; }
 .danger-text { color: #bc3140; }
+.danger-outline-button:not(:disabled):hover, .danger-text:not(:disabled):hover { background: #ffe1e4; }
 .quick-actions { display: flex; gap: 10px; }
 .quick-actions > * { flex: 1; }
 .inline-actions { display: flex; gap: 22px; }
@@ -358,7 +365,7 @@ button.participant-card:not(:disabled):hover { background: #f8fbff; border-color
 .transfer-direction > span { align-items: center; display: flex; width: 100%; }
 .transfer-line { background: #9ac9ea; display: block; height: 1px; min-width: 8px; width: 100%; }
 .transfer-direction svg { flex: 0 0 auto; }
-.subtle-tag { background: #edf1f5; border-radius: 6px; color: #596b7d; display: inline-block; font-size: 11px; margin-left: 5px; padding: 3px 6px; }
+.subtle-tag { background: #edf1f5; border: 1px solid #c3ced9; border-radius: 6px; color: #596b7d; display: inline-block; font-size: 11px; margin-left: 5px; padding: 3px 6px; }
 .notice { background: #eaf4ff; border: 1px solid #c9e1f9; border-radius: 12px; box-shadow: var(--control-shadow); color: #254665; font-size: 13px; line-height: 1.7; margin: 0; padding: 14px; }
 .notice p { margin: 0 0 8px; }
 .notice p:last-child { margin-bottom: 0; }
@@ -384,7 +391,8 @@ button.participant-card:not(:disabled):hover { background: #f8fbff; border-color
 .expense-card { scroll-margin-top: 20px; }
 .expense-card-heading { border-bottom: 1px solid #e5e8eb; padding-bottom: 12px; }
 .expense-card-actions { border-top: 1px solid #e5e8eb; padding-top: 12px; }
-.expense-card-actions .text-button { border-radius: 8px; padding-inline: 8px; }
+.expense-card-actions .text-button { border-radius: 8px; padding-inline: 8px; position: relative; }
+.expense-card-actions .text-button + .text-button::before { background: #d8dee6; content: ''; height: 20px; left: -11px; position: absolute; top: 50%; transform: translateY(-50%); width: 1px; }
 .expense-card-actions .text-button:not(:disabled):hover { background: #f2f4f6; }
 .expense-card-actions .danger-text:not(:disabled):hover { background: #fff0f1; }
 .expense-split-tag { margin-left: 0; }

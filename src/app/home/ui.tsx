@@ -203,7 +203,7 @@ export function AccountPanel() {
     </form><ErrorNotice error={action.error} />
     {blockedRounds.length > 0 && <div className="notice"><strong>먼저 종료해야 하는 회차</strong><ul>{blockedRounds.map(round => <li key={round.id}><Link href={`/home/rounds/${round.id}`}>{round.groupName ? `${round.groupName} · ` : ''}{round.name}</Link></li>)}</ul></div>}
     <button className="secondary-button" disabled={action.busy} onClick={() => void logout()} type="button">로그아웃</button>
-    <button className="text-button danger-text" disabled={action.busy} onClick={() => void withdraw()} type="button">회원 탈퇴</button>
+    <button className="secondary-button danger-outline-button" disabled={action.busy} onClick={() => void withdraw()} type="button">회원 탈퇴</button>
   </div>
 }
 
