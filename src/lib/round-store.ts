@@ -3,9 +3,9 @@ import { requireAccount } from './authorization'
 import { withReadTransaction, type Database } from './db'
 import { AppError, badInput } from './errors'
 import { domainMutation, idsInput, missing, nowSeconds, onlyKeys, ownerGroup, pageOf, pagination, textInput, type Identity } from './group-store'
-import { parseAmount, requireCurrency, type Currency } from './money'
+import { formatMoney, MAX_EXPENSE_MAJOR, MAX_ROUND_TOTAL_MAJOR, minorLimit, parseAmount, requireCurrency, type Currency } from './money'
 import { calculateBase, finalizeSettlement, previewSettlement } from './split'
-import type { ExclusionCheck, Expense, Member, MutationResult, RoundDetail, RoundStatus, RoundSummary, SettlementDTO, SettlementTransfer } from './domain-types'
+import type { ExclusionCheck, Expense, MutationResult, RoundDetail, RoundMember, RoundStatus, RoundSummary, SettlementDTO, SettlementTransfer } from './domain-types'
 
 type Row = Record<string, any>
 
@@ -37,9 +37,11 @@ async function bump(client: Database, id: string): Promise<MutationResult> {
   return { ...rows[0], roundId: id }
 }
 
-async function membersFor(client: Database, roundId: string): Promise<Member[]> {
-  const { rows } = await client.query('SELECT user_id,display_name_snapshot,excluded_at FROM round_members WHERE round_id=$1 ORDER BY user_id', [roundId])
-  return rows.map(row => ({ userId: row.user_id, displayName: row.display_name_snapshot, excludedAt: row.excluded_at === null ? null : Number(row.excluded_at) }))
+async function membersFor(client: Database, roundId: string): Promise<RoundMember[]> {
+  const { rows } = await client.query(`SELECT rm.user_id,rm.display_name_snapshot,rm.excluded_at,
+    CASE WHEN u.deleted_at IS NULL THEN u.profile_image_url ELSE NULL END AS profile_image_url
+    FROM round_members rm JOIN users u ON u.id=rm.user_id WHERE rm.round_id=$1 ORDER BY rm.user_id`, [roundId])
+  return rows.map(row => ({ userId: row.user_id, displayName: row.display_name_snapshot, profileImageUrl: row.profile_image_url, excludedAt: row.excluded_at === null ? null : Number(row.excluded_at) }))
 }
 
 async function expensesFor(client: Database, roundId: string, query?: URLSearchParams) {
@@ -154,8 +156,11 @@ async function editable(client: Database, round: Row, userId: string, expense?: 
 async function expenseInput(client: Database, round: Row, body: Record<string, unknown>, previous?: Row) {
   onlyKeys(body, ['description', 'amount', 'payerId', 'splitMode', 'participantIds', 'expectedVersion'])
   const description = textInput(body.description === undefined ? previous?.description : body.description, 500)
+  const currency = round.currency as Currency
   let amount: bigint
-  try { amount = body.amount === undefined && previous ? BigInt(previous.amount_minor) : parseAmount(body.amount, round.currency as Currency) } catch { badInput('invalid_amount', '통화에 맞는 양의 금액을 정확히 입력해 주세요') }
+  try { amount = body.amount === undefined && previous ? BigInt(previous.amount_minor) : parseAmount(body.amount, currency) } catch { badInput('invalid_amount', '통화에 맞는 양의 금액을 정확히 입력해 주세요') }
+  const maximum = minorLimit(MAX_EXPENSE_MAJOR, currency)
+  if (amount > maximum) badInput('expense_amount_limit_exceeded', `지출 금액은 ${formatMoney(maximum.toString(), currency)} 이하여야 해요`)
   const payerId = textInput(body.payerId === undefined ? previous?.payer_id : body.payerId, 128)
   const splitMode = body.splitMode === undefined ? previous?.split_mode : body.splitMode
   if (splitMode !== 'ALL' && splitMode !== 'SELECTED') badInput('invalid_participants', '분배 방식을 선택해 주세요')
@@ -186,6 +191,10 @@ export async function saveExpense(access: Identity, key: string, roundId: string
     await editable(client, round, userId, previous)
     version(round, body.expectedVersion)
     const input = await expenseInput(client, round, body, previous), now = nowSeconds(), id = expenseId ?? randomUUID()
+    const { rows: totals } = await client.query('SELECT COALESCE(sum(amount_minor),0)::text AS total_minor FROM expenses WHERE round_id=$1', [roundId])
+    const nextTotal = BigInt(totals[0].total_minor) - BigInt(previous?.amount_minor ?? 0) + BigInt(input.amount)
+    const maximum = minorLimit(MAX_ROUND_TOTAL_MAJOR, round.currency as Currency)
+    if (nextTotal > maximum) badInput('round_total_limit_exceeded', `회차 전체 지출은 ${formatMoney(maximum.toString(), round.currency as Currency)} 이하여야 해요`)
     if (previous) {
       await client.query('UPDATE expenses SET description=$2,amount_minor=$3,payer_id=$4,split_mode=$5,base_share_minor=NULL,remainder_units=NULL,updated_at=$6,updated_by=$7 WHERE id=$1', [id, input.description, input.amount, input.payerId, input.splitMode, now, userId])
     } else {
@@ -243,22 +252,27 @@ export async function excludeMember(access: Identity, key: string, roundId: stri
   })
 }
 
-async function validatedExpenses(client: Database, roundId: string) {
+async function validatedExpenses(client: Database, roundId: string, currency: Currency) {
   const members = await membersFor(client, roundId), active = members.filter(m => m.excludedAt === null).map(m => m.userId).sort()
   if (active.length < 2) throw new AppError(409, 'minimum_participants', '회차는 최소 2명이어야 합니다')
   const items = await settlementExpensesFor(client, roundId)
   if (!items.length) throw new AppError(409, 'empty_expenses', '지출 내역이 없습니다')
+  let total = 0n
   for (const expense of items) {
     if (!expense.participantIds.length || expense.participantIds.some(id => !active.includes(id)) || !members.some(m => m.userId === expense.payerId) || (expense.splitMode === 'ALL' && JSON.stringify(expense.participantIds.slice().sort()) !== JSON.stringify(active))) {
       badInput('invalid_participants', '지출 참여 내역을 다시 확인해 주세요')
     }
-    if (BigInt(expense.amountMinor) <= 0n) badInput('invalid_amount')
+    const amount = BigInt(expense.amountMinor)
+    if (amount <= 0n) badInput('invalid_amount')
+    if (amount > minorLimit(MAX_EXPENSE_MAJOR, currency)) badInput('expense_amount_limit_exceeded', `지출 금액은 ${formatMoney(minorLimit(MAX_EXPENSE_MAJOR, currency).toString(), currency)} 이하여야 해요`)
+    total += amount
   }
+  if (total > minorLimit(MAX_ROUND_TOTAL_MAJOR, currency)) badInput('round_total_limit_exceeded', `회차 전체 지출은 ${formatMoney(minorLimit(MAX_ROUND_TOTAL_MAJOR, currency).toString(), currency)} 이하여야 해요`)
   return { items, members }
 }
 
-async function finalize(client: Database, roundId: string, draw: boolean) {
-  const { items, members } = await validatedExpenses(client, roundId)
+async function finalize(client: Database, roundId: string, currency: Currency, draw: boolean) {
+  const { items, members } = await validatedExpenses(client, roundId, currency)
   const result = finalizeSettlement(items, members.map(m => m.userId), draw ? max => randomInt(max) : undefined)
   for (const share of result.shares) await client.query('UPDATE expense_shares SET final_amount_minor=$3,received_remainder=$4 WHERE expense_id=$1 AND user_id=$2', [share.expenseId, share.userId, share.amountMinor, share.receivedRemainder])
   for (const balance of result.balances) await client.query('INSERT INTO settlement_balances(round_id,user_id,paid_minor,burden_minor,balance_minor) VALUES($1,$2,$3,$4,$5)', [roundId, balance.userId, balance.paidMinor, balance.burdenMinor, balance.balanceMinor])
@@ -277,7 +291,7 @@ export async function roundCommand(access: Identity, key: string, roundId: strin
     const now = nowSeconds()
     if (action === 'confirm') {
       state(round, 'RECORDING')
-      const { items } = await validatedExpenses(client, roundId)
+      const { items } = await validatedExpenses(client, roundId, round.currency as Currency)
       for (const expense of items) {
         const base = calculateBase(BigInt(expense.amountMinor), expense.participantIds.length)
         await client.query('UPDATE expenses SET base_share_minor=$2,remainder_units=$3 WHERE id=$1', [expense.id, base.base.toString(), base.remainder])
@@ -289,13 +303,13 @@ export async function roundCommand(access: Identity, key: string, roundId: strin
       await client.query("UPDATE rounds SET status='RECORDING',confirmed_at=NULL WHERE id=$1", [roundId])
     } else if (action === 'send') {
       state(round, 'CONFIRMED')
-      await validatedExpenses(client, roundId)
+      await validatedExpenses(client, roundId, round.currency as Currency)
       await client.query("UPDATE rounds SET status='LOCKED',locked_at=$2 WHERE id=$1", [roundId, now])
       const { rows } = await client.query('SELECT 1 FROM expenses WHERE round_id=$1 AND remainder_units>0 LIMIT 1', [roundId])
-      if (!rows.length) await finalize(client, roundId, false)
+      if (!rows.length) await finalize(client, roundId, round.currency as Currency, false)
     } else if (action === 'draw') {
       state(round, 'LOCKED')
-      await finalize(client, roundId, true)
+      await finalize(client, roundId, round.currency as Currency, true)
     } else if (action === 'complete') {
       state(round, 'LOCKED')
       if (round.finalized_at === null) throw new AppError(409, 'invalid_round_state', '나머지 배분을 먼저 완료해 주세요')
@@ -319,14 +333,17 @@ export async function getSettlement(access: Identity, roundId: string): Promise<
     result.sharePath = `/settlements/${roundId}`
     // Only the viewer's actual recipients are joined to bank fields; ownership gives no extra bank visibility.
     const bankFields = round.currency === 'KRW' ? ',u.bank_name,u.account_number,u.account_holder' : ''
-    const { rows: outgoing } = await client.query(`SELECT t.receiver_id,t.amount_minor,m.display_name_snapshot${bankFields} FROM settlement_transfers t
-      JOIN round_members m ON m.round_id=t.round_id AND m.user_id=t.receiver_id ${round.currency === 'KRW' ? 'JOIN users u ON u.id=t.receiver_id' : ''}
+    const { rows: outgoing } = await client.query(`SELECT t.receiver_id,t.amount_minor,m.display_name_snapshot,
+      CASE WHEN u.deleted_at IS NULL THEN u.profile_image_url ELSE NULL END AS profile_image_url${bankFields} FROM settlement_transfers t
+      JOIN round_members m ON m.round_id=t.round_id AND m.user_id=t.receiver_id JOIN users u ON u.id=t.receiver_id
       WHERE t.round_id=$1 AND t.sender_id=$2 ORDER BY t.receiver_id`, [roundId, account.id])
-    const { rows: incoming } = await client.query(`SELECT t.sender_id,t.amount_minor,m.display_name_snapshot FROM settlement_transfers t
-      JOIN round_members m ON m.round_id=t.round_id AND m.user_id=t.sender_id WHERE t.round_id=$1 AND t.receiver_id=$2 ORDER BY t.sender_id`, [roundId, account.id])
-    result.outgoing = outgoing.map(row => ({ receiverId: row.receiver_id, displayName: row.display_name_snapshot, amountMinor: row.amount_minor,
+    const { rows: incoming } = await client.query(`SELECT t.sender_id,t.amount_minor,m.display_name_snapshot,
+      CASE WHEN u.deleted_at IS NULL THEN u.profile_image_url ELSE NULL END AS profile_image_url FROM settlement_transfers t
+      JOIN round_members m ON m.round_id=t.round_id AND m.user_id=t.sender_id JOIN users u ON u.id=t.sender_id
+      WHERE t.round_id=$1 AND t.receiver_id=$2 ORDER BY t.sender_id`, [roundId, account.id])
+    result.outgoing = outgoing.map(row => ({ receiverId: row.receiver_id, displayName: row.display_name_snapshot, profileImageUrl: row.profile_image_url, amountMinor: row.amount_minor,
       ...(round.currency === 'KRW' ? { account: { bankName: row.bank_name, accountNumber: row.account_number, accountHolder: row.account_holder } } : {}) }))
-    result.incoming = incoming.map(row => ({ senderId: row.sender_id, displayName: row.display_name_snapshot, amountMinor: row.amount_minor }))
+    result.incoming = incoming.map(row => ({ senderId: row.sender_id, displayName: row.display_name_snapshot, profileImageUrl: row.profile_image_url, amountMinor: row.amount_minor }))
     return result
   })
 }

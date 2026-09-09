@@ -6,8 +6,8 @@ import { useRouter } from 'next/navigation'
 import { ArrowRight, ChevronDown, ImagePlus, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { ApiError, apiRequest } from '../../lib/api-client'
 import type { ExclusionCheck, Expense, MutationResult, Receipt, RoundDetail } from '../../lib/domain-types'
-import { formatAmountInput, formatMoney } from '../../lib/money'
-import { ErrorNotice, Loading, StatusBadge, useAccount, useAction, useResource } from './ui'
+import { expenseInputMaximum, formatAmountInput, formatMoney } from '../../lib/money'
+import { ErrorNotice, Loading, ParticipantAvatar, StatusBadge, useAccount, useAction, useResource } from './ui'
 
 function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: RoundDetail; expense: Expense | null; onSaved: () => Promise<unknown>; onCancel: () => void; reload: () => Promise<unknown> }) {
   const { account } = useAccount()
@@ -17,8 +17,11 @@ function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: Rou
   const [participants, setParticipants] = useState(expense?.participantIds ?? [])
   const minor = expense?.amountMinor ?? ''
   const amount = minor && round.currency === 'USD' ? `${minor.padStart(3, '0').slice(0, -2)}.${minor.padStart(3, '0').slice(-2)}` : minor
-  const [amountInput, setAmountInput] = useState(() => formatAmountInput(amount, round.currency) ?? amount)
+  const maximumMinor = expenseInputMaximum(round.totalMinor, expense?.amountMinor, round.currency)
+  const [amountInput, setAmountInput] = useState(() => formatAmountInput(amount, round.currency, maximumMinor) ?? amount)
+  useEffect(() => setAmountInput(current => formatAmountInput(current, round.currency, maximumMinor) ?? current), [maximumMinor, round.currency])
   async function save(form: HTMLFormElement) {
+    if (maximumMinor === 0n) return
     const values = new FormData(form)
     const body = {
       description: String(values.get('description') ?? ''), amount: String(values.get('amount') ?? '').replace(/,/g, ''), payerId: String(values.get('payerId') ?? ''), splitMode: mode,
@@ -30,7 +33,7 @@ function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: Rou
   function changeAmount(input: HTMLInputElement) {
     const cursor = input.selectionStart ?? input.value.length
     const offset = input.value.slice(0, cursor).replace(/,/g, '').length
-    const formatted = formatAmountInput(input.value, round.currency)
+    const formatted = formatAmountInput(input.value, round.currency, maximumMinor)
     if (formatted === null) return
     setAmountInput(formatted)
     requestAnimationFrame(() => {
@@ -54,7 +57,7 @@ function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: Rou
     </fieldset>
     {round.status !== 'RECORDING' && <p className="notice notice-warning">다른 변경으로 기록 단계가 끝났어요. 입력을 확인한 뒤 창을 닫고 최신 상태를 확인해 주세요.</p>}
     <ErrorNotice error={action.error} retry={action.error instanceof ApiError && action.error.code === 'stale_round' ? () => void reload() : undefined} />
-    <div className="quick-actions"><button className="primary-button" disabled={action.busy || round.status !== 'RECORDING'} type="submit">{action.busy ? '저장 중…' : '지출 저장'}</button><button className="secondary-button" disabled={action.busy} type="button" onClick={onCancel}>닫기</button></div>
+    <div className="quick-actions"><button className="primary-button" disabled={action.busy || round.status !== 'RECORDING' || maximumMinor === 0n} type="submit">{action.busy ? '저장 중…' : '지출 저장'}</button><button className="secondary-button" disabled={action.busy} type="button" onClick={onCancel}>닫기</button></div>
   </form>
 }
 
@@ -125,11 +128,6 @@ const exclusionReason: Record<string, string> = {
   selected_participant: '특정 사용자 분배의 부담자예요. 해당 기록을 먼저 수정해 주세요.',
 }
 
-function ParticipantAvatar({ name }: { name: string }) {
-  const label = name.trim().split(/\s+/).at(-1) ?? name
-  return <span aria-hidden="true" className="participant-avatar">{Array.from(label)[0] ?? '?'}</span>
-}
-
 export default function RoundClient({ roundId }: { roundId: string }) {
   const router = useRouter()
   const { account } = useAccount()
@@ -157,7 +155,14 @@ export default function RoundClient({ roundId }: { roundId: string }) {
     if (!data) return
     if (name === 'send' && !window.confirm('이대로 사용자들에게 메시지를 전송할까요?\n전송하면 기록이 잠기며 다음 화면에서 링크를 복사해 직접 공유합니다.')) return
     const result = await action.run(() => apiRequest<MutationResult>(`/api/rounds/${roundId}/${name}`, { method: 'POST', body: { expectedVersion: data.version } }))
-    if (result) { setCheck(null); if (name === 'send') router.push(`/settlements/${roundId}`); else await refresh() }
+    if (result) {
+      setCheck(null)
+      if (name === 'send') router.push(`/settlements/${roundId}`)
+      else {
+        await refresh()
+        if (name === 'confirm' || name === 'reopen') requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'smooth' }))
+      }
+    }
   }
   async function cancel() {
     if (!data || !window.confirm('회차와 모든 지출·증빙을 영구 삭제할까요? 이 작업은 되돌릴 수 없어요.')) return
@@ -206,6 +211,7 @@ export default function RoundClient({ roundId }: { roundId: string }) {
     })
   }
   const nameOf = (id: string) => data?.members.find(member => member.userId === id)?.displayName ?? '참여자'
+  const profileOf = (id: string) => data?.members.find(member => member.userId === id)?.profileImageUrl ?? null
   const finalized = Boolean(data && data.finalizedAt !== null)
   const hasExpenses = Boolean(data && data.totalMinor !== '0')
   return <>
@@ -220,16 +226,16 @@ export default function RoundClient({ roundId }: { roundId: string }) {
         <ul aria-label="회차 참여자" className="participant-grid">{data.members.map(member => {
           const canExclude = data.isCreator && member.excludedAt === null && member.userId !== data.creatorId && ['RECORDING', 'CONFIRMED'].includes(data.status)
           const selfClass = member.userId === account.id ? ' participant-me' : ''
-          const card = <><ParticipantAvatar name={member.displayName} /><span className="participant-name"><strong>{member.displayName}{member.userId === account.id ? ' (나)' : ''}</strong><span>{member.userId === data.creatorId && <small className="subtle-tag">회차 생성자</small>}{member.excludedAt !== null && <small className="subtle-tag">제외됨 · 기록 보존</small>}</span></span></>
+          const card = <><ParticipantAvatar profileImageUrl={member.profileImageUrl} /><span className="participant-name"><strong>{member.displayName}{member.userId === account.id ? ' (나)' : ''}</strong><span>{member.userId === data.creatorId && <small className="subtle-tag">회차 생성자</small>}{member.excludedAt !== null && <small className="subtle-tag">제외됨 · 기록 보존</small>}</span></span></>
           return <li key={member.userId}>{canExclude ? <button aria-controls="participant-exclusion-dialog" aria-haspopup="dialog" aria-label={`${member.displayName} 제외`} className={`participant-card${selfClass}`} disabled={action.busy} onClick={() => void checkExclusion(member.userId)} type="button">{card}</button> : <div className={`participant-card${member.excludedAt !== null ? ' participant-excluded' : ''}${selfClass}`}>{card}</div>}</li>
         })}</ul>
         <div className="settlement-flow stack"><div className="row-between"><h3>나의 송금 관계</h3>{hasExpenses && <small className="subtle-tag">{finalized ? '최종' : '현재 예상'} {data.transfers.length}건</small>}</div>
           {data.transfers.length === 0 ? <p className="flow-empty" role="status">{!hasExpenses ? '지출을 기록하면 나의 예상 송금 관계를 표시해요.' : finalized ? '내가 주고받을 금액이 없어요.' : '현재 기록 기준으로 내가 주고받을 금액이 없어요.'}</p> : <ul aria-label={finalized ? '나의 최종 송금 관계' : '나의 현재 예상 송금 관계'} aria-live="polite" className="transfer-list">{data.transfers.map(transfer => {
             const sender = nameOf(transfer.senderId), receiver = nameOf(transfer.receiverId), amount = formatMoney(transfer.amountMinor, data.currency)
             return <li aria-label={`${finalized ? '최종' : '예상'} 송금, 보내는 사람 ${sender}, 받는 사람 ${receiver}, 금액 ${amount}`} className="transfer-row" key={`${transfer.senderId}:${transfer.receiverId}`}>
-              <span className={`transfer-person${transfer.senderId === account.id ? ' transfer-me' : ''}`}><ParticipantAvatar name={sender} /><small>보내는 사람</small><strong>{sender}{transfer.senderId === account.id ? ' (나)' : ''}</strong></span>
+              <span className={`transfer-person${transfer.senderId === account.id ? ' transfer-me' : ''}`}><ParticipantAvatar profileImageUrl={profileOf(transfer.senderId)} /><small>보내는 사람</small><strong>{sender}{transfer.senderId === account.id ? ' (나)' : ''}</strong></span>
               <span className="transfer-direction"><strong className="money">{finalized ? amount : `예상 ${amount}`}</strong><span aria-hidden="true"><span className="transfer-line" /><ArrowRight size={18} /></span><small>보낼 예정</small></span>
-              <span className={`transfer-person${transfer.receiverId === account.id ? ' transfer-me' : ''}`}><ParticipantAvatar name={receiver} /><small>받는 사람</small><strong>{receiver}{transfer.receiverId === account.id ? ' (나)' : ''}</strong></span>
+              <span className={`transfer-person${transfer.receiverId === account.id ? ' transfer-me' : ''}`}><ParticipantAvatar profileImageUrl={profileOf(transfer.receiverId)} /><small>받는 사람</small><strong>{receiver}{transfer.receiverId === account.id ? ' (나)' : ''}</strong></span>
             </li>
           })}</ul>}
           {!finalized && hasExpenses && <p className="help-text" role="status">지금까지 기록한 지출 내역을 기반으로 한 예상치예요</p>}

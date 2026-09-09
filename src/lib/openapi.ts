@@ -9,11 +9,12 @@ const minor: Schema = { type: 'string', pattern: '^\\d+$', description: '통화 
 const currency: Schema = { type: 'string', enum: ['KRW', 'JPY', 'USD'] }
 const status: Schema = { type: 'string', enum: ['RECORDING', 'CONFIRMED', 'LOCKED', 'COMPLETED'] }
 const timestamp: Schema = { type: 'integer', format: 'int64', nullable: true, description: 'UTC epoch seconds' }
+const profileImage: Schema = { type: 'string', format: 'uri', nullable: true, description: '활성 회원의 최신 카카오 프로필 이미지 URL. 탈퇴했거나 이미지가 없으면 null.' }
 const bankFields = { bankName: { type: 'string', minLength: 1, maxLength: 100 }, accountNumber: { type: 'string', minLength: 1, maxLength: 100, description: '숫자·공백·하이픈 입력. 구분자를 제거한 숫자 1~64자와 선행 0을 보존합니다.' }, accountHolder: { type: 'string', minLength: 1, maxLength: 100 } }
 const versionBody = object({ expectedVersion: integer }, ['expectedVersion'])
 const expenseFields = {
   description: string,
-  amount: { type: 'string', pattern: '^\\d+(\\.\\d{1,2})?$', description: '양의 십진 문자열. KRW·JPY는 정수, USD는 소수 최대 2자리. 숫자·지수표기·쉼표·환불 금액은 거부.' },
+  amount: { type: 'string', pattern: '^\\d+(\\.\\d{1,2})?$', description: '양의 십진 문자열. KRW·JPY는 정수, USD는 소수 최대 2자리. 통화의 주 단위 기준 지출 한 건 최대 100,000,000. 숫자·지수표기·쉼표·환불 금액은 거부.' },
   payerId: id,
   splitMode: { type: 'string', enum: ['ALL', 'SELECTED'] },
   participantIds: { type: 'array', items: id, minItems: 1, uniqueItems: true, description: 'SELECTED일 때 필수. ALL은 서버가 회차의 제외되지 않은 전원으로 결정.' },
@@ -44,26 +45,26 @@ const domainSchemas = {
   RoundStatus: status,
   MinorAmount: minor,
   ApiError: object({
-    error: { type: 'string', example: 'stale_round', description: 'invalid_input, invalid_amount, invalid_participants, unsupported_currency, unauthorized, forbidden, onboarding_required, not_found, stale_round, invalid_round_state, idempotency_conflict, empty_expenses, member_exclusion_blocked, minimum_participants, unfinished_rounds, unfinished_group_rounds, unsupported_receipt_type, storage_unavailable 등' },
+    error: { type: 'string', example: 'stale_round', description: 'invalid_input, invalid_amount, expense_amount_limit_exceeded, round_total_limit_exceeded, invalid_participants, unsupported_currency, unauthorized, forbidden, onboarding_required, not_found, stale_round, invalid_round_state, idempotency_conflict, empty_expenses, member_exclusion_blocked, minimum_participants, unfinished_rounds, unfinished_group_rounds, unsupported_receipt_type, storage_unavailable 등' },
     message: string,
     details: { type: 'object', additionalProperties: true, description: '현재 버전, 제외 차단 관련 지출 또는 탈퇴를 막는 회차 등. 계좌·인증 토큰은 포함하지 않음.' },
   }, ['error', 'message']),
   BankAccount: object(bankFields, ['bankName', 'accountNumber', 'accountHolder']),
   CurrentBankAccount: object({ bankName: { type: 'string', nullable: true }, accountNumber: { type: 'string', nullable: true }, accountHolder: { type: 'string', nullable: true } }, ['bankName', 'accountNumber', 'accountHolder']),
-  Me: object({ id, displayName: { type: 'string', nullable: true }, email: { type: 'string', nullable: true }, profileImageUrl: { type: 'string', nullable: true }, purpose: { type: 'string', enum: ['app', 'onboarding'] }, deletedAt: timestamp, onboardingCompletedAt: timestamp, bankAccount: { type: 'object', nullable: true, properties: bankFields, description: '본인의 현재 계좌 또는 null. 실계좌·예금주 검증 전입니다.' } }, ['id', 'displayName', 'email', 'profileImageUrl', 'purpose', 'deletedAt', 'onboardingCompletedAt', 'bankAccount']),
+  Me: object({ id, displayName: { type: 'string', nullable: true }, email: { type: 'string', nullable: true }, profileImageUrl: profileImage, purpose: { type: 'string', enum: ['app', 'onboarding'] }, deletedAt: timestamp, onboardingCompletedAt: timestamp, bankAccount: { type: 'object', nullable: true, properties: bankFields, description: '본인의 현재 계좌 또는 null. 실계좌·예금주 검증 전입니다.' } }, ['id', 'displayName', 'email', 'profileImageUrl', 'purpose', 'deletedAt', 'onboardingCompletedAt', 'bankAccount']),
   Group: object(groupFields, Object.keys(groupFields)),
   GroupMember: object({ userId: id, displayName: string, excludedAt: timestamp }, ['userId', 'displayName', 'excludedAt']),
   GroupDetail: object({ ...groupFields, members: array(ref('GroupMember')), isCreator: { type: 'boolean', description: '조회 사용자가 현재 활성 모임 생성자인지 여부' }, invites: array(object({ id, expiresAt: timestamp }, ['id', 'expiresAt'])) }, [...Object.keys(groupFields), 'members', 'isCreator', 'invites']),
   Round: object(roundFields, Object.keys(roundFields)),
-  RoundMember: object({ userId: id, displayName: string, excludedAt: timestamp }, ['userId', 'displayName', 'excludedAt']),
+  RoundMember: object({ userId: id, displayName: string, profileImageUrl: profileImage, excludedAt: timestamp }, ['userId', 'displayName', 'profileImageUrl', 'excludedAt']),
   Expense: object({ id, authorId: id, payerId: id, description: string, amountMinor: minor, splitMode: expenseFields.splitMode, participantIds: array(id), baseShareMinor: { ...minor, nullable: true }, remainderUnits: { type: 'integer', minimum: 0, nullable: true }, shares: array(object({ userId: id, amountMinor: { ...minor, nullable: true }, receivedRemainder: { type: 'boolean', nullable: true } }, ['userId', 'amountMinor', 'receivedRemainder'])), receipts: array(ref('Receipt')), createdAt: timestamp, updatedAt: timestamp }, ['id', 'authorId', 'payerId', 'description', 'amountMinor', 'splitMode', 'participantIds', 'baseShareMinor', 'remainderUnits', 'shares', 'receipts', 'createdAt', 'updatedAt']),
   Receipt: object({ id, mimeType: { type: 'string', enum: ['image/avif', 'image/jpeg', 'image/png', 'image/webp'], description: '신규 업로드는 image/avif이며 나머지는 기존 저장 자료 조회 호환 값입니다.' }, byteSize: { type: 'integer', minimum: 1, description: '변환 후 저장된 이미지의 바이트 크기입니다. 앱 자체 상한은 없습니다.' } }, ['id', 'mimeType', 'byteSize']),
   SettlementTransfer: object({ senderId: id, receiverId: id, amountMinor: minor }, ['senderId', 'receiverId', 'amountMinor']),
   RoundDetail: object({ ...roundFields, creatorId: { ...id, description: '회차 생성자 ID. 해당 회차 수명주기와 전체 지출을 관리합니다.' }, groupCreatorId: { ...id, description: '소속 모임 생성자 ID. 회차 생성자와 다를 수 있습니다.' }, isCreator: { type: 'boolean', description: '조회 사용자가 이 회차의 생성자인지 여부' }, members: array(ref('RoundMember')), expenses: array(ref('Expense')), expensesNextCursor: { type: 'string', nullable: true }, transfers: { ...array(ref('SettlementTransfer')), description: '조회 사용자가 보내거나 받는 송금 관계만 포함합니다.' }, pendingRemainderMinor: { ...minor, description: '최종 추첨 전 누구에게도 배정하지 않은 통화 최소 단위 금액의 합. 최종화 후 0.' } }, [...Object.keys(roundFields), 'creatorId', 'groupCreatorId', 'isCreator', 'members', 'expenses', 'expensesNextCursor', 'transfers', 'pendingRemainderMinor']),
   MutationResult: object({ id, roundId: id, status, version: integer, inviteId: id, linkUnavailable: { type: 'boolean' }, sharePath: { type: 'string', description: '초대 최초 발급에서만 /invites/{token} 경로를 반환하며 재시도 기록에는 저장하지 않음' } }, ['id']),
   ExclusionCheck: object({ allowed: { type: 'boolean' }, reason: { type: 'string', nullable: true }, expenses: array(object({ id, description: string, amountMinor: minor, authorId: id, authorName: string, reason: string }, ['id', 'description', 'amountMinor', 'authorId', 'authorName', 'reason'])) }, ['allowed', 'reason', 'expenses']),
-  OutgoingTransfer: object({ receiverId: id, displayName: string, amountMinor: minor, account: ref('CurrentBankAccount') }, ['receiverId', 'displayName', 'amountMinor']),
-  IncomingTransfer: object({ senderId: id, displayName: string, amountMinor: minor }, ['senderId', 'displayName', 'amountMinor']),
+  OutgoingTransfer: object({ receiverId: id, displayName: string, profileImageUrl: profileImage, amountMinor: minor, account: ref('CurrentBankAccount') }, ['receiverId', 'displayName', 'profileImageUrl', 'amountMinor']),
+  IncomingTransfer: object({ senderId: id, displayName: string, profileImageUrl: profileImage, amountMinor: minor }, ['senderId', 'displayName', 'profileImageUrl', 'amountMinor']),
   Settlement: object({ roundId: id, name: string, groupName: string, status, version: integer, isCreator: { type: 'boolean', description: '조회 사용자가 이 회차의 생성자인지 여부' }, finalized: { type: 'boolean' }, currency, balanceMinor: { type: 'string', pattern: '^-?\\d+$', nullable: true, description: '부담액 − 결제액. 양수는 보낼 돈, 음수는 받을 돈. 최종 저장 전에는 null.' }, outgoing: array(ref('OutgoingTransfer')), incoming: array(ref('IncomingTransfer')), sharePath: { type: 'string', nullable: true, example: '/settlements/00000000-0000-4000-8000-000000000001', description: '최종 저장 후 제공하며 이전에는 null. 로그인한 본인의 안내를 조회하는 경로이며 초대 링크가 아님.' } }, ['roundId', 'name', 'groupName', 'status', 'version', 'isCreator', 'finalized', 'currency', 'balanceMinor', 'outgoing', 'incoming', 'sharePath']),
   GroupPage: object({ items: array(ref('Group')), nextCursor: { type: 'string', nullable: true } }, ['items', 'nextCursor']),
   RoundPage: object({ items: array(ref('Round')), nextCursor: { type: 'string', nullable: true } }, ['items', 'nextCursor']),
@@ -113,12 +114,12 @@ const domainPaths = {
   '/api/invites/{token}/accept': { post: operation('모임', '초대를 명시적으로 수락', { mutation: true, description: '활성 멤버의 중복 수락은 같은 결과입니다. 이탈·재가입한 사용자는 다시 수락해야 하며 기존 회차에는 자동 추가되지 않습니다.' }) },
   '/api/rounds': { get: operation('정산', '본인 참여 이력으로 회차 목록 조회', { response: ref('RoundPage'), parameters: [...pageParameters, { name: 'status', in: 'query', schema: { type: 'string', enum: ['active', 'RECORDING', 'CONFIRMED', 'LOCKED', 'COMPLETED'] } }], description: '현재 모임 멤버십과 무관하게 본인 참여 이력이 있는 회차를 조회합니다. 다른 회차·통화 금액을 합산하지 않습니다.' }) },
   '/api/rounds/{roundId}': {
-    get: operation('정산', '회차·지출·참여 내역 조회', { response: ref('RoundDetail'), parameters: pageParameters, description: 'creatorId는 회차 생성자, groupCreatorId는 모임 생성자이며 isCreator는 조회 사용자가 회차 생성자인지를 뜻합니다. 같은 DB 스냅샷의 원본과 버전을 반환합니다. 최종화 전에는 각 지출의 균등 기본 몫만 회차 전체에서 상계한 예상 송금 관계와 미배분 나머지 금액을, 최종화 뒤에는 저장된 최종 관계를 반환합니다. 송금 관계는 조회 사용자가 보내거나 받는 행만 포함하며 계좌정보는 반환하지 않습니다.' }),
+    get: operation('정산', '회차·지출·참여 내역 조회', { response: ref('RoundDetail'), parameters: pageParameters, description: 'creatorId는 회차 생성자, groupCreatorId는 모임 생성자이며 isCreator는 조회 사용자가 회차 생성자인지를 뜻합니다. 같은 DB 스냅샷의 원본과 버전을 반환합니다. 회차 참여자의 이름과 활성 회원의 최신 카카오 프로필 이미지를 반환하며 탈퇴자의 이미지는 null입니다. 최종화 전에는 각 지출의 균등 기본 몫만 회차 전체에서 상계한 예상 송금 관계와 미배분 나머지 금액을, 최종화 뒤에는 저장된 최종 관계를 반환합니다. 송금 관계는 조회 사용자가 보내거나 받는 행만 포함하며 계좌정보는 반환하지 않습니다.' }),
     delete: roundCommand('기록 단계 회차 전체 취소', '회차 생성자만 현재 RECORDING 회차를 취소합니다. 회차·지출·분담·증빙을 하드 삭제합니다. 재오픈 후 취소도 가능하며 같은 키 재시도는 기존 성공 결과를 반환합니다.'),
   },
-  '/api/rounds/{roundId}/expenses': { post: operation('지출', '지출 생성', { mutation: true, request: object(expenseFields, ['description', 'amount', 'payerId', 'splitMode', 'expectedVersion']), description: '기록 단계의 제외되지 않은 참여자가 작성합니다. 결제자 한 명과 전체 또는 선택 부담자를 지정하며 작성자는 로그인 사용자로 저장합니다.' }) },
+  '/api/rounds/{roundId}/expenses': { post: operation('지출', '지출 생성', { mutation: true, request: object(expenseFields, ['description', 'amount', 'payerId', 'splitMode', 'expectedVersion']), description: '기록 단계의 제외되지 않은 참여자가 작성합니다. 결제자 한 명과 전체 또는 선택 부담자를 지정하며 작성자는 로그인 사용자로 저장합니다. 통화 주 단위 기준 한 건은 100,000,000 이하, 회차 누적은 1,000,000,000 이하만 허용합니다.' }) },
   '/api/rounds/{roundId}/expenses/{expenseId}': {
-    patch: operation('지출', '지출 수정', { mutation: true, request: object(expenseFields, ['expectedVersion']), description: '기록 단계에서 제외되지 않은 원작성자 또는 해당 회차 생성자만 수정합니다. 모임 생성자라는 이유만으로 수정할 수 없으며 작성자·회차·통화는 변경할 수 없습니다. 기존 제외된 비부담 결제자의 관계는 보존할 수 있습니다.' }),
+    patch: operation('지출', '지출 수정', { mutation: true, request: object(expenseFields, ['expectedVersion']), description: '기록 단계에서 제외되지 않은 원작성자 또는 해당 회차 생성자만 수정합니다. 모임 생성자라는 이유만으로 수정할 수 없으며 작성자·회차·통화는 변경할 수 없습니다. 수정 금액으로 기존 금액을 대체해 한 건 100,000,000·회차 누적 1,000,000,000 한도를 다시 검증합니다. 기존 제외된 비부담 결제자의 관계는 보존할 수 있습니다.' }),
     delete: operation('지출', '지출·분담·증빙 삭제', { mutation: true, request: versionBody, description: '기록 단계에서 제외되지 않은 원작성자 또는 해당 회차 생성자만 지출과 연결 자료를 삭제합니다. 모임 생성자라는 이유만으로 삭제할 수 없습니다.' }),
   },
   '/api/rounds/{roundId}/expenses/{expenseId}/receipts': { post: operation('지출', '영수증 증빙 이미지 업로드', { mutation: true, multipart: true, request: object({ file: { type: 'string', format: 'binary', description: '실제 JPEG·PNG·WebP 바이트. 앱 자체 파일 크기 상한은 없으며 OCR을 수행하지 않습니다.' }, expectedVersion: integer }, ['file', 'expectedVersion']), description: '기록 단계에서 제외되지 않은 지출 원작성자 또는 해당 회차 생성자가 이미 저장된 지출에 파일 하나를 별도로 업로드합니다. 실제 입력 포맷을 검증하고 픽셀 수 안전장치 안에서 AVIF로 변환해 저장합니다. 업로드 실패는 지출 원본을 삭제하지 않으며 목록 응답에는 바이트 본문이 없습니다. Vercel Function의 요청·응답별 4.5 MB 상한은 별도의 배포 인프라 제약입니다.' }) },
@@ -131,7 +132,7 @@ const domainPaths = {
   '/api/rounds/{roundId}/send': { post: roundCommand('전송을 확인하고 회차 잠금', '회차 생성자가 CONFIRMED 회차를 LOCKED로 전환합니다. 실제 메시지를 전송하지 않습니다. 원본·참여자 수정과 재오픈·취소는 이후 불가합니다. 나머지가 없으면 결과를 함께 저장하고, 있으면 추첨 전 최종 안내·링크를 제공하지 않습니다.') },
   '/api/rounds/{roundId}/draw': { post: roundCommand('잠긴 회차의 나머지를 한 번 추첨', '회차 생성자가 서버 난수로 각 지출의 서로 다른 부담자에게 최소 단위 1을 배분합니다. 모든 최종 분담·잔액·송금·finalizedAt을 한 트랜잭션에 저장합니다. 이미 저장했다면 다른 키여도 다시 추첨하지 않습니다.') },
   '/api/rounds/{roundId}/complete': { post: roundCommand('정산 업무 종료 표시', '회차 생성자만 최종 금액이 저장된 LOCKED 회차를 COMPLETED로 바꿉니다. 실제 입금 확인이 아니며 완료 데이터는 누구도 수정할 수 없습니다. 해당 회차의 탈퇴 차단을 해제합니다.') },
-  '/api/rounds/{roundId}/settlement': { get: operation('정산', '본인의 개인 지급·수취 안내', { response: ref('Settlement'), description: '최종 저장 전에는 대기 상태만 반환합니다. 최종 금액은 고정하며 KRW에서는 본인이 지급할 수취인의 최신 계좌만 조회합니다. USD·JPY와 수취 내역에는 계좌 필드가 없습니다. 모임·회차 생성자도 같은 공개 범위이며 링크는 로그인한 본인의 정보만 보여 줍니다.' }) },
+  '/api/rounds/{roundId}/settlement': { get: operation('정산', '본인의 개인 지급·수취 안내', { response: ref('Settlement'), description: '최종 저장 전에는 대기 상태만 반환합니다. 최종 금액은 고정하며 KRW에서는 본인이 지급할 수취인의 최신 계좌만 조회합니다. 지급·수취 상대의 이름과 활성 회원의 최신 카카오 프로필 이미지를 반환하고 탈퇴자의 이미지는 null로 반환합니다. USD·JPY와 수취 내역에는 계좌 필드가 없습니다. 모임·회차 생성자도 같은 공개 범위이며 링크는 로그인한 본인의 정보만 보여 줍니다.' }) },
 }
 const documentedDomainPaths = Object.fromEntries(Object.entries(domainPaths).map(([path, operations]) => [path, {
   parameters: [...path.matchAll(/\{([^}]+)\}/g)].map(([, name]) => ({ name, in: 'path', required: true, schema: name === 'token' ? string : id })),

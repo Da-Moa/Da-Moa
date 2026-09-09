@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { formatAmountInput, formatMoney, parseAmount, requireCurrency } from './money.ts'
+import { expenseInputMaximum, formatAmountInput, formatMoney, parseAmount, requireCurrency } from './money.ts'
 
 test('amount input adds thousands separators while preserving partial USD decimals', () => {
   assert.equal(formatAmountInput('1234567', 'KRW'), '1,234,567')
@@ -10,6 +10,25 @@ test('amount input adds thousands separators while preserving partial USD decima
   assert.equal(formatAmountInput('1.', 'USD'), '1.')
   assert.equal(formatAmountInput('1.234', 'USD'), null)
   assert.equal(formatAmountInput('-1', 'KRW'), null)
+})
+
+test('expense input clamps to the per-expense and remaining round limits', () => {
+  for (const currency of ['KRW', 'JPY'] as const) {
+    const maximum = expenseInputMaximum('0', null, currency)
+    assert.equal(maximum, 100_000_000n)
+    assert.equal(formatAmountInput('100000000', currency, maximum), '100,000,000')
+    assert.equal(formatAmountInput('100000001', currency, maximum), '100,000,000')
+    assert.equal(formatAmountInput('9'.repeat(300), currency, maximum), '100,000,000')
+    assert.equal(formatAmountInput('20', currency, expenseInputMaximum('999999990', null, currency)), '10')
+    assert.equal(formatAmountInput('20', currency, expenseInputMaximum('999999990', '5', currency)), '15')
+  }
+  const usdMaximum = expenseInputMaximum('0', null, 'USD')
+  assert.equal(usdMaximum, 10_000_000_000n)
+  assert.equal(formatAmountInput('100000000.00', 'USD', usdMaximum), '100,000,000.00')
+  assert.equal(formatAmountInput('100000000.01', 'USD', usdMaximum), '100,000,000.00')
+  assert.equal(formatAmountInput('0.02', 'USD', expenseInputMaximum('99999999999', null, 'USD')), '0.01')
+  assert.equal(formatAmountInput('0.07', 'USD', expenseInputMaximum('99999999999', '5', 'USD')), '0.06')
+  assert.equal(formatAmountInput('1.', 'USD', usdMaximum), '1.')
 })
 
 test('currency decimals and amounts beyond Number precision remain exact', () => {

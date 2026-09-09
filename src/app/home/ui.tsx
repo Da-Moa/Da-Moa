@@ -86,6 +86,13 @@ export function Loading({ text = '불러오는 중…' }: { text?: string }) { r
 export const statusLabel: Record<RoundStatus, string> = { RECORDING: '기록 중', CONFIRMED: '확정 · 전송 전', LOCKED: '송금 대기중', COMPLETED: '정산 종료' }
 export function StatusBadge({ status }: { status: RoundStatus }) { return <span className={`status-badge state-${status.toLowerCase()}`}>{statusLabel[status]}</span> }
 
+export function ParticipantAvatar({ profileImageUrl }: { profileImageUrl: string | null }) {
+  const [failedUrl, setFailedUrl] = useState<string | null>(null)
+  return <span aria-hidden="true" className="participant-avatar"><CircleUserRound size={24} />
+    {profileImageUrl && failedUrl !== profileImageUrl && <img alt="" decoding="async" loading="lazy" onError={() => setFailedUrl(profileImageUrl)} referrerPolicy="no-referrer" src={profileImageUrl} />}
+  </span>
+}
+
 export function CopyLink({ path, label = '링크 복사' }: { path: string; label?: string }) {
   const [message, setMessage] = useState('')
   const [url, setUrl] = useState('')

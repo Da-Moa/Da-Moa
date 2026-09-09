@@ -343,13 +343,15 @@ select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3
 button.participant-card { appearance: none; color: inherit; text-align: left; }
 button.participant-card:not(:disabled):hover { background: #f8fbff; border-color: #9ac9ea; }
 .participant-excluded { background: #f6f7f9; color: #657181; }
-.participant-avatar { align-items: center; background: #eaf4ff; border: 1px solid #c9e1f9; border-radius: 50%; color: #146db0; display: inline-flex; flex: 0 0 auto; font-size: 15px; font-weight: 800; height: 42px; justify-content: center; width: 42px; }
+.participant-avatar { align-items: center; background: #eaf4ff; border: 1px solid #c9e1f9; border-radius: 50%; color: #146db0; display: inline-flex; flex: 0 0 auto; height: 42px; justify-content: center; overflow: hidden; position: relative; width: 42px; }
+.participant-avatar img { border-radius: inherit; height: 100%; inset: 0; object-fit: cover; position: absolute; width: 100%; }
 .participant-excluded .participant-avatar { background: #edf1f5; border-color: #d8dee6; color: #657181; }
 .participant-name { display: grid; gap: 5px; min-width: 0; }
 .participant-name > strong { font-size: 14px; overflow-wrap: anywhere; }
 .participant-name > span { display: flex; flex-wrap: wrap; gap: 4px; }
 .participant-name > span:empty { display: none; }
 .participant-name .subtle-tag { margin-left: 0; }
+.settlement-person { align-items: center; display: flex; gap: 10px; min-width: 0; }
 .settlement-flow { border-top: 1px solid #e5e8eb; padding-top: 16px; }
 .settlement-flow h3 { text-wrap: balance; }
 .settlement-flow .row-between > .subtle-tag { margin-left: 0; }

@@ -1,4 +1,6 @@
 export type Currency = 'KRW' | 'JPY' | 'USD'
+export const MAX_EXPENSE_MAJOR = 100_000_000n
+export const MAX_ROUND_TOTAL_MAJOR = 1_000_000_000n
 
 export function requireCurrency(value: unknown): Currency {
   if (value !== 'KRW' && value !== 'JPY' && value !== 'USD') throw new Error('unsupported_currency')
@@ -12,12 +14,28 @@ function groupWhole(whole: string): string {
   return groups.join(',')
 }
 
+export const minorLimit = (major: bigint, currency: Currency) => major * (currency === 'USD' ? 100n : 1n)
+
+export function expenseInputMaximum(totalMinor: string, previousMinor: string | null | undefined, currency: Currency): bigint {
+  const remaining = minorLimit(MAX_ROUND_TOTAL_MAJOR, currency) - BigInt(totalMinor) + BigInt(previousMinor ?? 0)
+  const maximum = minorLimit(MAX_EXPENSE_MAJOR, currency)
+  return remaining <= 0n ? 0n : remaining < maximum ? remaining : maximum
+}
+
 /** Format a valid partial amount while the user is typing, without losing precision. */
-export function formatAmountInput(value: string, currency: Currency): string | null {
+export function formatAmountInput(value: string, currency: Currency, maximumMinor?: bigint): string | null {
   requireCurrency(currency)
-  const plain = value.replace(/,/g, '')
+  let plain = value.replace(/,/g, '')
   if (!plain) return ''
   if (!(currency === 'USD' ? /^\d+(?:\.\d{0,2})?$/.test(plain) : /^\d+$/.test(plain))) return null
+  if (maximumMinor !== undefined) {
+    const [whole, fraction = ''] = plain.split('.')
+    const minor = currency === 'USD' ? BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0')) : BigInt(whole)
+    if (minor > maximumMinor) {
+      const digits = maximumMinor.toString().padStart(currency === 'USD' ? 3 : 1, '0')
+      plain = currency === 'USD' ? `${digits.slice(0, -2)}.${digits.slice(-2)}` : digits
+    }
+  }
   const decimalAt = currency === 'USD' ? plain.indexOf('.') : -1
   const wholePart = decimalAt < 0 ? plain : plain.slice(0, decimalAt)
   return `${groupWhole(wholePart)}${decimalAt < 0 ? '' : plain.slice(decimalAt)}`

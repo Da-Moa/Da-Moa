@@ -3,6 +3,7 @@ import type { Currency } from './money'
 export type RoundStatus = 'RECORDING' | 'CONFIRMED' | 'LOCKED' | 'COMPLETED'
 export type Page<T> = { items: T[]; nextCursor: string | null }
 export type Member = { userId: string; displayName: string; excludedAt: number | null }
+export type RoundMember = Member & { profileImageUrl: string | null }
 export type GroupSummary = { id: string; name: string; creatorId: string; createdAt: number }
 export type GroupDetail = GroupSummary & { members: Member[]; isCreator: boolean; invites: { id: string; expiresAt: number }[] }
 export type RoundSummary = {
@@ -19,7 +20,7 @@ export type Expense = {
 }
 export type SettlementTransfer = { senderId: string; receiverId: string; amountMinor: string }
 export type RoundDetail = RoundSummary & {
-  creatorId: string; groupCreatorId: string; isCreator: boolean; members: Member[]; expenses: Expense[];
+  creatorId: string; groupCreatorId: string; isCreator: boolean; members: RoundMember[]; expenses: Expense[];
   expensesNextCursor: string | null; transfers: SettlementTransfer[]; pendingRemainderMinor: string
 }
 export type ExclusionCheck = {
@@ -30,6 +31,6 @@ export type MutationResult = { id: string; roundId?: string; status?: RoundStatu
 export type SettlementDTO = {
   roundId: string; name: string; groupName: string; status: RoundStatus; version: number; isCreator: boolean;
   finalized: boolean; currency: Currency; balanceMinor: string | null; sharePath: string | null;
-  outgoing: { receiverId: string; displayName: string; amountMinor: string; account?: { bankName: string | null; accountNumber: string | null; accountHolder: string | null } }[];
-  incoming: { senderId: string; displayName: string; amountMinor: string }[]
+  outgoing: { receiverId: string; displayName: string; profileImageUrl: string | null; amountMinor: string; account?: { bankName: string | null; accountNumber: string | null; accountHolder: string | null } }[];
+  incoming: { senderId: string; displayName: string; profileImageUrl: string | null; amountMinor: string }[]
 }

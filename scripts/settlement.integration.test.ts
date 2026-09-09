@@ -328,6 +328,36 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       await command(many.id, 'cancel')
     })
 
+    await t.test('expense and round total limits use each currency major unit and updates replace the old amount', async () => {
+      for (const currency of ['KRW', 'JPY', 'USD'] as const) {
+        const r = await createRound(a, key(), g.id, { name: `${currency} 금액 상한`, currency, participantIds: [a.userId, b.userId] })
+        const maximum = currency === 'USD' ? '100000000.00' : '100000000'
+        const overMaximum = currency === 'USD' ? '100000000.01' : '100000001'
+        const belowMaximum = currency === 'USD' ? '99999999.99' : '99999999'
+        const minimum = currency === 'USD' ? '0.01' : '1'
+        const scale = currency === 'USD' ? 100n : 1n
+        const saved = [await expense(r.id, a, a.userId, maximum)]
+
+        await assert.rejects(expense(r.id, a, a.userId, overMaximum), code('expense_amount_limit_exceeded'))
+        for (let index = 1; index < 10; index++) saved.push(await expense(r.id, a, a.userId, maximum))
+        assert.equal((await get(r.id)).totalMinor, (1_000_000_000n * scale).toString())
+        await assert.rejects(expense(r.id, a, a.userId, minimum), code('round_total_limit_exceeded'))
+
+        await saveExpense(a, key(), r.id, { amount: belowMaximum, expectedVersion: (await get(r.id)).version }, saved[0].id)
+        await expense(r.id, a, a.userId, minimum)
+        const atLimit = await get(r.id)
+        assert.equal(atLimit.totalMinor, (1_000_000_000n * scale).toString())
+        await assert.rejects(
+          saveExpense(a, key(), r.id, { amount: maximum, expectedVersion: atLimit.version }, saved[0].id),
+          code('round_total_limit_exceeded'),
+        )
+        const unchanged = await get(r.id)
+        assert.equal(unchanged.totalMinor, atLimit.totalMinor)
+        assert.equal(unchanged.expenses.find(item => item.id === saved[0].id)?.amountMinor, (99_999_999n * scale + (currency === 'USD' ? 99n : 0n)).toString())
+        await command(r.id, 'cancel')
+      }
+    })
+
     await t.test('one group has independent immutable round currencies, exact USD cents and no cross-round offset', async () => {
       const participants = [a.userId, b.userId]
       await assert.rejects(createGroup(a, key(), { name: '모임 통화 없음', currency: 'KRW' }), code('invalid_input'))
@@ -339,11 +369,11 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       const settled: { id: string; currency: string; balanceMinor: string }[] = []
       for (const [index, currency] of currencies.entries()) {
         const r = rounds[index]
-        const amount = currency === 'USD' ? '9007199254740993.01' : '9007199254740993'
+        const amount = currency === 'USD' ? '12345678.01' : '12345678'
         const e = await expense(r.id, a, b.userId, amount)
         assert.equal((await get(r.id)).groupId, g.id)
         assert.equal((await get(r.id)).currency, currency)
-        assert.equal((await get(r.id)).expenses[0].amountMinor, currency === 'USD' ? '900719925474099301' : '9007199254740993')
+        assert.equal((await get(r.id)).expenses[0].amountMinor, currency === 'USD' ? '1234567801' : '12345678')
         await assert.rejects(saveExpense(a, key(), r.id, { amount: currency === 'USD' ? '1.001' : '1.5', expectedVersion: e.version }, e.id), code('invalid_amount'))
         await assert.rejects(saveExpense(a, key(), r.id, { currency: 'KRW', expectedVersion: e.version }, e.id), code('invalid_input'))
         await command(r.id, 'confirm')
@@ -368,6 +398,28 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       }
       assert.equal('currency' in (await getGroup(a, g.id)), false)
       assert.equal((await listGroups(outsider, query())).items.length, 0)
+    })
+
+    await t.test('active Kakao profile images are shown and withdrawn profiles are masked', async () => {
+      const subject = `settlement-profile:${key()}`
+      const profileImageUrl = 'https://profiles.example.test/active.png'
+      const signup = await signInKakao(subject, { displayName: '탈퇴 프로필', email: null, profileImageUrl })
+      const registered = await completeOnboarding(readAccessToken(signup.accessToken), { bankName: '프로필은행', accountHolder: '탈퇴 프로필', accountNumber: '00123456789' })
+      const departed = readAccessToken(registered.accessToken)!
+      const profileGroup = await createGroup(a, key(), { name: '프로필 표시 검증' })
+      const profileInvite = await createInvite(a, key(), profileGroup.id, {})
+      await acceptInvite(departed, key(), profileInvite.sharePath!.split('/').at(-1)!)
+      const r = await createRound(a, key(), profileGroup.id, { name: '프로필 회차', currency: 'KRW', participantIds: [a.userId, departed.userId] })
+      await expense(r.id, a, departed.userId, '2000')
+      await command(r.id, 'confirm'); await command(r.id, 'send'); await command(r.id, 'complete')
+
+      assert.equal((await get(r.id)).members.find(member => member.userId === departed.userId)?.profileImageUrl, profileImageUrl)
+      assert.equal((await getSettlement(a, r.id)).outgoing[0].profileImageUrl, profileImageUrl)
+      await withdrawAccount(departed)
+      assert.equal((await get(r.id)).members.find(member => member.userId === departed.userId)?.profileImageUrl, null)
+      assert.equal((await getSettlement(a, r.id)).outgoing[0].profileImageUrl, null)
+      await signInKakao(subject, { displayName: '재가입 전 프로필', email: null, profileImageUrl: 'https://profiles.example.test/changed.png' })
+      assert.equal((await getSettlement(a, r.id)).outgoing[0].profileImageUrl, null)
     })
   } finally { await client.end() }
 })
