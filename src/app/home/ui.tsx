@@ -83,7 +83,7 @@ export function ErrorNotice({ error, retry }: { error: Error | null; retry?: () 
 }
 
 export function Loading({ text = '불러오는 중…' }: { text?: string }) { return <p className="loading-message" role="status">{text}</p> }
-export const statusLabel: Record<RoundStatus, string> = { RECORDING: '기록 중', CONFIRMED: '확정 · 전송 전', LOCKED: '전송 · 기록 잠김', COMPLETED: '정산 종료' }
+export const statusLabel: Record<RoundStatus, string> = { RECORDING: '기록 중', CONFIRMED: '확정 · 전송 전', LOCKED: '송금 대기중', COMPLETED: '정산 종료' }
 export function StatusBadge({ status }: { status: RoundStatus }) { return <span className={`status-badge state-${status.toLowerCase()}`}>{statusLabel[status]}</span> }
 
 export function CopyLink({ path, label = '링크 복사' }: { path: string; label?: string }) {

@@ -157,6 +157,11 @@ export default function RoundClient({ roundId }: { roundId: string }) {
       resource.setData(current => current ? { ...current, expenses: [...current.expenses, ...page.expenses.filter(expense => !current.expenses.some(existing => existing.id === expense.id))], expensesNextCursor: page.expensesNextCursor } : page)
     }
   }
+  function closeEditor() {
+    const expenseId = editing && editing !== 'new' ? editing.id : null
+    setEditing(null)
+    if (expenseId) requestAnimationFrame(() => document.getElementById(`expense-${expenseId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+  }
   async function checkExclusion(userId: string) {
     const result = await action.run(() => apiRequest<ExclusionCheck>(`/api/rounds/${roundId}/members/${userId}/exclusion-check`))
     if (result) setCheck({ ...result, userId })
@@ -194,8 +199,8 @@ export default function RoundClient({ roundId }: { roundId: string }) {
     {!data ? resource.loading && <Loading /> : <div className="stack">
       <section className="tab-heading compact"><p>{data.groupName}</p><h1>{data.name}</h1><div className="heading-status"><StatusBadge status={data.status} /><button className="text-button" disabled={resource.loading} onClick={() => void refresh()} type="button">새로고침</button></div></section>
       {data.status === 'CONFIRMED' && <p className="notice">지출을 확정했어요. 수정하려면 회차 생성자가 기록 단계를 다시 열어 주세요. 전송 후에는 수정할 수 없어요.</p>}
-      <section className="domain-card"><div className="row-between"><span>전체 지출</span><strong className="large-money">{formatMoney(data.totalMinor, data.currency)}</strong></div><p className="help-text">{data.memberCount}명 참여 · {data.currency}</p></section>
       {(data.status === 'LOCKED' || data.status === 'COMPLETED') && <div className="notice"><p>{data.status === 'COMPLETED' ? '종료된 회차예요. 모든 정산 기록은 읽기 전용이에요.' : data.finalizedAt ? '기록이 잠겼어요. 본인의 최종 정산 안내를 확인해 주세요.' : '기록이 잠겼어요. 회차 생성자가 나머지를 한 번 추첨하면 최종 금액을 확인할 수 있어요.'}</p><Link className="primary-button" href={`/settlements/${roundId}`} prefetch={false}>내 정산 안내 보기</Link></div>}
+      <section className="domain-card"><div className="row-between"><span>전체 지출</span><strong className="large-money">{formatMoney(data.totalMinor, data.currency)}</strong></div><p className="help-text">{data.memberCount}명 참여 · {data.currency}</p></section>
       <section className="domain-card stack participant-section"><div><h2>회차 참여자</h2></div>
         <ul aria-label="회차 참여자" className="participant-grid">{data.members.map(member => {
           const canExclude = data.isCreator && member.excludedAt === null && member.userId !== data.creatorId && ['RECORDING', 'CONFIRMED'].includes(data.status)
@@ -226,9 +231,9 @@ export default function RoundClient({ roundId }: { roundId: string }) {
       </dialog>
       <div className="row-between expense-heading"><h2 className="section-heading">지출 내역</h2><div className="inline-actions">{recording && myself && !myself.excludedAt && !editing && <button className="text-button" onClick={() => { setExpensesOpen(true); setEditing('new') }} type="button"><Plus size={17} /> 지출 추가</button>}<button aria-controls="round-expenses" aria-expanded={expensesOpen} aria-label={expensesOpen ? '모든 지출 내역 숨기기' : '모든 지출 내역 펼치기'} className="text-button expense-toggle" onClick={() => setExpensesOpen(open => !open)} title={expensesOpen ? '모든 지출 내역 숨기기' : '모든 지출 내역 펼치기'} type="button"><ChevronDown aria-hidden="true" className={expensesOpen ? 'expense-toggle-open' : undefined} size={24} /></button></div></div>
       <div className="stack" hidden={!expensesOpen} id="round-expenses">
-        {editing && <ExpenseForm key={editing === 'new' ? 'new' : editing.id} round={data} expense={editing === 'new' ? null : editing} reload={refresh} onSaved={async () => { setEditing(null); setCheck(null); await refresh() }} onCancel={() => setEditing(null)} />}
+        {editing && <ExpenseForm key={editing === 'new' ? 'new' : editing.id} round={data} expense={editing === 'new' ? null : editing} reload={refresh} onSaved={async () => { setEditing(null); setCheck(null); await refresh() }} onCancel={closeEditor} />}
         {data.expenses.length === 0 && <p className="empty-card">지출 내역이 없습니다. 지출을 기록한 뒤 정산을 확정해 주세요.</p>}
-        {data.expenses.map(expense => <ExpenseCard key={expense.id} expense={expense} round={data} canEdit={Boolean(recording && (data.isCreator || expense.authorId === account.id && myself && !myself.excludedAt))} highlighted={check?.expenses.some(issue => issue.id === expense.id) ?? false} edit={() => setEditing(expense)} reload={refresh} />)}
+        {data.expenses.slice().reverse().map(expense => <ExpenseCard key={expense.id} expense={expense} round={data} canEdit={Boolean(recording && (data.isCreator || expense.authorId === account.id && myself && !myself.excludedAt))} highlighted={check?.expenses.some(issue => issue.id === expense.id) ?? false} edit={() => setEditing(expense)} reload={refresh} />)}
         <ErrorNotice error={more.error} retry={() => void refresh()} />
         {data.expensesNextCursor && <button className="secondary-button" disabled={more.busy} onClick={() => void loadMore()} type="button">{more.busy ? '불러오는 중…' : '지출 더 보기'}</button>}
       </div>
