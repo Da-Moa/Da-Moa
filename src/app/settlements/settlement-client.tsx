@@ -42,7 +42,6 @@ export default function SettlementClient({ roundId }: { roundId: string }) {
         {data.currency !== 'KRW' && <p className="help-text">{data.currency} 정산은 상대방과 금액만 안내해요.</p>}
         {data.sharePath && <section className="domain-card stack"><h2>정산 안내 공유</h2><p className="help-text">개인별 안내 문구는 앱에서 확인해요. 링크를 직접 공유하면 각자 자신의 보낼 금액과 필요한 계좌만 볼 수 있어요.</p><CopyLink path={data.sharePath} label="정산 안내 링크 복사" /></section>}
         {data.isCreator && data.status === 'LOCKED' && <section className="domain-card stack"><h2>회차 정산 종료</h2><p className="help-text">모든 참여자와 정리를 마쳤다면 종료해 주세요. 앱은 실제 입금 여부를 추적하지 않아요.</p><button className="primary-button" disabled={action.busy} onClick={() => void command('complete')} type="button">{action.busy ? '처리 중…' : '정산 종료 표시'}</button></section>}
-        {data.status === 'COMPLETED' && <p className="notice">회차 생성자가 정산 종료를 표시했어요. 지출·금액은 변경할 수 없으며, 수취 계좌는 현재 등록 정보를 표시해요.</p>}
       </>}
       <ErrorNotice error={action.error} retry={action.error instanceof ApiError && action.error.code === 'stale_round' ? () => void reload() : undefined} />
     </div>}

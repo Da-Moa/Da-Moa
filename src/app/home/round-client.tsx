@@ -29,14 +29,13 @@ function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: Rou
   return <form className="domain-card expense-form stack" id="expense-editor" onSubmit={event => { event.preventDefault(); void save(event.currentTarget) }}>
     <h2>{expense ? '지출 수정' : '지출 기록'}</h2>
     <label className="field"><span>지출 내용</span><input autoFocus defaultValue={expense?.description ?? ''} name="description" maxLength={200} placeholder="예: 저녁 식사" required /></label>
-    <label className="field"><span>총 금액 ({round.currency})</span><input defaultValue={amount} name="amount" inputMode={round.currency === 'USD' ? 'decimal' : 'numeric'} type="text" pattern={round.currency === 'USD' ? '[0-9]+([.][0-9]{1,2})?' : '[0-9]+'} placeholder={round.currency === 'USD' ? '0.00' : '0'} required /><small>기호·쉼표 없이 입력해 주세요. 환불과 음수 기록은 지원하지 않아요.</small></label>
+    <label className="field"><span>총 금액 ({round.currency})</span><input defaultValue={amount} name="amount" inputMode={round.currency === 'USD' ? 'decimal' : 'numeric'} type="text" pattern={round.currency === 'USD' ? '[0-9]+([.][0-9]{1,2})?' : '[0-9]+'} placeholder={round.currency === 'USD' ? '0.00' : '0'} required /><small>기호·쉼표 없이 입력해 주세요.</small></label>
     <label className="field"><span>실제로 결제한 사람</span><select defaultValue={expense?.payerId ?? account.id} name="payerId" required>{round.members.filter(member => !member.excludedAt || member.userId === expense?.payerId).map(member => <option key={member.userId} value={member.userId}>{member.displayName}{member.excludedAt ? ' (제외됨 · 기존 결제 유지)' : ''}</option>)}</select></label>
     <fieldset className="member-picker"><legend>부담할 사람</legend>
       <label className="check-row"><input type="radio" name="splitMode" value="ALL" checked={mode === 'ALL'} onChange={() => setMode('ALL')} /><span>전체 참여자 균등 분배</span></label>
       <label className="check-row"><input type="radio" name="splitMode" value="SELECTED" checked={mode === 'SELECTED'} onChange={() => setMode('SELECTED')} /><span>특정 사용자 균등 분배</span></label>
       {mode === 'SELECTED' && <div className="selected-members">{round.members.filter(member => !member.excludedAt).map(member => <label className="check-row" key={member.userId}><input checked={participants.includes(member.userId)} onChange={event => setParticipants(current => event.target.checked ? [...current, member.userId] : current.filter(id => id !== member.userId))} name="participantIds" type="checkbox" value={member.userId} /><span>{member.displayName}</span></label>)}</div>}
     </fieldset>
-    <p className="help-text">결제자도 부담자에 포함될 수 있어요. 본인 몫을 제외한 금액을 받아요. 영수증은 저장한 지출에 증빙으로 올릴 수 있어요.</p>
     {round.status !== 'RECORDING' && <p className="notice notice-warning">다른 변경으로 기록 단계가 끝났어요. 입력을 확인한 뒤 창을 닫고 최신 상태를 확인해 주세요.</p>}
     <ErrorNotice error={action.error} retry={action.error instanceof ApiError && action.error.code === 'stale_round' ? () => void reload() : undefined} />
     <div className="quick-actions"><button className="primary-button" disabled={action.busy || round.status !== 'RECORDING'} type="submit">{action.busy ? '저장 중…' : '지출 저장'}</button><button className="secondary-button" disabled={action.busy} type="button" onClick={onCancel}>닫기</button></div>
@@ -213,7 +212,7 @@ export default function RoundClient({ roundId }: { roundId: string }) {
             const sender = nameOf(transfer.senderId), receiver = nameOf(transfer.receiverId), amount = formatMoney(transfer.amountMinor, data.currency)
             return <li aria-label={`${finalized ? '최종' : '예상'} 송금, 보내는 사람 ${sender}, 받는 사람 ${receiver}, 금액 ${amount}`} className="transfer-row" key={`${transfer.senderId}:${transfer.receiverId}`}>
               <span className={`transfer-person${transfer.senderId === account.id ? ' transfer-me' : ''}`}><ParticipantAvatar name={sender} /><small>보내는 사람</small><strong>{sender}{transfer.senderId === account.id ? ' (나)' : ''}</strong></span>
-              <span className="transfer-direction"><strong className="money">{finalized ? amount : `예상 ${amount}`}</strong><span aria-hidden="true"><span className="transfer-line" /><ArrowRight size={18} /></span><small>{finalized ? '보내요' : '보낼 예정'}</small></span>
+              <span className="transfer-direction"><strong className="money">{finalized ? amount : `예상 ${amount}`}</strong><span aria-hidden="true"><span className="transfer-line" /><ArrowRight size={18} /></span><small>보낼 예정</small></span>
               <span className={`transfer-person${transfer.receiverId === account.id ? ' transfer-me' : ''}`}><ParticipantAvatar name={receiver} /><small>받는 사람</small><strong>{receiver}{transfer.receiverId === account.id ? ' (나)' : ''}</strong></span>
             </li>
           })}</ul>}
