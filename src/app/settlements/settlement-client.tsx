@@ -40,8 +40,8 @@ export default function SettlementClient({ roundId }: { roundId: string }) {
         {data.incoming.length > 0 && <section className="domain-card stack"><h2>이 사람에게 받아요</h2><ul className="member-list">{data.incoming.map(transfer => <li key={transfer.senderId}><span className="settlement-person"><ParticipantAvatar profileImageUrl={transfer.profileImageUrl} /><span>{transfer.displayName}</span></span><strong className="money">{formatMoney(transfer.amountMinor, data.currency)}</strong></li>)}</ul><p className="help-text">입금 여부는 직접 확인해 주세요.</p></section>}
         {data.outgoing.length === 0 && data.incoming.length === 0 && <p className="notice">주고받을 금액이 없어요. 회차 종료는 회차 생성자가 별도로 처리해요.</p>}
         {data.currency !== 'KRW' && <p className="help-text">{data.currency} 정산은 상대방과 금액만 안내해요.</p>}
-        {data.sharePath && <section className="domain-card stack"><h2>정산 안내 공유</h2><p className="help-text">개인별 안내 문구는 앱에서 확인해요. 링크를 직접 공유하면 각자 자신의 보낼 금액과 필요한 계좌만 볼 수 있어요.</p><CopyLink path={data.sharePath} label="정산 안내 링크 복사" /></section>}
-        {data.isCreator && data.status === 'LOCKED' && <section className="domain-card stack"><h2>회차 정산 종료</h2><p className="help-text">모든 참여자와 정리를 마쳤다면 종료해 주세요. 앱은 실제 입금 여부를 추적하지 않아요.</p><button className="primary-button" disabled={action.busy} onClick={() => void command('complete')} type="button">{action.busy ? '처리 중…' : '정산 종료 표시'}</button></section>}
+        {data.sharePath && <section className="domain-card stack"><h2>정산 안내 공유</h2><p className="help-text">링크를 통해 접속하면 자신이 보낼 금액과 계좌번호, 자신이 받을 금액을 볼 수 있어요.</p><CopyLink path={data.sharePath} label="정산 안내 링크 복사" /></section>}
+        {data.isCreator && data.status === 'LOCKED' && <button className="primary-button" disabled={action.busy} onClick={() => void command('complete')} type="button">{action.busy ? '처리 중…' : '정산 종료'}</button>}
       </>}
       <ErrorNotice error={action.error} retry={action.error instanceof ApiError && action.error.code === 'stale_round' ? () => void reload() : undefined} />
     </div>}

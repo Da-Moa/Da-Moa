@@ -104,7 +104,7 @@ export function CopyLink({ path, label = '링크 복사' }: { path: string; labe
   }
   return <div className="copy-link"><button className="primary-button" type="button" disabled={!url} onClick={() => void copy()}>{label}</button>
     <label className="field"><span>공유 링크</span><input aria-label="공유 링크" onFocus={event => event.target.select()} readOnly ref={input} value={url} /></label>
-    <p className="help-text" role="status">{message || (path.startsWith('/invites/') ? '링크를 받은 사람이 로그인 후 초대를 수락하면 모임에 참여해요.' : '링크를 연 사람은 로그인 후 본인의 내역만 볼 수 있어요.')}</p>
+    {(message || path.startsWith('/invites/')) && <p className="help-text" role="status">{message || '링크를 받은 사람이 로그인 후 초대를 수락하면 모임에 참여해요.'}</p>}
   </div>
 }
 
