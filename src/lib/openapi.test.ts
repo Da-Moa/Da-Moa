@@ -32,6 +32,8 @@ type DocumentedSchema = {
   properties?: Record<string, DocumentedSchema>
   enum?: string[]
   additionalProperties?: boolean
+  maxItems?: number
+  description?: string
 }
 const paths = openApiDocument.paths as unknown as Record<string, Record<string, DocumentedOperation> & {
   parameters?: Array<{ name: string; in: string; required?: boolean }>
@@ -119,6 +121,16 @@ test('currency is required on round creation and absent from groups and invitati
   }
   const preview = paths['/api/invites/{token}'].get.responses['200'] as { content: Record<string, { schema: DocumentedSchema }> }
   assert.equal('currency' in preview.content['application/json'].schema.properties!.data.properties!, false)
+  assert.equal((openApiDocument.components.schemas.GroupDetail as DocumentedSchema).properties!.members.maxItems, 10)
+  assert.equal(roundInput.properties!.participantIds.maxItems, 10)
+  assert.match(paths['/api/invites/{token}/accept'].post.description, /group_member_limit_exceeded/)
   const round = openApiDocument.components.schemas.Round as DocumentedSchema
   assert.deepEqual(round.properties!.currency.enum, ['KRW', 'JPY', 'USD'])
+})
+
+test('round lists document group and round name search', () => {
+  for (const path of ['/api/rounds', '/api/groups/{groupId}/rounds']) {
+    const search = paths[path].get.parameters?.find(parameter => parameter.name === 'q') as { schema?: { minLength?: number; maxLength?: number } } | undefined
+    assert.deepEqual(search?.schema, { type: 'string', minLength: 1, maxLength: 100 })
+  }
 })

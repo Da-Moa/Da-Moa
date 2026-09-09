@@ -94,6 +94,7 @@ function summary(row: Row): RoundSummary {
 export async function listRounds(access: Identity, query: URLSearchParams, groupId?: string) {
   const { limit, cursor } = pagination(query)
   const status = query.get('status')
+  const search = query.has('q') ? textInput(query.get('q'), 100) : null
   if (status && !['active', 'RECORDING', 'CONFIRMED', 'LOCKED', 'COMPLETED'].includes(status)) badInput()
   return withReadTransaction(async client => {
     const account = await requireAccount(client, access)
@@ -103,7 +104,8 @@ export async function listRounds(access: Identity, query: URLSearchParams, group
       FROM rounds r JOIN groups g ON g.id=r.group_id JOIN round_members m ON m.round_id=r.id AND m.user_id=$1
       LEFT JOIN settlement_balances b ON b.round_id=r.id AND b.user_id=$1
       WHERE ($2::text IS NULL OR r.group_id=$2) AND ($3::text IS NULL OR ($3='active' AND r.status<>'COMPLETED') OR r.status=$3)
-      AND ($4::bigint IS NULL OR (r.created_at,r.id)<($4::bigint,$5::text)) ORDER BY r.created_at DESC,r.id DESC LIMIT $6`, [account.id, groupId ?? null, status, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1])
+      AND ($4::text IS NULL OR strpos(lower(r.name),lower($4))>0 OR strpos(lower(g.name),lower($4))>0)
+      AND ($5::bigint IS NULL OR (r.created_at,r.id)<($5::bigint,$6::text)) ORDER BY r.created_at DESC,r.id DESC LIMIT $7`, [account.id, groupId ?? null, status, search, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1])
     return pageOf(rows.map(summary), limit, row => row)
   })
 }

@@ -1,5 +1,6 @@
 import type { Currency } from './money'
 
+export const MAX_GROUP_MEMBERS = 10
 export type RoundStatus = 'RECORDING' | 'CONFIRMED' | 'LOCKED' | 'COMPLETED'
 export type Page<T> = { items: T[]; nextCursor: string | null }
 export type Member = { userId: string; displayName: string; excludedAt: number | null }

@@ -53,7 +53,7 @@ try {
   inTransaction = false
 
   console.table(rows)
-  console.info('테스트 계정 3개를 준비했습니다. 시드는 세션을 생성하지 않으며, 로컬 개발 로그인에서만 사용할 수 있습니다.')
+  console.info(`테스트 계정 ${accounts.length}개를 준비했습니다. 시드는 세션을 생성하지 않으며, 로컬 개발 로그인에서만 사용할 수 있습니다.`)
 } catch (error) {
   if (inTransaction) await client.query('ROLLBACK').catch(() => {})
   throw error

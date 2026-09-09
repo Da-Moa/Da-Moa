@@ -29,6 +29,26 @@ export const TEST_ACCOUNTS = [
     accountNumber: '000000000003',
     accountHolder: '테스트 서연',
   },
+  {
+    key: 'member-d',
+    id: '00000000-0000-4000-8000-000000000004',
+    providerSubject: 'da-moa:test-only:member-d',
+    displayName: '테스트 지우',
+    email: 'jiwoo@da-moa.example.invalid',
+    bankName: '테스트은행 D',
+    accountNumber: '000000000004',
+    accountHolder: '테스트 지우',
+  },
+  {
+    key: 'member-e',
+    id: '00000000-0000-4000-8000-000000000005',
+    providerSubject: 'da-moa:test-only:member-e',
+    displayName: '테스트 현우',
+    email: 'hyunwoo@da-moa.example.invalid',
+    bankName: '테스트은행 E',
+    accountNumber: '000000000005',
+    accountHolder: '테스트 현우',
+  },
 ] as const
 
 export function testAccountForKey(value: unknown) {

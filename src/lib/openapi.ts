@@ -1,3 +1,5 @@
+import { MAX_GROUP_MEMBERS } from './domain-types'
+
 type Schema = Record<string, unknown>
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` })
 const object = (properties: Record<string, Schema>, required: string[] = []): Schema => ({ type: 'object', properties, required })
@@ -25,13 +27,14 @@ const pageParameters = [
   { name: 'limit', in: 'query', schema: { type: 'integer', default: 20, minimum: 1, maximum: 100 } },
   { name: 'cursor', in: 'query', schema: string, description: '(created_at, id)에 기반한 서버 발급 커서' },
 ]
+const roundSearchParameter = { name: 'q', in: 'query', schema: { type: 'string', minLength: 1, maxLength: 100 }, description: '모임명 또는 회차명의 대소문자를 구분하지 않는 부분 검색어' }
 const mutationParameters = [
   { name: 'Origin', in: 'header', required: true, schema: { type: 'string', format: 'uri' }, description: '현재 서비스 origin과 정확히 일치해야 합니다.' },
   { name: 'Idempotency-Key', in: 'header', required: true, schema: id, description: '한 제출당 한 UUID. 네트워크·세션 갱신 후 재시도에도 같은 키와 본문을 사용합니다.' },
 ]
 const domainResponses = {
   DomainFailure: {
-    description: '요청 오류. 409는 상태·버전·제외·미종료 회차·멱등 키 충돌, 503은 같은 키로 재시도할 저장소 오류입니다.',
+    description: '요청 오류. 409는 상태·버전·제외·인원 제한·미종료 회차·멱등 키 충돌, 503은 같은 키로 재시도할 저장소 오류입니다.',
     content: { 'application/json': { schema: ref('ApiError') } },
   },
 }
@@ -46,7 +49,7 @@ const domainSchemas = {
   RoundStatus: status,
   MinorAmount: minor,
   ApiError: object({
-    error: { type: 'string', example: 'stale_round', description: 'invalid_input, invalid_amount, expense_amount_limit_exceeded, round_total_limit_exceeded, invalid_participants, unsupported_currency, unauthorized, forbidden, onboarding_required, not_found, stale_round, invalid_round_state, idempotency_conflict, empty_expenses, pending_settlement_checks, member_exclusion_blocked, minimum_participants, unfinished_rounds, unfinished_group_rounds, unsupported_receipt_type, storage_unavailable 등' },
+    error: { type: 'string', example: 'stale_round', description: 'invalid_input, invalid_amount, expense_amount_limit_exceeded, round_total_limit_exceeded, invalid_participants, unsupported_currency, unauthorized, forbidden, onboarding_required, not_found, stale_round, invalid_round_state, idempotency_conflict, empty_expenses, pending_settlement_checks, member_exclusion_blocked, minimum_participants, group_member_limit_exceeded, unfinished_rounds, unfinished_group_rounds, unsupported_receipt_type, storage_unavailable 등' },
     message: string,
     details: { type: 'object', additionalProperties: true, description: '현재 버전, 제외 차단 관련 지출 또는 탈퇴를 막는 회차 등. 계좌·인증 토큰은 포함하지 않음.' },
   }, ['error', 'message']),
@@ -55,7 +58,7 @@ const domainSchemas = {
   Me: object({ id, displayName: { type: 'string', nullable: true }, email: { type: 'string', nullable: true }, profileImageUrl: profileImage, purpose: { type: 'string', enum: ['app', 'onboarding'] }, deletedAt: timestamp, onboardingCompletedAt: timestamp, bankAccount: { type: 'object', nullable: true, properties: bankFields, description: '본인의 현재 계좌 또는 null. 실계좌·예금주 검증 전입니다.' } }, ['id', 'displayName', 'email', 'profileImageUrl', 'purpose', 'deletedAt', 'onboardingCompletedAt', 'bankAccount']),
   Group: object(groupFields, Object.keys(groupFields)),
   GroupMember: object({ userId: id, displayName: string, excludedAt: timestamp }, ['userId', 'displayName', 'excludedAt']),
-  GroupDetail: object({ ...groupFields, members: array(ref('GroupMember')), isCreator: { type: 'boolean', description: '조회 사용자가 현재 활성 모임 생성자인지 여부' }, invites: array(object({ id, expiresAt: timestamp }, ['id', 'expiresAt'])) }, [...Object.keys(groupFields), 'members', 'isCreator', 'invites']),
+  GroupDetail: object({ ...groupFields, members: { ...array(ref('GroupMember')), maxItems: MAX_GROUP_MEMBERS, description: '생성자를 포함해 최대 10명이며 생성자가 첫 번째입니다.' }, isCreator: { type: 'boolean', description: '조회 사용자가 현재 활성 모임 생성자인지 여부' }, invites: array(object({ id, expiresAt: timestamp }, ['id', 'expiresAt'])) }, [...Object.keys(groupFields), 'members', 'isCreator', 'invites']),
   Round: object(roundFields, Object.keys(roundFields)),
   RoundMember: object({ userId: id, displayName: string, profileImageUrl: profileImage, excludedAt: timestamp }, ['userId', 'displayName', 'profileImageUrl', 'excludedAt']),
   Expense: object({ id, authorId: id, payerId: id, description: string, amountMinor: minor, splitMode: expenseFields.splitMode, participantIds: array(id), baseShareMinor: { ...minor, nullable: true }, remainderUnits: { type: 'integer', minimum: 0, nullable: true }, shares: array(object({ userId: id, amountMinor: { ...minor, nullable: true }, receivedRemainder: { type: 'boolean', nullable: true } }, ['userId', 'amountMinor', 'receivedRemainder'])), receipts: array(ref('Receipt')), createdAt: timestamp, updatedAt: timestamp }, ['id', 'authorId', 'payerId', 'description', 'amountMinor', 'splitMode', 'participantIds', 'baseShareMinor', 'remainderUnits', 'shares', 'receipts', 'createdAt', 'updatedAt']),
@@ -107,14 +110,14 @@ const domainPaths = {
     delete: operation('모임', '모임 나가기 또는 없애기', { mutation: true, description: '일반 참여자는 본인이 참여 중인 미종료 회차가 없을 때 현재 멤버십의 leftAt을 기록하고 나갑니다. 모임 생성자는 본인 참여 여부와 무관하게 모임 전체의 모든 회차가 종료된 경우에만 모든 멤버십을 종료하고 초대를 폐기합니다. 완료된 회차와 모임 이름은 과거 정산 조회를 위해 보존합니다.' }),
   },
   '/api/groups/{groupId}/rounds': {
-    get: operation('모임', '본인 참여 권한이 있는 모임 회차 목록', { response: ref('RoundPage'), parameters: pageParameters }),
-    post: operation('모임', '선택한 멤버로 기록 시작', { mutation: true, request: { ...object({ name: string, currency, participantIds: { type: 'array', items: id, minItems: 2, uniqueItems: true, description: '현재 활성 모임 멤버 중 요청자 자신을 반드시 포함합니다.' } }, ['name', 'currency', 'participantIds']), additionalProperties: false }, description: '모든 활성 모임 참여자가 요청자 자신을 포함한 최소 2명과 USD·KRW·JPY 중 통화를 선택해 회차를 만들 수 있습니다. 요청자가 회차 생성자가 되어 해당 회차 수명주기와 전체 지출을 관리하며, 모임 생성자는 필수 참여자가 아닙니다. currency는 필수이고 같은 모임에서도 회차마다 다른 통화를 선택할 수 있습니다. 생성 후 통화는 변경할 수 없고 과거 회차의 통화는 보존합니다. 미완료 회차가 있어도 생성할 수 있습니다.' }),
+    get: operation('모임', '본인 참여 권한이 있는 모임 회차 목록', { response: ref('RoundPage'), parameters: [...pageParameters, roundSearchParameter] }),
+    post: operation('모임', '선택한 멤버로 기록 시작', { mutation: true, request: { ...object({ name: string, currency, participantIds: { type: 'array', items: id, minItems: 2, maxItems: MAX_GROUP_MEMBERS, uniqueItems: true, description: '현재 활성 모임 멤버 중 요청자 자신을 반드시 포함합니다.' } }, ['name', 'currency', 'participantIds']), additionalProperties: false }, description: '모든 활성 모임 참여자가 요청자 자신을 포함한 최소 2명과 USD·KRW·JPY 중 통화를 선택해 회차를 만들 수 있습니다. 요청자가 회차 생성자가 되어 해당 회차 수명주기와 전체 지출을 관리하며, 모임 생성자는 필수 참여자가 아닙니다. currency는 필수이고 같은 모임에서도 회차마다 다른 통화를 선택할 수 있습니다. 생성 후 통화는 변경할 수 없고 과거 회차의 통화는 보존합니다. 미완료 회차가 있어도 생성할 수 있습니다.' }),
   },
   '/api/groups/{groupId}/invites': { post: operation('모임', '7일 유효 초대 발급·재발급', { mutation: true, request: object({ replaceInviteId: id }), description: '모임 생성자가 발급하며 원문 링크는 최초 응답에서만 제공합니다. 같은 키 재시도는 inviteId와 linkUnavailable을 반환합니다. 새 키와 replaceInviteId로 이전 초대를 폐기하며 다시 발급합니다.' }) },
   '/api/groups/{groupId}/invites/{inviteId}': { delete: operation('모임', '모임 생성자가 초대 폐기', { mutation: true }) },
   '/api/invites/{token}': { get: operation('모임', '인증 후 초대 모임 미리보기', { response: object({ groupId: id, groupName: string, isMember: { type: 'boolean' }, expiresAt: timestamp }, ['groupId', 'groupName', 'isMember', 'expiresAt']), description: '조회만으로 멤버십을 생성하지 않습니다. 만료·폐기되었거나 활성 모임 생성자가 없는 초대는 거부합니다.' }) },
-  '/api/invites/{token}/accept': { post: operation('모임', '초대를 명시적으로 수락', { mutation: true, description: '활성 멤버의 중복 수락은 같은 결과입니다. 이탈·재가입한 사용자는 다시 수락해야 하며 기존 회차에는 자동 추가되지 않습니다.' }) },
-  '/api/rounds': { get: operation('정산', '본인 참여 이력으로 회차 목록 조회', { response: ref('RoundPage'), parameters: [...pageParameters, { name: 'status', in: 'query', schema: { type: 'string', enum: ['active', 'RECORDING', 'CONFIRMED', 'LOCKED', 'COMPLETED'] } }], description: '현재 모임 멤버십과 무관하게 본인 참여 이력이 있는 회차를 조회합니다. 다른 회차·통화 금액을 합산하지 않습니다.' }) },
+  '/api/invites/{token}/accept': { post: operation('모임', '초대를 명시적으로 수락', { mutation: true, description: '생성자를 포함한 활성 멤버는 최대 10명입니다. 10명인 모임의 새 참여와 이탈한 사용자의 재참여는 409 group_member_limit_exceeded로 거부하지만 활성 멤버의 중복 수락은 같은 결과입니다. 기존 회차에는 자동 추가되지 않습니다.' }) },
+  '/api/rounds': { get: operation('정산', '본인 참여 이력으로 회차 목록 조회', { response: ref('RoundPage'), parameters: [...pageParameters, roundSearchParameter, { name: 'status', in: 'query', schema: { type: 'string', enum: ['active', 'RECORDING', 'CONFIRMED', 'LOCKED', 'COMPLETED'] } }], description: '현재 모임 멤버십과 무관하게 본인 참여 이력이 있는 회차를 조회합니다. 다른 회차·통화 금액을 합산하지 않습니다.' }) },
   '/api/rounds/{roundId}': {
     get: operation('정산', '회차·지출·참여 내역 조회', { response: ref('RoundDetail'), parameters: pageParameters, description: 'creatorId는 회차 생성자, groupCreatorId는 모임 생성자이며 isCreator는 조회 사용자가 회차 생성자인지를 뜻합니다. 같은 DB 스냅샷의 원본과 버전을 반환합니다. 회차 참여자의 이름과 활성 회원의 최신 카카오 프로필 이미지를 반환하며 탈퇴자의 이미지는 null입니다. 최종화 전에는 각 지출의 균등 기본 몫만 회차 전체에서 상계한 예상 송금 관계와 미배분 나머지 금액을, 최종화 뒤에는 저장된 최종 관계를 반환합니다. 송금 관계는 조회 사용자가 보내거나 받는 행만 포함하며 계좌정보는 반환하지 않습니다.' }),
     delete: roundCommand('기록 단계 회차 전체 취소', '회차 생성자만 현재 RECORDING 회차를 취소합니다. 회차·지출·분담·증빙을 하드 삭제합니다. 재오픈 후 취소도 가능하며 같은 키 재시도는 기존 성공 결과를 반환합니다.'),

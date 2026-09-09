@@ -4,7 +4,7 @@ import { requireAccount } from './authorization'
 import { withReadTransaction, withWriteTransaction, type Database } from './db'
 import { AppError, badInput } from './errors'
 import { replayMutation, saveMutation } from './mutations'
-import type { GroupDetail, GroupSummary, MutationResult, Page } from './domain-types'
+import { MAX_GROUP_MEMBERS, type GroupDetail, type GroupSummary, type MutationResult, type Page } from './domain-types'
 
 export type Identity = AccessToken | null
 export const nowSeconds = () => Math.floor(Date.now() / 1000)
@@ -87,7 +87,8 @@ export async function getGroup(access: Identity, groupId: string): Promise<Group
     const account = await requireAccount(client, access)
     const group = await ownerGroup(client, groupId, account.id, false)
     const { rows: members } = await client.query(`SELECT u.id AS "userId",COALESCE(u.display_name,'카카오 사용자') AS "displayName",NULL AS "excludedAt"
-      FROM group_members m JOIN users u ON u.id=m.user_id WHERE m.group_id=$1 AND m.left_at IS NULL AND u.deleted_at IS NULL AND u.onboarding_completed_at IS NOT NULL ORDER BY u.id`, [groupId])
+      FROM group_members m JOIN users u ON u.id=m.user_id WHERE m.group_id=$1 AND m.left_at IS NULL AND u.deleted_at IS NULL AND u.onboarding_completed_at IS NOT NULL
+      ORDER BY CASE WHEN u.id=$2 THEN 0 ELSE 1 END,u.id`, [groupId, group.creator_id])
     const { rows: invites } = group.creator_id === account.id ? await client.query('SELECT id,expires_at FROM group_invites WHERE group_id=$1 AND revoked_at IS NULL AND expires_at>$2 ORDER BY created_at DESC', [groupId, nowSeconds()]) : { rows: [] }
     return { ...groupDTO(group), isCreator: group.creator_id === account.id, members, invites: invites.map(row => ({ id: row.id, expiresAt: Number(row.expires_at) })) }
   })
@@ -169,6 +170,10 @@ export async function getInvite(access: Identity, token: string) {
 export async function acceptInvite(access: Identity, key: string, token: string) {
   return domainMutation(access, key, 'invite.accept', { tokenHash: createHash('sha256').update(token).digest('hex') }, async (client, userId) => {
     const row = await validInvite(client, token, userId)
+    if (!row.is_member) {
+      const { rows } = await client.query('SELECT COUNT(*)::int AS count FROM group_members WHERE group_id=$1 AND left_at IS NULL', [row.group_id])
+      if (Number(rows[0].count) >= MAX_GROUP_MEMBERS) throw new AppError(409, 'group_member_limit_exceeded', `모임은 생성자를 포함해 최대 ${MAX_GROUP_MEMBERS}명까지 참여할 수 있어요`)
+    }
     await client.query(`INSERT INTO group_members(group_id,user_id,joined_at) VALUES($1,$2,$3) ON CONFLICT(group_id,user_id)
       DO UPDATE SET joined_at=CASE WHEN group_members.left_at IS NOT NULL THEN EXCLUDED.joined_at ELSE group_members.joined_at END,left_at=NULL`, [row.group_id, userId, nowSeconds()])
     return { id: row.group_id }

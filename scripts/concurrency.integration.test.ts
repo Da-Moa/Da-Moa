@@ -7,7 +7,7 @@ import { currentTimestamp, readAccessToken, type AccessToken } from '../src/lib/
 import { completeOnboarding, signInKakao, withdrawAccount } from '../src/lib/auth-store.ts'
 import { createDatabaseClient } from '../src/lib/db.ts'
 import { AppError } from '../src/lib/errors.ts'
-import { acceptInvite, createGroup, createInvite } from '../src/lib/group-store.ts'
+import { acceptInvite, createGroup, createInvite, leaveGroup } from '../src/lib/group-store.ts'
 import { addReceipt, createRound, getRound, getSettlement, roundCommand, saveExpense, setSettlementCheck } from '../src/lib/round-store.ts'
 import { applyMigrations } from './migrations.mjs'
 
@@ -163,6 +163,31 @@ test('invite acceptance racing withdrawal leaves no active membership or app ses
   assert.notEqual(state.deleted_at, null)
   assert.equal(state.memberships, 0)
   assert.equal(state.sessions, 0)
+})
+
+test('simultaneous invite acceptance never exceeds ten active group members', async () => {
+  const fixture = await group(false)
+  const existing: AccessToken[] = []
+  for (let index = 0; index < 8; index++) existing.push(await member())
+  for (const person of existing) await acceptInvite(person, key(), fixture.token)
+  const candidates = [fixture.participant, await member()]
+  const outcomes = await Promise.allSettled(candidates.map(person => acceptInvite(person, key(), fixture.token)))
+  assert.equal(outcomes.filter(outcome => outcome.status === 'fulfilled').length, 1)
+  const failure = outcomes.find(outcome => outcome.status === 'rejected') as PromiseRejectedResult
+  assert.ok(failure.reason instanceof AppError)
+  assert.equal(failure.reason.code, 'group_member_limit_exceeded')
+  const winner = candidates[outcomes.findIndex(outcome => outcome.status === 'fulfilled')]!
+  const loser = candidates[outcomes.findIndex(outcome => outcome.status === 'rejected')]!
+  await acceptInvite(winner, key(), fixture.token)
+  await leaveGroup(winner, key(), fixture.groupId)
+  await acceptInvite(loser, key(), fixture.token)
+  await assert.rejects(acceptInvite(winner, key(), fixture.token), error => error instanceof AppError && error.code === 'group_member_limit_exceeded')
+  const counts = await inspect(async client => (await client.query(`SELECT
+    COUNT(*) FILTER (WHERE left_at IS NULL)::int AS total,
+    COUNT(*) FILTER (WHERE left_at IS NULL AND user_id=ANY($2::text[]))::int AS accepted_candidates
+    FROM group_members WHERE group_id=$1`, [fixture.groupId, candidates.map(person => person.userId)])).rows[0])
+  assert.equal(counts.total, 10)
+  assert.equal(counts.accepted_candidates, 1)
 })
 
 test('an upload already validated before a concurrent round lock is rejected after acquiring the write lock', async () => {

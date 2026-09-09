@@ -49,7 +49,9 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       assert.equal((await getInvite(b, token)).isMember, true)
       assert.equal('currency' in (await getInvite(b, token)), false)
       await acceptInvite(b, key(), token)
-      assert.equal((await getGroup(a, g.id)).members.length, 4)
+      const group = await getGroup(a, g.id)
+      assert.equal(group.members.length, 4)
+      assert.equal(group.members[0].userId, a.userId)
       const replay = await createInvite(a, inviteKey, g.id, {})
       assert.equal(replay.inviteId, invite.inviteId)
       assert.equal(replay.linkUnavailable, true)
@@ -61,6 +63,22 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       await assert.rejects(createRound(a, key(), g.id, { name: '한 명', currency: 'KRW', participantIds: [a.userId] }), code('minimum_participants'))
       await assert.rejects(createRound(b, key(), g.id, { name: '본인 누락', currency: 'KRW', participantIds: [a.userId, c.userId] }), code('minimum_participants'))
       await assert.rejects(createRound(a, key(), g.id, { name: '외부인', currency: 'KRW', participantIds: [a.userId, outsider.userId] }), code('invalid_participants'))
+    })
+
+    await t.test('round lists search group and round names with existing filters and cursors', async () => {
+      const rounds = await Promise.all(['alpha 검색대상', 'beta 검색대상', 'gamma 검색대상'].map(name =>
+        createRound(a, key(), g.id, { name, currency: 'KRW', participantIds: [a.userId, b.userId] })))
+      const first = await listRounds(a, new URLSearchParams({ q: '검색대상', status: 'RECORDING', limit: '2' }), g.id)
+      const second = await listRounds(a, new URLSearchParams({ q: '검색대상', status: 'RECORDING', limit: '2', cursor: first.nextCursor! }), g.id)
+      assert.equal(first.items.length, 2)
+      assert.equal(second.items.length, 1)
+      assert.equal(new Set([...first.items, ...second.items].map(item => item.id)).size, 3)
+      assert.deepEqual((await listRounds(a, new URLSearchParams({ q: ' ALPHA ' }), g.id)).items.map(item => item.id), [rounds[0].id])
+      assert.equal((await listRounds(a, new URLSearchParams({ q: '정산 통합' }), g.id)).items.length, 3)
+      assert.equal((await listRounds(a, new URLSearchParams({ q: '검색대상', status: 'COMPLETED' }), g.id)).items.length, 0)
+      await assert.rejects(listRounds(a, new URLSearchParams({ q: '   ' }), g.id), code('invalid_input'))
+      await assert.rejects(listRounds(a, new URLSearchParams({ q: 'x'.repeat(101) }), g.id), code('invalid_input'))
+      for (const round of rounds) await command(round.id, 'cancel')
     })
 
     await t.test('any active member starts and manages a round they create', async () => {
