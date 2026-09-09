@@ -302,6 +302,7 @@ select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3
 .quick-actions { display: flex; gap: 10px; }
 .quick-actions > * { flex: 1; }
 .inline-actions { display: flex; gap: 22px; }
+.expense-heading { scroll-margin-top: 20px; }
 .expense-heading .section-heading { padding-inline-start: 20px; }
 .expense-heading .inline-actions { transform: translateY(6px); }
 .expense-toggle { min-width: 38px; }

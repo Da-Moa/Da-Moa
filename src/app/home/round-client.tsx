@@ -147,7 +147,7 @@ export default function RoundClient({ roundId }: { roundId: string }) {
     if (check && !exclusionDialog.current?.open) exclusionDialog.current?.showModal()
   }, [check])
   useEffect(() => {
-    if (editing && editing !== 'new') document.getElementById('expense-editor')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    if (editing) document.getElementById('expense-editor')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }, [editing])
   async function refresh() {
     const updated = await resource.reload()
@@ -173,9 +173,9 @@ export default function RoundClient({ roundId }: { roundId: string }) {
     }
   }
   function closeEditor() {
-    const expenseId = editing && editing !== 'new' ? editing.id : null
+    const targetId = editing === 'new' ? 'expense-section-heading' : editing ? `expense-${editing.id}` : null
     setEditing(null)
-    if (expenseId) requestAnimationFrame(() => document.getElementById(`expense-${expenseId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+    if (targetId) requestAnimationFrame(() => document.getElementById(targetId)?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
   }
   async function checkExclusion(userId: string) {
     const result = await action.run(() => apiRequest<ExclusionCheck>(`/api/rounds/${roundId}/members/${userId}/exclusion-check`))
@@ -244,7 +244,7 @@ export default function RoundClient({ roundId }: { roundId: string }) {
           <ErrorNotice error={action.error} retry={action.error instanceof ApiError && action.error.code === 'stale_round' ? () => void refresh() : undefined} />
         </div>}
       </dialog>
-      <div className="row-between expense-heading"><h2 className="section-heading">지출 내역</h2><div className="inline-actions">{recording && myself && !myself.excludedAt && !editing && <button className="text-button" onClick={() => { setExpensesOpen(true); setEditing('new') }} type="button"><Plus size={17} /> 지출 추가</button>}<button aria-controls="round-expenses" aria-expanded={expensesOpen} aria-label={expensesOpen ? '모든 지출 내역 숨기기' : '모든 지출 내역 펼치기'} className="text-button expense-toggle" onClick={() => setExpensesOpen(open => !open)} title={expensesOpen ? '모든 지출 내역 숨기기' : '모든 지출 내역 펼치기'} type="button"><ChevronDown aria-hidden="true" className={expensesOpen ? 'expense-toggle-open' : undefined} size={24} /></button></div></div>
+      <div className="row-between expense-heading" id="expense-section-heading"><h2 className="section-heading">지출 내역</h2><div className="inline-actions">{recording && myself && !myself.excludedAt && !editing && <button className="text-button" onClick={() => { setExpensesOpen(true); setEditing('new') }} type="button"><Plus size={17} /> 지출 추가</button>}<button aria-controls="round-expenses" aria-expanded={expensesOpen} aria-label={expensesOpen ? '모든 지출 내역 숨기기' : '모든 지출 내역 펼치기'} className="text-button expense-toggle" onClick={() => setExpensesOpen(open => !open)} title={expensesOpen ? '모든 지출 내역 숨기기' : '모든 지출 내역 펼치기'} type="button"><ChevronDown aria-hidden="true" className={expensesOpen ? 'expense-toggle-open' : undefined} size={24} /></button></div></div>
       <div className="stack" hidden={!expensesOpen} id="round-expenses">
         {editing && <ExpenseForm key={editing === 'new' ? 'new' : editing.id} round={data} expense={editing === 'new' ? null : editing} reload={refresh} onSaved={async () => { setEditing(null); setCheck(null); await refresh() }} onCancel={closeEditor} />}
         {data.expenses.length === 0 && <p className="empty-card">지출 내역이 없습니다. 지출을 기록한 뒤 정산을 확정해 주세요.</p>}
