@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { before, test } from 'node:test'
+import sharp from 'sharp'
 import { currentTimestamp, readAccessToken, type AccessToken } from '../src/lib/auth.ts'
 import { completeOnboarding, signInKakao, withdrawAccount } from '../src/lib/auth-store.ts'
 import { createDatabaseClient } from '../src/lib/db.ts'
@@ -18,7 +19,7 @@ runtimeUrl.searchParams.set('application_name', applicationName)
 process.env.DATABASE_URL = runtimeUrl.toString()
 process.env.AUTH_JWT_SECRET ||= 'integration-only-not-a-production-secret-0123456789'
 const key = () => randomUUID()
-const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a4WQAAAAASUVORK5CYII=', 'base64')
+const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#fff' } }).png().toBuffer()
 
 async function member(): Promise<AccessToken> {
   const limited = await signInKakao(`concurrency-test:${key()}`, { displayName: '경합 검증 사용자', email: null, profileImageUrl: null })

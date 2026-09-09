@@ -52,7 +52,7 @@ function ReceiptImage({ receipt, index, canEdit, remove, busy }: { receipt: Rece
     if (blob) setUrl(URL.createObjectURL(blob))
   }
   return <div className="receipt-item">
-    <div className="row-between"><button className="text-button" disabled={action.busy} onClick={() => url ? setUrl(null) : void view()} type="button">{url ? '증빙 접기' : `증빙 ${index + 1} 보기`} · {Math.ceil(receipt.byteSize / 1024)} KB</button>{canEdit && <button aria-label={`증빙 ${index + 1} 삭제`} className="icon-button danger-text" disabled={busy} onClick={remove} type="button"><Trash2 size={17} /></button>}</div>
+    <div className="row-between"><button className="text-button" disabled={action.busy} onClick={() => url ? setUrl(null) : void view()} type="button">{url ? '증빙 접기' : `증빙 ${index + 1} 보기`}</button>{canEdit && <button aria-label={`증빙 ${index + 1} 삭제`} className="icon-button danger-text" disabled={busy} onClick={remove} type="button"><Trash2 size={17} /></button>}</div>
     <ErrorNotice error={action.error} retry={() => void view()} />
     {url && <img className="receipt-preview" src={url} alt={`지출 증빙 ${index + 1}`} />}
   </div>
@@ -60,9 +60,10 @@ function ReceiptImage({ receipt, index, canEdit, remove, busy }: { receipt: Rece
 
 function ExpenseCard({ expense, round, canEdit, highlighted, edit, reload }: { expense: Expense; round: RoundDetail; canEdit: boolean; highlighted: boolean; edit: () => void; reload: () => Promise<unknown> }) {
   const action = useAction()
+  const uploadAction = useAction()
   const input = useRef<HTMLInputElement>(null)
+  const uploadDialog = useRef<HTMLDialogElement>(null)
   const [file, setFile] = useState<File | null>(null)
-  const [uploadMessage, setUploadMessage] = useState('')
   const name = (id: string) => round.members.find(member => member.userId === id)?.displayName ?? '과거 참여자'
   async function remove() {
     if (!window.confirm('이 지출과 첨부한 증빙을 삭제할까요?')) return
@@ -71,12 +72,10 @@ function ExpenseCard({ expense, round, canEdit, highlighted, edit, reload }: { e
   }
   async function upload() {
     if (!file) return
-    setUploadMessage('')
-    if (file.size > 2097152) { action.setError(new Error('영수증은 2 MiB 이하의 파일을 선택해 주세요.')); return }
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { action.setError(new Error('JPEG·PNG·WebP 이미지만 올릴 수 있어요.')); return }
+    if (file.type && !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { uploadAction.setError(new Error('JPEG·PNG·WebP 이미지만 올릴 수 있어요.')); return }
     const form = new FormData(); form.set('file', file); form.set('expectedVersion', String(round.version))
-    const result = await action.run(() => apiRequest(`/api/rounds/${round.id}/expenses/${expense.id}/receipts`, { method: 'POST', body: form }))
-    if (result) { setFile(null); if (input.current) input.current.value = ''; setUploadMessage('증빙이 서버에 저장됐어요.'); await reload() }
+    const result = await uploadAction.run(() => apiRequest(`/api/rounds/${round.id}/expenses/${expense.id}/receipts`, { method: 'POST', body: form }))
+    if (result) { uploadDialog.current?.close(); await reload() }
   }
   async function removeReceipt(id: string) {
     if (!window.confirm('이 증빙 이미지를 삭제할까요? 지출 기록은 유지돼요.')) return
@@ -86,13 +85,19 @@ function ExpenseCard({ expense, round, canEdit, highlighted, edit, reload }: { e
   return <article id={`expense-${expense.id}`} tabIndex={-1} className={`domain-card expense-card stack${highlighted ? ' expense-highlight' : ''}`}>
     {highlighted && <p className="highlight-label">제외 전 수정 필요</p>}
     <div className="row-between"><h3>{expense.description}</h3><strong className="money">{formatMoney(expense.amountMinor, round.currency)}</strong></div>
-    <p className="help-text">결제 {name(expense.payerId)} · 작성 {name(expense.authorId)}</p>
-    <div><span className="subtle-tag">{expense.splitMode === 'ALL' ? '전체 균등 분배' : '특정 사용자 균등 분배'}</span><p className="burden-members">{expense.participantIds.map(name).join(', ')}</p></div>
-    {expense.baseShareMinor !== null && <p className="help-text">기본 몫 {formatMoney(expense.baseShareMinor, round.currency)}{expense.remainderUnits ? ` · 나머지 ${expense.remainderUnits}${round.currency === 'USD' ? '센트' : round.currency === 'JPY' ? '엔' : '원'}${round.finalizedAt ? ' 배분 완료' : ' 추첨 대기'}` : ''}</p>}
+    <p className="help-text">결제 {name(expense.payerId)}</p>
+    <div><span className="subtle-tag expense-split-tag">{expense.splitMode === 'ALL' ? '전체 균등 분배' : '특정 사용자 균등 분배'}</span><p className="burden-members">{expense.participantIds.map(name).join(', ')}</p></div>
     {expense.shares.some(share => share.amountMinor !== null) && <details><summary>최종 부담액 보기</summary><ul className="member-list">{expense.shares.map(share => <li key={share.userId}><span>{name(share.userId)}{share.receivedRemainder && <small className="subtle-tag">나머지 부담</small>}</span><strong className="money">{formatMoney(share.amountMinor ?? '0', round.currency)}</strong></li>)}</ul></details>}
-    {canEdit && <div className="inline-actions"><button className="text-button" disabled={action.busy} onClick={edit} type="button"><Pencil size={15} /> 수정</button><button className="text-button danger-text" disabled={action.busy} onClick={() => void remove()} type="button"><Trash2 size={15} /> 삭제</button></div>}
+    {canEdit && <div className="inline-actions"><button className="text-button" disabled={action.busy} onClick={edit} type="button"><Pencil size={15} /> 수정</button><button className="text-button danger-text" disabled={action.busy} onClick={() => void remove()} type="button"><Trash2 size={15} /> 삭제</button><button aria-controls={`receipt-upload-${expense.id}`} aria-haspopup="dialog" className="text-button" disabled={action.busy} onClick={() => uploadDialog.current?.showModal()} type="button"><ImagePlus size={15} /> 증빙 추가</button></div>}
     {expense.receipts.map((receipt, index) => <ReceiptImage key={receipt.id} receipt={receipt} index={index} canEdit={canEdit} busy={action.busy} remove={() => void removeReceipt(receipt.id)} />)}
-    {canEdit && <div className="receipt-upload"><label className="field"><span><ImagePlus size={16} /> 증빙 이미지 추가</span><input accept="image/jpeg,image/png,image/webp" onChange={event => { setFile(event.target.files?.[0] ?? null); setUploadMessage('') }} ref={input} type="file" /></label><p className="help-text">JPEG·PNG·WebP, 최대 2 MiB. 금액은 자동 입력되지 않아요.</p>{file && <button className="secondary-button" disabled={action.busy} onClick={() => void upload()} type="button">{action.busy ? '업로드 중…' : '선택한 증빙 업로드'}</button>}{uploadMessage && <p className="help-text" role="status">{uploadMessage}</p>}</div>}
+    {canEdit && <dialog aria-labelledby={`receipt-upload-heading-${expense.id}`} className="account-dialog" id={`receipt-upload-${expense.id}`} ref={uploadDialog} onCancel={event => { if (uploadAction.busy) event.preventDefault() }} onClick={event => { if (event.target === event.currentTarget && !uploadAction.busy) event.currentTarget.close() }} onClose={() => { setFile(null); uploadAction.setError(null); if (input.current) input.current.value = '' }}>
+      <div className="account-dialog-content stack"><div className="account-dialog-header"><div><p>지출 증빙</p><h2 id={`receipt-upload-heading-${expense.id}`}>증빙 이미지 추가</h2></div><button aria-label="증빙 이미지 추가 팝업 닫기" className="icon-button account-dialog-close" disabled={uploadAction.busy} onClick={() => uploadDialog.current?.close()} type="button"><X size={20} /></button></div>
+        <label className="field"><span>이미지 파일</span><input accept="image/jpeg,image/png,image/webp" onChange={event => { setFile(event.target.files?.[0] ?? null); uploadAction.setError(null) }} ref={input} type="file" /></label>
+        <p className="help-text">사용 가능한 타입: JPEG, PNG, WebP</p>
+        <button className="primary-button" disabled={!file || uploadAction.busy} onClick={() => void upload()} type="button">{uploadAction.busy ? '업로드 중…' : '선택한 증빙 업로드'}</button>
+        <ErrorNotice error={uploadAction.error} retry={uploadAction.error instanceof ApiError && uploadAction.error.code === 'stale_round' ? () => void reload() : undefined} />
+      </div>
+    </dialog>}
     <ErrorNotice error={action.error} retry={action.error instanceof ApiError && action.error.code === 'stale_round' ? () => void reload() : undefined} />
   </article>
 }
@@ -184,9 +189,9 @@ export default function RoundClient({ roundId }: { roundId: string }) {
     <Link className="back-link" href={data ? `/home/groups/${data.groupId}` : '/home/groups'}>← 모임으로 돌아가기</Link>
     <ErrorNotice error={resource.error} retry={() => void refresh()} />
     {!data ? resource.loading && <Loading /> : <div className="stack">
-      <section className="tab-heading compact"><p>{data.groupName} · {data.currency}</p><h1>{data.name}</h1><div className="heading-status"><StatusBadge status={data.status} /><button className="text-button" disabled={resource.loading} onClick={() => void refresh()} type="button">새로고침</button></div></section>
+      <section className="tab-heading compact"><p>{data.groupName}</p><h1>{data.name}</h1><div className="heading-status"><StatusBadge status={data.status} /><button className="text-button" disabled={resource.loading} onClick={() => void refresh()} type="button">새로고침</button></div></section>
       {data.status === 'CONFIRMED' && <p className="notice">지출을 확정했어요. 수정하려면 회차 생성자가 기록 단계를 다시 열어 주세요. 전송 후에는 수정할 수 없어요.</p>}
-      <section className="domain-card"><div className="row-between"><span>전체 지출</span><strong className="large-money">{formatMoney(data.totalMinor, data.currency)}</strong></div><p className="help-text">{data.memberCount}명 참여 · {data.currency} · 회차별 별도 정산</p></section>
+      <section className="domain-card"><div className="row-between"><span>전체 지출</span><strong className="large-money">{formatMoney(data.totalMinor, data.currency)}</strong></div><p className="help-text">{data.memberCount}명 참여 · {data.currency}</p></section>
       {(data.status === 'LOCKED' || data.status === 'COMPLETED') && <div className="notice"><p>{data.status === 'COMPLETED' ? '종료된 회차예요. 모든 정산 기록은 읽기 전용이에요.' : data.finalizedAt ? '기록이 잠겼어요. 본인의 최종 정산 안내를 확인해 주세요.' : '기록이 잠겼어요. 회차 생성자가 나머지를 한 번 추첨하면 최종 금액을 확인할 수 있어요.'}</p><Link className="primary-button" href={`/settlements/${roundId}`} prefetch={false}>내 정산 안내 보기</Link></div>}
       <section className="domain-card stack participant-section"><div><h2>회차 참여자</h2><p className="help-text">참여자와 나의 현재 송금 흐름을 한눈에 확인하세요.</p></div>
         <ul aria-label="회차 참여자" className="participant-grid">{data.members.map(member => {
@@ -203,7 +208,7 @@ export default function RoundClient({ roundId }: { roundId: string }) {
               <span className="transfer-person"><ParticipantAvatar name={receiver} /><small>받는 사람</small><strong>{receiver}{transfer.receiverId === account.id ? ' (나)' : ''}</strong></span>
             </li>
           })}</ul>}
-          {!finalized && hasExpenses && <p className="help-text" role="status">{data.pendingRemainderMinor !== '0' ? `나머지 ${formatMoney(data.pendingRemainderMinor, data.currency)}는 아직 누구에게도 배정하지 않았어요. 추첨 뒤 나의 관계와 금액이 달라질 수 있어요.` : '저장된 지출 전체를 상계한 나의 예상이에요. 지출을 추가·수정·삭제하면 함께 바뀌어요.'}</p>}
+          {!finalized && hasExpenses && <p className="help-text" role="status">지금까지 기록한 지출 내역을 기반으로 한 예상치예요</p>}
         </div>
       </section>
       <dialog aria-labelledby="exclusion-dialog-heading" className="account-dialog" id="participant-exclusion-dialog" ref={exclusionDialog} onCancel={() => setCheck(null)} onClick={event => { if (event.target === event.currentTarget) { event.currentTarget.close(); setCheck(null) } }}>

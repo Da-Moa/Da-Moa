@@ -331,20 +331,26 @@ export async function getSettlement(access: Identity, roundId: string): Promise<
   })
 }
 
-export function validateReceipt(content: Uint8Array, claimedType: string) {
-  if (!content.length || content.length > 2097152) throw new AppError(413, 'receipt_too_large', '영수증 이미지는 2 MiB 이하로 올려 주세요')
-  const bytes = Buffer.from(content)
-  const png = bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) && bytes.length >= 33 && bytes.subarray(12, 16).toString() === 'IHDR' && bytes.includes(Buffer.from('IEND'))
-  const jpeg = bytes.length >= 4 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255 && bytes.at(-2) === 255 && bytes.at(-1) === 217
-  const webp = bytes.length >= 20 && bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WEBP' && bytes.readUInt32LE(4) + 8 === bytes.length
-  const mimeType = png ? 'image/png' : jpeg ? 'image/jpeg' : webp ? 'image/webp' : null
-  if (!mimeType || (claimedType && claimedType !== mimeType)) throw new AppError(415, 'unsupported_receipt_type', 'JPEG, PNG, WebP 이미지 파일을 선택해 주세요')
-  return { content: bytes, mimeType, sha256: createHash('sha256').update(bytes).digest('hex') }
+async function convertReceipt(content: Uint8Array, claimedType: string) {
+  const source = Buffer.from(content)
+  try {
+    const { default: sharp } = await import('sharp')
+    const image = sharp(source, { failOn: 'error' })
+    const format = (await image.metadata()).format
+    const mimeType = format === 'jpeg' ? 'image/jpeg' : format === 'png' ? 'image/png' : format === 'webp' ? 'image/webp' : null
+    if (!mimeType || (claimedType && claimedType !== mimeType)) throw new AppError(415, 'unsupported_receipt_type', 'JPEG, PNG, WebP 이미지 파일을 선택해 주세요')
+    const converted = await image.autoOrient().avif({ quality: 80, effort: 2 }).toBuffer()
+    return { content: converted, mimeType: 'image/avif', sha256: createHash('sha256').update(converted).digest('hex') }
+  } catch (error) {
+    if (error instanceof AppError) throw error
+    throw new AppError(415, 'unsupported_receipt_type', 'JPEG, PNG, WebP 이미지 파일을 선택해 주세요')
+  }
 }
 
 export async function addReceipt(access: Identity, key: string, roundId: string, expenseId: string, expectedVersion: number, bytes: Uint8Array, type: string) {
-  const file = validateReceipt(bytes, type)
-  return domainMutation(access, key, 'receipt.create', { roundId, expenseId, expectedVersion, sha256: file.sha256 }, async (client, userId) => {
+  const sourceSha256 = createHash('sha256').update(bytes).digest('hex')
+  const file = await convertReceipt(bytes, type)
+  return domainMutation(access, key, 'receipt.create', { roundId, expenseId, expectedVersion, sourceSha256, type }, async (client, userId) => {
     const round = await roundFor(client, roundId, userId), expense = await expenseFor(client, roundId, expenseId)
     await editable(client, round, userId, expense)
     version(round, expectedVersion)

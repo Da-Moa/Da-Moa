@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import test from 'node:test'
+import sharp from 'sharp'
 import { readAccessToken, type AccessToken } from '../src/lib/auth.ts'
 import { completeOnboarding, signInKakao, updateBankAccount, withdrawAccount } from '../src/lib/auth-store.ts'
 import { createDatabaseClient } from '../src/lib/db.ts'
@@ -16,7 +17,6 @@ process.env.AUTH_JWT_SECRET ||= 'integration-only-not-a-production-secret-012345
 const key = () => randomUUID()
 const query = () => new URLSearchParams()
 const code = (expected: string) => (error: unknown) => (error as { code?: string }).code === expected
-const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a4WQAAAAASUVORK5CYII=', 'base64')
 
 async function member(name: string): Promise<AccessToken> {
   const session = await signInKakao(`settlement-test:${key()}`, { displayName: name, email: null, profileImageUrl: null })
@@ -221,19 +221,36 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     await t.test('receipt storage, authorization, failed upload preservation and hard-cancel cascade', async () => {
       const r = await round()
       const e = await expense(r.id, b, b.userId, '10')
-      await assert.rejects(addReceipt(c, key(), r.id, e.id, e.version!, png, 'image/png'), code('forbidden'))
+      const sources = [
+        { mimeType: 'image/jpeg', content: await sharp({ create: { width: 2, height: 2, channels: 3, background: '#f33' } }).jpeg().toBuffer() },
+        { mimeType: 'image/png', content: await sharp({ create: { width: 2, height: 2, channels: 3, background: '#3f3' } }).png().toBuffer() },
+        { mimeType: 'image/webp', content: await sharp({ create: { width: 2, height: 2, channels: 3, background: '#33f' } }).webp().toBuffer() },
+      ]
+      await assert.rejects(addReceipt(c, key(), r.id, e.id, e.version!, sources[1].content, sources[1].mimeType), code('forbidden'))
       await assert.rejects(addReceipt(b, key(), r.id, e.id, e.version!, Buffer.from('<svg/>'), 'image/svg+xml'), code('unsupported_receipt_type'))
-      const uploadKey = key()
-      const receipt = await addReceipt(b, uploadKey, r.id, e.id, e.version!, png, 'image/png')
-      assert.deepEqual(Buffer.from((await getReceipt(a, receipt.id)).content), png)
-      assert.equal((await addReceipt(b, uploadKey, r.id, e.id, e.version!, png, 'image/png')).id, receipt.id)
+      await assert.rejects(addReceipt(b, key(), r.id, e.id, e.version!, sources[1].content, 'image/jpeg'), code('unsupported_receipt_type'))
+      const uploaded: MutationResult[] = []
+      for (const source of sources) {
+        const expectedVersion = (await get(r.id)).version, uploadKey = key()
+        const receipt = await addReceipt(b, uploadKey, r.id, e.id, expectedVersion, source.content, source.mimeType)
+        const stored = await getReceipt(a, receipt.id)
+        assert.equal(stored.mimeType, 'image/avif')
+        assert.equal((await sharp(stored.content).metadata()).mediaType, 'image/avif')
+        assert.notDeepEqual(Buffer.from(stored.content), source.content)
+        const metadata = (await get(r.id)).expenses[0].receipts.find(item => item.id === receipt.id)
+        assert.equal(metadata?.mimeType, 'image/avif')
+        assert.equal(metadata?.byteSize, stored.content.length)
+        assert.equal((await addReceipt(b, uploadKey, r.id, e.id, expectedVersion, source.content, source.mimeType)).id, receipt.id)
+        uploaded.push(receipt)
+      }
+      const receipt = uploaded[1]
       await assert.rejects(getReceipt(outsider, receipt.id), code('not_found'))
       await command(r.id, 'confirm')
-      await assert.rejects(addReceipt(b, key(), r.id, e.id, (await get(r.id)).version, png, 'image/png'), code('invalid_round_state'))
+      await assert.rejects(addReceipt(b, key(), r.id, e.id, (await get(r.id)).version, sources[1].content, sources[1].mimeType), code('invalid_round_state'))
       await command(r.id, 'reopen')
       await removeReceipt(a, key(), r.id, e.id, receipt.id, { expectedVersion: (await get(r.id)).version })
       await assert.rejects(getReceipt(a, receipt.id), code('not_found'))
-      const keep = await addReceipt(b, key(), r.id, e.id, (await get(r.id)).version, png, 'image/png')
+      const keep = await addReceipt(b, key(), r.id, e.id, (await get(r.id)).version, sources[1].content, sources[1].mimeType)
       const cancelKey = key(), payload = { expectedVersion: keep.version }
       await roundCommand(a, cancelKey, r.id, 'cancel', payload)
       assert.equal((await roundCommand(a, cancelKey, r.id, 'cancel', payload)).id, r.id)

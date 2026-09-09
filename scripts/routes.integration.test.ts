@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import test from 'node:test'
 import { NextRequest } from 'next/server'
+import sharp from 'sharp'
 import { ACCESS_TOKEN_COOKIE_NAME, readAccessToken } from '../src/lib/auth.ts'
 import { completeOnboarding, signInKakao } from '../src/lib/auth-store.ts'
 import { createDatabaseClient } from '../src/lib/db.ts'
@@ -31,7 +32,7 @@ async function request(path: string, token: string | null, method = 'GET', body?
   return response
 }
 
-test('Route Handler contracts enforce cookies, origin, idempotency, bounded images and personalized output', async () => {
+test('Route Handler contracts enforce cookies, origin, idempotency, normalized images and personalized output', async () => {
   const client = createDatabaseClient(testUrl)
   await client.connect()
   try {
@@ -96,23 +97,32 @@ test('Route Handler contracts enforce cookies, origin, idempotency, bounded imag
     const replay = await request(`rounds/${roundId}/expenses`, a.accessToken, 'POST', expenseBody, { 'Idempotency-Key': requestKey })
     assert.deepEqual((await replay.json()).data, e)
     const form = new FormData()
-    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a4WQAAAAASUVORK5CYII=', 'base64')
+    const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#369' } }).png().toBuffer()
     form.set('file', new File([png], 'receipt.png', { type: 'image/png' }))
     form.set('expectedVersion', String(e.version))
     const uploaded = await request(`rounds/${roundId}/expenses/${e.id}/receipts`, a.accessToken, 'POST', form)
     assert.equal(uploaded.status, 200)
     const receipt = (await uploaded.json()).data
     const binary = await request(`receipts/${receipt.id}`, b.accessToken)
-    assert.equal(binary.headers.get('content-type'), 'image/png')
+    assert.equal(binary.headers.get('content-type'), 'image/avif')
     assert.equal(binary.headers.get('x-content-type-options'), 'nosniff')
     assert.equal(binary.headers.get('cache-control'), 'private, no-store')
-    assert.deepEqual(Buffer.from(await binary.arrayBuffer()), png)
+    const converted = Buffer.from(await binary.arrayBuffer())
+    assert.equal((await sharp(converted).metadata()).mediaType, 'image/avif')
+    assert.notDeepEqual(converted, png)
     assert.equal((await request(`receipts/${receipt.id}`, outsider.accessToken)).status, 404)
-    const oversized = new FormData()
-    oversized.set('file', new File([new Uint8Array(2200000)], 'large.png', { type: 'image/png' }))
-    oversized.set('expectedVersion', String(receipt.version))
-    assert.equal((await request(`rounds/${roundId}/expenses/${e.id}/receipts`, a.accessToken, 'POST', oversized)).status, 413)
-    const confirmed = (await (await request(`rounds/${roundId}/confirm`, a.accessToken, 'POST', { expectedVersion: receipt.version })).json()).data
+    const largePng = await sharp(randomBytes(1024 * 1024 * 3), { raw: { width: 1024, height: 1024, channels: 3 } }).png({ compressionLevel: 0 }).toBuffer()
+    assert.ok(largePng.length > 2097152)
+    const largeForm = new FormData()
+    largeForm.set('file', new File([largePng], 'large.png', { type: 'image/png' }))
+    largeForm.set('expectedVersion', String(receipt.version))
+    const largeUpload = await request(`rounds/${roundId}/expenses/${e.id}/receipts`, a.accessToken, 'POST', largeForm)
+    assert.equal(largeUpload.status, 200, await largeUpload.clone().text())
+    const largeReceipt = (await largeUpload.json()).data
+    const largeBinary = await request(`receipts/${largeReceipt.id}`, b.accessToken)
+    assert.equal(largeBinary.headers.get('content-type'), 'image/avif')
+    assert.equal((await sharp(await largeBinary.arrayBuffer()).metadata()).mediaType, 'image/avif')
+    const confirmed = (await (await request(`rounds/${roundId}/confirm`, a.accessToken, 'POST', { expectedVersion: largeReceipt.version })).json()).data
     const sent = await request(`rounds/${roundId}/send`, a.accessToken, 'POST', { expectedVersion: confirmed.version })
     assert.equal(sent.status, 200)
     const settlement = await request(`rounds/${roundId}/settlement?userId=${b.userId}`, a.accessToken)

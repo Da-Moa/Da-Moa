@@ -38,7 +38,7 @@ OCR, 계좌 검증 API, 실제 송금·입금 확인, 외부 메시지 발송, �
 | 일반 참여자 나가기 | 본인이 제외되지 않은 미종료 회차에 참여 중이면 차단. 그 외에는 현재 모임 멤버십의 `left_at`만 설정 |
 | 모임 생성자 모임 닫기 | 일반 나가기는 제공하지 않음. 모임 전체에 미종료 회차가 있으면 차단하고, 회차가 없거나 모두 완료됐으면 모임·회차를 보존한 채 모든 활성 멤버십과 초대를 종료 |
 | 탈퇴 차단 관련성 | 제외 여부와 무관하게 참여 이력이 있는 모든 미종료 회차. 수취인으로 남은 제외자도 포함 |
-| 영수증 저장 | 기존 PostgreSQL의 `BYTEA`. 파일당 최대 2 MiB, JPEG·PNG·WebP 지원, 여러 파일은 각각 업로드 |
+| 영수증 저장 | 기존 PostgreSQL의 `BYTEA`. JPEG·PNG·WebP 입력을 AVIF로 변환해 저장하며 앱 자체 파일 바이트 제한은 없음. 기존 세 형식 자료 조회 호환, 여러 파일은 각각 업로드 |
 | 초대 | 모임 생성자 발급·폐기, 발급 후 7일 유효한 다회 수락 링크. 원문 토큰은 저장하지 않음 |
 | 동시 쓰기 | 초기에는 공통 DB 트랜잭션 잠금 하나로 직렬화. 읽기는 직렬화하지 않음 |
 | 실시간 반영 | Ably WebSocket의 인증된 사용자별 채널로 재조회 키만 발행. DB와 기존 REST API가 원본 |
@@ -160,7 +160,7 @@ stateDiagram-v2
 | `round_members` | `(round_id, user_id)` PK, `display_name_snapshot`, `joined_at`, `excluded_at`. 제외해도 행 삭제 금지. `excluded_at` 변경은 `group_members.left_at`에 전파하지 않음 |
 | `expenses` | `id`, `round_id`, `author_id`, `payer_id`, `description`, `amount_minor`, `split_mode`(`ALL/SELECTED`), `base_share_minor` nullable, `remainder_units` nullable, `created_at`, `updated_at`, `updated_by` |
 | `expense_shares` | `(expense_id, user_id)` PK, `round_id`, `final_amount_minor` nullable, `received_remainder` nullable. 행 자체가 실제 부담자 목록 |
-| `expense_receipts` | `id`, `expense_id`, `uploaded_by`, `mime_type`, `byte_size`, `sha256`, `content BYTEA`, `created_at`. 바이트 크기·지원 MIME CHECK |
+| `expense_receipts` | `id`, `expense_id`, `uploaded_by`, `mime_type`, `byte_size`, `sha256`, `content BYTEA`, `created_at`. 신규 AVIF와 기존 JPEG·PNG·WebP 조회 호환 MIME, 양의 바이트 크기 CHECK |
 | `settlement_balances` | `(round_id, user_id)` PK, `paid_minor`, `burden_minor`, `balance_minor`. `balance_minor = burden_minor - paid_minor` CHECK |
 | `settlement_transfers` | `(round_id, sender_id, receiver_id)` PK, `amount_minor > 0`. `sender_id <> receiver_id` CHECK |
 | `mutation_requests` | `(actor_id, operation, request_key)` PK, `request_digest`, `resource_id`, `response_metadata JSONB`, `created_at`. 성공한 명령의 최소 결과만 저장 |
@@ -173,7 +173,7 @@ stateDiagram-v2
 - `rounds.creator_id`는 회차 생성 요청의 인증 사용자로 서버가 결정한다. `(rounds.id, rounds.creator_id)`가 `round_members(round_id, user_id)`를 지연 복합 FK로 참조하게 하여 회차 생성자가 항상 필수 참여자로 남도록 한다.
 - `expenses`에 `UNIQUE(id, round_id)`를 두고, `expense_shares`는 `(expense_id, round_id)`와 `(round_id, user_id)` 복합 FK로 지출과 동일 회차의 참여자를 참조한다.
 - 최종 잔액·송금의 사용자도 해당 회차 관계를 참조한다. 제외된 비부담 결제자를 참조하는 것은 허용한다.
-- 증빙은 `byte_size = octet_length(content)`와 `0 < byte_size <= 2097152`를 함께 검사한다.
+- 증빙은 `byte_size = octet_length(content)`와 `byte_size > 0`을 함께 검사한다. 신규 업로드는 `image/avif`로 저장하고, 기존 행 조회를 위해 `image/jpeg`, `image/png`, `image/webp`도 유효한 저장 MIME으로 유지한다.
 - `finalized_at`은 잠금 뒤에만 설정하며, `COMPLETED`에는 최종 저장·완료 시점이 필요하다. 상태별 시점 조합에 CHECK를 둔다.
 - 지출 금액·몫·나머지, 전체 부담액 합계와 송금 합계 같은 여러 행의 조건은 공통 쓰기 함수 안에서 검증한다. FK/CHECK만으로 합계 검증을 대신하지 않는다.
 - 회차 삭제는 참여자·지출·분담·증빙·최종 결과를 연쇄 삭제한다. `mutation_requests.resource_id`에는 회차 FK를 두지 않아 취소 응답 유실 후에도 같은 요청 결과를 확인할 수 있게 한다. 여기에 지출 본문·계좌·이미지는 저장하지 않는다.
@@ -495,18 +495,20 @@ USD·JPY 응답은 `account` 필드를 포함하지 않는다. 계좌 일부가 
 | 409 | `member_exclusion_blocked`, `minimum_participants` | 관련 지출 하이라이트 또는 최소 2명 안내 |
 | 409 | `unfinished_rounds` | 회원탈퇴 또는 일반 참여자의 모임 나가기를 막는 미종료 회차 안내 |
 | 409 | `unfinished_group_rounds` | 모임 닫기를 막는 미종료 회차 안내 |
-| 413 / 415 | `receipt_too_large` / `unsupported_receipt_type` | 파일 교체 안내, 지출 원본 유지 |
+| 415 | `unsupported_receipt_type` | 지원하지 않거나 해석할 수 없는 이미지 교체 안내, 지출 원본 유지 |
 | 503 | `storage_unavailable`, `transaction_retry` | 같은 요청 키로 재시도. 저장 여부가 불확실하면 먼저 기존 성공 결과 확인 |
 
 ## 11. 영수증·개인정보·화면 데이터
 
 증빙은 지출 저장 후 별도 업로드한다. 업로드 실패가 정상 저장된 지출을 지우지 않는다. 파일 선택만으로 업로드 완료라고 표시하지 않으며, 서버에 저장한 증빙 ID가 있어야 완료다.
 
-JPEG·PNG·WebP만 받고 파일명·클라이언트 MIME 외 실제 바이트의 포맷도 검사한다. SVG·HTML·임의 실행 파일을 받지 않는다. 최대 2 MiB는 이미지 업로드 기술 제한이며 금액 상한과 무관하다. 서버는 요청 바디를 제한하여 무제한 메모리 버퍼링을 피한다.
+JPEG·PNG·WebP만 받고 파일명·클라이언트 MIME 외 실제 디코딩 결과의 포맷도 검사한다. SVG·HTML·임의 실행 파일을 받지 않는다. 유효한 신규 입력은 방향을 보정한 뒤 AVIF로 변환하며 메타데이터를 제거하고, 저장 바이트·MIME·해시는 변환 결과를 기준으로 한다. 변환 실패는 `unsupported_receipt_type`으로 처리하고 지출 원본을 유지한다.
+
+앱 자체의 파일 바이트 제한과 `receipt_too_large` 오류는 두지 않는다. Sharp의 입력 픽셀 수 안전장치는 압축 해제 시 메모리 고갈을 막는 별도 보안 경계이므로 해제하지 않는다. Vercel Function의 요청·응답별 4.5 MB 페이로드 상한은 애플리케이션 제한이 아닌 배포 인프라 제약이며, 현재 PostgreSQL `BYTEA` 업로드·조회 경로로는 그 범위를 넘는 파일을 전달할 수 없다. multipart 부가 데이터 때문에 업로드 가능한 원본 파일 크기는 4.5 MB보다 작다.
 
 증빙은 `public/`, 로컬 임시 파일, 브라우저 상태를 영구 저장소로 사용하지 않는다. `BYTEA`와 지출 FK를 같은 DB에 저장하므로 지출 삭제·회차 취소 시 증빙 바이트도 원자적으로 삭제된다. 여러 지출이 같은 파일 행을 공유하는 기능은 두지 않는다. 목록 쿼리에는 바이트 본문을 포함하지 않는다.
 
-`ponytail: 초기에는 작은 증빙을 기존 PostgreSQL에 저장한다. 이미지 저장량·전송 비용·DB 읽기 지연이 문제가 되면 비공개 객체 저장소로 옮기고 업로드 완료·파일 정리 재시도를 설계한다.`
+`ponytail: 초기에는 Vercel Function이 전달할 수 있는 증빙을 기존 PostgreSQL에 저장한다. 인프라 한계를 넘는 업로드가 필요하거나 이미지 저장량·전송 비용·DB 읽기 지연이 문제가 되면 비공개 객체 저장소의 직접 업로드·조회로 옮기고 변환 완료·파일 정리 재시도를 설계한다.`
 
 계좌·정산·증빙 API는 `Cache-Control: private, no-store`를 사용한다. 이미지에는 검증된 Content-Type과 `X-Content-Type-Options: nosniff`를 지정한다. 계좌 조회에 공유 서버 캐시를 쓰지 않으며, 안내 화면 진입·새로고침 시 서버에서 현재값을 읽는다. 클라이언트 라우터의 사전 로드된 화면만으로 최신 계좌를 확정하지 않는다.
 
@@ -545,7 +547,7 @@ Server Component도 같은 인증·권한 함수를 거쳐 최소 데이터만 �
 3. 기존 회원에게 계좌가 없으므로 `onboarding_completed_at`을 임의로 채우지 않는다. 이행 시 기존 세션을 한 번 폐기하고 다음 로그인에서 계좌 등록을 요구한다. 배포 영향은 **기존 회원 1회 재로그인·계좌 등록**이다.
 4. 실행 순서는 **인증 확장 컬럼 추가 → soft-delete·활성 세션 검사·가입 호환 코드 배포 및 세션 이행 → 도메인 스키마·기능 배포**다. 새 컬럼을 읽는 코드를 컬럼보다 먼저 배포하지 않는다. 구버전의 물리 삭제·가입 미완료 승인 경로가 도메인 자료와 동시에 동작하지 않도록 한다. 스키마 롤백으로 과거 자료를 삭제하지 않는다.
 5. 로컬·CI·Vercel의 Node 실행 기준을 일치시키고 Ably SDK의 WebSocket 연결과 토큰 갱신을 확인한다. Node 20을 그대로 지원하는 것처럼 `engines`를 남기지 않는다.
-6. 개발·프리뷰·운영 DB와 Ably 앱/키를 분리하고 배포 플랫폼 요청 크기·실행 시간 안에서 증빙 업로드와 Neon 트랜잭션을 검증한다. 운영 데이터로 경합·삭제 테스트를 하지 않는다.
+6. 개발·프리뷰·운영 DB와 Ably 앱/키를 분리하고 Vercel Function의 요청·응답별 4.5 MB 페이로드 상한과 실행 시간 안에서 AVIF 변환·증빙 업로드·조회 및 Neon 트랜잭션을 검증한다. 애플리케이션의 파일 바이트 제한으로 표현하지 않으며 운영 데이터로 경합·삭제 테스트를 하지 않는다.
 7. 문서·OpenAPI·README의 ‘물리 탈퇴’, 고정 원화 계산기, OCR 동작처럼 읽히는 문구를 실제 구현에 맞게 고친다.
 8. 회차별 통화 선택으로 전환할 때 기존 `001~003` 마이그레이션 파일을 수정하지 않고 `004`를 추가한다. `groups.base_currency`를 제거하고 `rounds.currency` 및 기존 회차의 금액·상태·정산 결과는 변경하지 않는다. 이미 적용된 인증 이행과 세션 폐기는 반복하지 않는다.
 9. 회차 생성자 분리는 기존 `001~004`를 수정하지 않고 `005-round-creator.sql`로 추가한다. `rounds.creator_id`를 먼저 nullable로 추가하고 기존 모든 회차는 이전 코드에서 모임 생성자만 만들 수 있었으므로 `groups.creator_id`로 백필한다. 누락과 해당 `round_members` 관계를 검증한 뒤 `NOT NULL`과 `(id, creator_id) → round_members(round_id, user_id)` 지연 복합 FK를 적용한다. 금액·상태·통화·정산 결과와 세션은 변경하지 않으며 `scripts/migrations.mjs` 목록에 `005`를 추가한다. 새 컬럼을 읽고 쓰는 코드는 이 마이그레이션 이후 배포한다.
@@ -592,6 +594,7 @@ Server Component도 같은 인증·권한 함수를 거쳐 최소 데이터만 �
 - 일반 참여자는 제외되지 않은 미종료 참여 회차가 하나라도 있으면 해당 모임을 나갈 수 없다. 완료 회차만 있거나 미종료 회차에서 이미 제외된 경우 나가기를 허용하고 `group_members.left_at`만 설정하며 기존 `round_members` 조회를 유지한다.
 - 모임 생성자의 일반 나가기는 거부한다. 모임 생성자가 해당 회차에 참여하지 않아도 다른 활성 멤버가 만든 기록 중·확정·잠금 회차가 하나라도 있으면 모임 없애기를 거부한다. 회차가 없거나 모든 회차가 완료됐으면 모임·회차·정산 이력을 보존하고 모든 활성 멤버십·초대를 종료한다. 과거 참여자는 완료 회차를 계속 조회할 수 있다.
 - 회차 취소는 지출·분담·증빙 바이트를 삭제하고 회원·다른 회차를 보존한다. 취소한 회차의 같은 요청 재시도는 중복 처리하지 않는다.
+- JPEG·PNG·WebP 신규 증빙은 실제 포맷을 검증하고 AVIF로 변환해 저장·응답한다. 앱의 2 MiB 제한과 `receipt_too_large` 응답은 없으며 기존 세 MIME의 저장 자료는 원래 Content-Type으로 계속 조회한다. 픽셀 수 안전장치를 넘거나 디코딩할 수 없는 입력은 저장하지 않는다.
 
 ### 13.3 실제 DB 원자성·경합
 

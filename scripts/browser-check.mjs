@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import sharp from 'sharp'
 import { signInKakao, completeOnboarding } from '../src/lib/auth-store.ts'
 import { readAccessToken, ACCESS_TOKEN_COOKIE_NAME, REFRESH_TOKEN_COOKIE_NAME } from '../src/lib/auth.ts'
 
@@ -171,12 +172,13 @@ try {
   await waitFor("document.querySelectorAll('.expense-card').length === 1")
   console.log('PASS changed pending input is blocked and explicit recovery restores the committed original')
   const imagePath = join(tmpdir(), `da-moa-browser-${runId}.png`)
-  await writeFile(imagePath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS1sAAAAASUVORK5CYII=', 'base64'))
-  const fileInput = await cdp('Runtime.evaluate', { expression: "document.querySelector('input[type=file]')" })
+  await writeFile(imagePath, await sharp({ create: { width: 2, height: 2, channels: 3, background: '#369' } }).png().toBuffer())
+  await click('증빙 추가')
+  await waitFor("Boolean(document.querySelector('dialog[open] input[type=file]'))")
+  const fileInput = await cdp('Runtime.evaluate', { expression: "document.querySelector('dialog[open] input[type=file]')" })
   await cdp('DOM.setFileInputFiles', { files: [imagePath], objectId: fileInput.result.objectId })
   await click('선택한 증빙 업로드')
-  await waitFor(hasText('증빙이 서버에 저장됐어요.'))
-  await waitFor("Array.from(document.querySelectorAll('button')).some(button => button.textContent.includes('증빙 1 보기'))")
+  await waitFor("!document.querySelector('dialog[open]') && Array.from(document.querySelectorAll('button')).some(button => button.textContent.includes('증빙 1 보기'))")
   await evaluate("Array.from(document.querySelectorAll('button')).find(button => button.textContent.includes('증빙 1 보기')).click()")
   await waitFor("Boolean(document.querySelector('.receipt-preview')?.complete)")
   await evaluate("document.querySelector('button[aria-label=\"검증 B 제외\"]').click()")

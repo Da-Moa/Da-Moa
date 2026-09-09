@@ -378,6 +378,7 @@ button.participant-card:not(:disabled):hover { background: #f8fbff; border-color
 .state-completed { background: #e5f4eb; color: #2c6847; }
 .copy-link { display: grid; gap: 12px; }
 .expense-card { scroll-margin-top: 20px; }
+.expense-split-tag { margin-left: 0; }
 .expense-form { border: 2px solid #70afe0; }
 .expense-highlight { background: #fffaf0; border: 2px solid #b7801c; }
 .highlight-label { color: #855c0c; font-size: 12px; font-weight: 800; }
@@ -386,7 +387,6 @@ button.participant-card:not(:disabled):hover { background: #f8fbff; border-color
 .exclusion-issues li { border: 1px solid #d5b772; border-radius: 8px; box-shadow: var(--control-shadow); display: grid; gap: 3px; padding: 10px; }
 .exclusion-issues span, .exclusion-issues small { font-size: 12px; }
 .exclusion-issues b { font-size: 12px; }
-.receipt-upload { border-top: 1px solid #e5e8eb; display: grid; gap: 10px; padding-top: 12px; }
 .receipt-item { border-top: 1px solid #eef1f5; padding-top: 5px; }
 .receipt-preview { border: 1px solid var(--box-border-color); border-radius: 9px; box-shadow: var(--control-shadow); display: block; height: auto; margin-top: 8px; max-width: 100%; }
 .bank-details { display: grid; gap: 10px; margin: 0; }

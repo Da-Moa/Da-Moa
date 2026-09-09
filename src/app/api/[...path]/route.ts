@@ -2,7 +2,7 @@ import { after, NextRequest } from 'next/server'
 import { ACCESS_TOKEN_COOKIE_NAME, readAccessToken } from '../../../lib/auth'
 import { AppError, errorResponse } from '../../../lib/errors'
 import { acceptInvite, createGroup, createInvite, getGroup, getInvite, leaveGroup, listGroups, revokeInvite } from '../../../lib/group-store'
-import { readBytes, readJsonBody as jsonBody } from '../../../lib/http'
+import { readJsonBody as jsonBody } from '../../../lib/http'
 import { captureGroupAudience, captureRoundAudience, createRealtimeToken, publishGroupInvalidation, publishRoundInvalidation, realtimeEnabled, type RoundAudience } from '../../../lib/realtime-server'
 import { addReceipt, checkExclusion, createRound, deleteExpense, excludeMember, getReceipt, getRound, getSettlement, listRounds, removeReceipt, roundCommand, saveExpense } from '../../../lib/round-store'
 
@@ -46,9 +46,8 @@ async function handle(request: NextRequest, context: { params: Promise<{ path: s
     else if (path[0] === 'rounds' && path.length === 5 && path[2] === 'members' && path[4] === 'exclusion-check' && method === 'GET') data = await checkExclusion(access, path[1], path[3])
     else if (path[0] === 'rounds' && path.length === 5 && path[2] === 'members' && path[4] === 'exclude' && method === 'POST') data = await excludeMember(access, key, path[1], path[3], await jsonBody(request))
     else if (path[0] === 'rounds' && path.length === 5 && path[2] === 'expenses' && path[4] === 'receipts' && method === 'POST') {
-      const bytes = await readBytes(request, 2097152 + 65536, 'receipt_too_large')
       let form: FormData
-      try { form = await new Response(bytes, { headers: { 'Content-Type': request.headers.get('content-type') ?? '' } }).formData() } catch { throw new AppError(400, 'invalid_input', '영수증 업로드 형식을 확인해 주세요') }
+      try { form = await request.formData() } catch { throw new AppError(400, 'invalid_input', '영수증 업로드 형식을 확인해 주세요') }
       const file = form.get('file')
       if (!(file instanceof File) || form.getAll('file').length !== 1 || [...form.keys()].some(k => !['file', 'expectedVersion'].includes(k))) throw new AppError(400, 'invalid_input', '이미지를 한 개씩 올려 주세요')
       data = await addReceipt(access, key, path[1], path[3], Number(form.get('expectedVersion')), new Uint8Array(await file.arrayBuffer()), file.type)
