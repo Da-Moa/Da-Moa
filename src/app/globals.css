@@ -38,7 +38,7 @@ a:focus-visible, button:focus-visible, input:focus-visible, .expense-card:focus-
 .icon-button { align-items: center; background: transparent; border: 0; border-radius: 50%; color: #4e5968; display: flex; justify-content: center; padding: 7px; }
 .icon-button:not(:disabled):hover { background: #e5e8eb; }
 .account-dialog { background: #fff; border: 1px solid var(--box-border-color); border-radius: 20px; box-shadow: var(--box-shadow); color: #191f28; margin: auto; max-width: calc(100% - 40px); overscroll-behavior: contain; padding: 0; width: 400px; }
-.account-dialog::backdrop { background: rgba(25, 31, 40, .42); touch-action: none; }
+.account-dialog::backdrop { -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); background: rgba(25, 31, 40, .58); touch-action: none; }
 .account-dialog-content { padding: 22px; }
 .account-dialog-header { align-items: flex-start; display: flex; justify-content: space-between; }
 .account-dialog-header p { color: #6b7684; font-size: 13px; font-weight: 700; margin: 0 0 5px; }
