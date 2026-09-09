@@ -381,6 +381,11 @@ button.participant-card:not(:disabled):hover { background: #f8fbff; border-color
 .state-completed { background: #e5f4eb; color: #2c6847; }
 .copy-link { display: grid; gap: 12px; }
 .expense-card { scroll-margin-top: 20px; }
+.expense-card-heading { border-bottom: 1px solid #e5e8eb; padding-bottom: 12px; }
+.expense-card-actions { border-top: 1px solid #e5e8eb; padding-top: 12px; }
+.expense-card-actions .text-button { border-radius: 8px; padding-inline: 8px; }
+.expense-card-actions .text-button:not(:disabled):hover { background: #f2f4f6; }
+.expense-card-actions .danger-text:not(:disabled):hover { background: #fff0f1; }
 .expense-split-tag { margin-left: 0; }
 .expense-form { border: 2px solid #70afe0; scroll-margin-top: 20px; }
 .expense-highlight { background: #fffaf0; border: 2px solid #b7801c; }
