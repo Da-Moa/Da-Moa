@@ -203,9 +203,9 @@ export default function RoundClient({ roundId }: { roundId: string }) {
           {data.transfers.length === 0 ? <p className="flow-empty" role="status">{!hasExpenses ? '지출을 기록하면 나의 예상 송금 관계를 표시해요.' : finalized ? '내가 주고받을 금액이 없어요.' : '현재 기록 기준으로 내가 주고받을 금액이 없어요.'}</p> : <ul aria-label={finalized ? '나의 최종 송금 관계' : '나의 현재 예상 송금 관계'} aria-live="polite" className="transfer-list">{data.transfers.map(transfer => {
             const sender = nameOf(transfer.senderId), receiver = nameOf(transfer.receiverId), amount = formatMoney(transfer.amountMinor, data.currency)
             return <li aria-label={`${finalized ? '최종' : '예상'} 송금, 보내는 사람 ${sender}, 받는 사람 ${receiver}, 금액 ${amount}`} className="transfer-row" key={`${transfer.senderId}:${transfer.receiverId}`}>
-              <span className="transfer-person"><ParticipantAvatar name={sender} /><small>보내는 사람</small><strong>{sender}{transfer.senderId === account.id ? ' (나)' : ''}</strong></span>
+              <span className={`transfer-person${transfer.senderId === account.id ? ' transfer-me' : ''}`}><ParticipantAvatar name={sender} /><small>보내는 사람</small><strong>{sender}{transfer.senderId === account.id ? ' (나)' : ''}</strong></span>
               <span className="transfer-direction"><strong className="money">{finalized ? amount : `예상 ${amount}`}</strong><span aria-hidden="true"><span className="transfer-line" /><ArrowRight size={18} /></span><small>{finalized ? '보내요' : '보낼 예정'}</small></span>
-              <span className="transfer-person"><ParticipantAvatar name={receiver} /><small>받는 사람</small><strong>{receiver}{transfer.receiverId === account.id ? ' (나)' : ''}</strong></span>
+              <span className={`transfer-person${transfer.receiverId === account.id ? ' transfer-me' : ''}`}><ParticipantAvatar name={receiver} /><small>받는 사람</small><strong>{receiver}{transfer.receiverId === account.id ? ' (나)' : ''}</strong></span>
             </li>
           })}</ul>}
           {!finalized && hasExpenses && <p className="help-text" role="status">지금까지 기록한 지출 내역을 기반으로 한 예상치예요</p>}
