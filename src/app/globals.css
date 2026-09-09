@@ -352,6 +352,22 @@ button.participant-card:not(:disabled):hover { background: #f8fbff; border-color
 .participant-name > span:empty { display: none; }
 .participant-name .subtle-tag { margin-left: 0; }
 .settlement-person { align-items: center; display: flex; gap: 10px; min-width: 0; }
+.settlement-check-progress { display: grid; gap: 10px; }
+.settlement-check-progress .section-heading { margin-top: 0; }
+.settlement-check-progress progress { appearance: none; background: #dfe6ed; border: 0; border-radius: 999px; height: 12px; overflow: hidden; width: 100%; }
+.settlement-check-progress progress::-webkit-progress-bar { background: #dfe6ed; border-radius: inherit; }
+.settlement-check-progress progress::-webkit-progress-value { background: #146db0; border-radius: inherit; }
+.settlement-check-progress progress::-moz-progress-bar { background: #146db0; border-radius: inherit; }
+.settlement-check-members .participant-avatar { height: 38px; width: 38px; }
+.settlement-check-members .settlement-person > strong { overflow-wrap: anywhere; }
+.incoming-check-list li { padding: 0; }
+.settlement-receipt-toggle { align-items: center; background: transparent; border: 0; border-radius: 10px; color: inherit; display: flex; gap: 10px; justify-content: space-between; min-height: 58px; padding: 10px 4px; text-align: left; width: 100%; }
+.settlement-receipt-toggle > .settlement-person { flex: 1; }
+.settlement-receipt-toggle .money { max-width: 55%; text-align: right; }
+.settlement-receipt-toggle:not(:disabled):hover { background: #f2f7fb; }
+.settlement-receipt-toggle:disabled { cursor: default; }
+.settlement-received-text { color: #8b95a1; text-decoration: line-through; text-decoration-thickness: 1px; }
+.settlement-check-all { border-top: 1px solid #e5e8eb; padding-top: 12px; }
 .settlement-flow { border-top: 1px solid #e5e8eb; padding-top: 16px; }
 .settlement-flow h3 { text-wrap: balance; }
 .settlement-flow .row-between > .subtle-tag { margin-left: 0; }
@@ -417,8 +433,25 @@ button.participant-card:not(:disabled):hover { background: #f8fbff; border-color
 .settlement-summary { background: #182b42; border-color: #32465c; color: #fff; }
 .settlement-summary .large-money { margin: 9px 0 12px; }
 .settlement-summary .help-text { color: #c6d2df; }
+.settlement-animated-money { white-space: nowrap; }
+.settlement-money-digit { clip-path: inset(0); display: inline-block; height: 1em; line-height: 1; position: relative; text-align: center; width: 1ch; }
+.settlement-money-digit-changing::before { animation-duration: var(--digit-duration); animation-fill-mode: both; animation-timing-function: linear; content: attr(data-track); display: block; inset: 0; line-height: 1; position: absolute; white-space: pre; will-change: transform; }
+.settlement-money-digit-changing > span { visibility: hidden; }
+.settlement-money-digit-disappearing { animation: settlement-digit-collapse 1ms step-end var(--digit-collapse-delay) forwards; }
+.settlement-money-symbol-disappearing { animation: settlement-symbol-collapse 1ms step-end var(--symbol-delay) forwards; display: inline-block; max-width: 1ch; overflow: hidden; }
+.settlement-money-digit-changing.roll-up::before { animation-name: settlement-digit-roll-up; }
+.settlement-money-digit-changing.roll-down::before { animation-name: settlement-digit-roll-down; }
+@keyframes settlement-digit-roll-up { from { transform: translateY(0); } to { transform: translateY(var(--digit-offset)); } }
+@keyframes settlement-digit-roll-down { from { transform: translateY(var(--digit-offset)); } to { transform: translateY(0); } }
+@keyframes settlement-digit-collapse { to { width: 0; } }
+@keyframes settlement-symbol-collapse { to { max-width: 0; } }
 .account-dialog { max-height: calc(100dvh - 40px); overflow-y: auto; }
 .account-dialog h3 { font-size: 16px; }
 .onboarding-page { padding-bottom: 32px; }
 summary { color: #526a82; cursor: pointer; font-size: 13px; line-height: 1.6; padding: 8px 0; }
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; }
+  .settlement-money-digit-disappearing, .settlement-money-symbol-disappearing { animation: none; }
+  .settlement-money-digit-changing::before { display: none; }
+  .settlement-money-digit-changing > span { visibility: visible; }
+}

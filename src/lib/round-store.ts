@@ -71,6 +71,17 @@ async function settlementExpensesFor(client: Database, roundId: string): Promise
   return rows.map(row => ({ id: row.id, payerId: row.payer_id, amountMinor: row.amount_minor, splitMode: row.split_mode, participantIds: row.participant_ids }))
 }
 
+async function settlementChecksFor(client: Database, roundId: string) {
+  const { rows } = await client.query(`SELECT rm.user_id,rm.display_name_snapshot,
+    CASE WHEN bool_and(t.received_at IS NOT NULL) THEN max(t.received_at) ELSE NULL END AS checked_at,
+    CASE WHEN u.deleted_at IS NULL THEN u.profile_image_url ELSE NULL END AS profile_image_url
+    FROM settlement_transfers t JOIN round_members rm ON rm.round_id=t.round_id AND rm.user_id=t.receiver_id
+    JOIN users u ON u.id=rm.user_id WHERE t.round_id=$1
+    GROUP BY rm.user_id,rm.display_name_snapshot,u.deleted_at,u.profile_image_url ORDER BY rm.user_id`, [roundId])
+  return rows.map(row => ({ userId: String(row.user_id), displayName: String(row.display_name_snapshot), profileImageUrl: row.profile_image_url as string | null,
+    checkedAt: row.checked_at === null ? null : Number(row.checked_at) }))
+}
+
 function summary(row: Row): RoundSummary {
   return {
     id: row.id, groupId: row.group_id, groupName: row.group_name, name: row.name, currency: row.currency,
@@ -282,7 +293,7 @@ async function finalize(client: Database, roundId: string, currency: Currency, d
 
 export async function roundCommand(access: Identity, key: string, roundId: string, action: string, body: Record<string, unknown>) {
   onlyKeys(body, ['expectedVersion'])
-  if (!['confirm', 'reopen', 'send', 'draw', 'complete', 'cancel'].includes(action)) throw missing()
+  if (!['confirm', 'reopen', 'send', 'draw', 'complete', 'force-complete', 'cancel'].includes(action)) throw missing()
   return domainMutation(access, key, `round.${action}`, { roundId, ...body }, async (client, userId) => {
     const round = await roundFor(client, roundId, userId)
     creator(round)
@@ -310,9 +321,13 @@ export async function roundCommand(access: Identity, key: string, roundId: strin
     } else if (action === 'draw') {
       state(round, 'LOCKED')
       await finalize(client, roundId, round.currency as Currency, true)
-    } else if (action === 'complete') {
+    } else if (action === 'complete' || action === 'force-complete') {
       state(round, 'LOCKED')
       if (round.finalized_at === null) throw new AppError(409, 'invalid_round_state', '나머지 배분을 먼저 완료해 주세요')
+      if (action === 'complete') {
+        const { rows } = await client.query('SELECT count(*)::int AS count FROM settlement_transfers WHERE round_id=$1 AND received_at IS NULL', [roundId])
+        if (rows[0].count) throw new AppError(409, 'pending_settlement_checks', '모든 수취인이 입금을 확인한 뒤 종료할 수 있어요', { pendingCount: rows[0].count })
+      }
       await client.query("UPDATE rounds SET status='COMPLETED',completed_at=$2 WHERE id=$1", [roundId, now])
     } else {
       state(round, 'RECORDING')
@@ -323,10 +338,32 @@ export async function roundCommand(access: Identity, key: string, roundId: strin
   })
 }
 
+export async function setSettlementCheck(access: Identity, key: string, roundId: string, body: Record<string, unknown>) {
+  onlyKeys(body, ['expectedVersion', 'checked', 'senderId'])
+  if (typeof body.checked !== 'boolean') badInput('invalid_input', '정산 확인 여부를 선택해 주세요')
+  if (body.senderId !== undefined && (typeof body.senderId !== 'string' || body.senderId !== body.senderId.trim() || !/^[\w-]{1,128}$/.test(body.senderId))) badInput('invalid_input', '확인할 송금자를 다시 선택해 주세요')
+  const senderId = body.senderId as string | undefined
+  return domainMutation(access, key, 'settlement.check', { roundId, ...body }, async (client, userId) => {
+    const round = await roundFor(client, roundId, userId)
+    version(round, body.expectedVersion)
+    state(round, 'LOCKED')
+    if (round.finalized_at === null) throw new AppError(409, 'invalid_round_state', '최종 금액이 정해진 뒤 확인할 수 있어요')
+    const { rowCount } = await client.query(`UPDATE settlement_transfers SET received_at=CASE
+      WHEN $4 THEN COALESCE(received_at,$5) ELSE NULL END
+      WHERE round_id=$1 AND receiver_id=$2 AND ($3::text IS NULL OR sender_id=$3)`, [roundId, userId, senderId ?? null, body.checked, nowSeconds()])
+    if (!rowCount) throw new AppError(403, 'forbidden', '확인할 수 있는 수취 내역이 없어요')
+    return { id: roundId, roundId, status: round.status, version: round.version }
+  })
+}
+
 export async function getSettlement(access: Identity, roundId: string): Promise<SettlementDTO> {
   return withReadTransaction(async client => {
     const account = await requireAccount(client, access), round = await roundFor(client, roundId, account.id)
-    const result: SettlementDTO = { roundId, name: round.name, groupName: round.group_name, status: round.status, version: round.version, isCreator: round.is_creator, finalized: round.finalized_at !== null, currency: round.currency, balanceMinor: null, outgoing: [], incoming: [], sharePath: null }
+    const checks = await settlementChecksFor(client, roundId), viewerCheck = checks.find(member => member.userId === account.id)
+    const checkedCount = checks.filter(member => member.checkedAt !== null).length
+    const result: SettlementDTO = { roundId, name: round.name, groupName: round.group_name, status: round.status, version: round.version, isCreator: round.is_creator, finalized: round.finalized_at !== null, currency: round.currency, balanceMinor: null,
+      checkedAt: viewerCheck?.checkedAt ?? null, checkRequired: Boolean(viewerCheck), checkedCount, requiredCount: checks.length, allChecked: checkedCount === checks.length,
+      confirmations: checks, outgoing: [], incoming: [], sharePath: null }
     if (!result.finalized) return result
     const { rows: balances } = await client.query('SELECT balance_minor FROM settlement_balances WHERE round_id=$1 AND user_id=$2', [roundId, account.id])
     result.balanceMinor = balances[0]?.balance_minor ?? '0'
@@ -336,14 +373,15 @@ export async function getSettlement(access: Identity, roundId: string): Promise<
     const { rows: outgoing } = await client.query(`SELECT t.receiver_id,t.amount_minor,m.display_name_snapshot,
       CASE WHEN u.deleted_at IS NULL THEN u.profile_image_url ELSE NULL END AS profile_image_url${bankFields} FROM settlement_transfers t
       JOIN round_members m ON m.round_id=t.round_id AND m.user_id=t.receiver_id JOIN users u ON u.id=t.receiver_id
-      WHERE t.round_id=$1 AND t.sender_id=$2 ORDER BY t.receiver_id`, [roundId, account.id])
-    const { rows: incoming } = await client.query(`SELECT t.sender_id,t.amount_minor,m.display_name_snapshot,
+      WHERE t.round_id=$1 AND t.sender_id=$2 AND t.received_at IS NULL ORDER BY t.receiver_id`, [roundId, account.id])
+    const { rows: incoming } = await client.query(`SELECT t.sender_id,t.amount_minor,t.received_at,m.display_name_snapshot,
       CASE WHEN u.deleted_at IS NULL THEN u.profile_image_url ELSE NULL END AS profile_image_url FROM settlement_transfers t
       JOIN round_members m ON m.round_id=t.round_id AND m.user_id=t.sender_id JOIN users u ON u.id=t.sender_id
       WHERE t.round_id=$1 AND t.receiver_id=$2 ORDER BY t.sender_id`, [roundId, account.id])
     result.outgoing = outgoing.map(row => ({ receiverId: row.receiver_id, displayName: row.display_name_snapshot, profileImageUrl: row.profile_image_url, amountMinor: row.amount_minor,
       ...(round.currency === 'KRW' ? { account: { bankName: row.bank_name, accountNumber: row.account_number, accountHolder: row.account_holder } } : {}) }))
-    result.incoming = incoming.map(row => ({ senderId: row.sender_id, displayName: row.display_name_snapshot, profileImageUrl: row.profile_image_url, amountMinor: row.amount_minor }))
+    result.incoming = incoming.map(row => ({ senderId: row.sender_id, displayName: row.display_name_snapshot, profileImageUrl: row.profile_image_url, amountMinor: row.amount_minor,
+      receivedAt: row.received_at === null ? null : Number(row.received_at) }))
     return result
   })
 }

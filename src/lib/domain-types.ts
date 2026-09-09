@@ -31,6 +31,8 @@ export type MutationResult = { id: string; roundId?: string; status?: RoundStatu
 export type SettlementDTO = {
   roundId: string; name: string; groupName: string; status: RoundStatus; version: number; isCreator: boolean;
   finalized: boolean; currency: Currency; balanceMinor: string | null; sharePath: string | null;
+  checkedAt: number | null; checkRequired: boolean; checkedCount: number; requiredCount: number; allChecked: boolean;
+  confirmations: { userId: string; displayName: string; profileImageUrl: string | null; checkedAt: number | null }[];
   outgoing: { receiverId: string; displayName: string; profileImageUrl: string | null; amountMinor: string; account?: { bankName: string | null; accountNumber: string | null; accountHolder: string | null } }[];
-  incoming: { senderId: string; displayName: string; profileImageUrl: string | null; amountMinor: string }[]
+  incoming: { senderId: string; displayName: string; profileImageUrl: string | null; amountMinor: string; receivedAt: number | null }[]
 }

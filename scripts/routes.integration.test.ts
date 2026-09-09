@@ -125,6 +125,7 @@ test('Route Handler contracts enforce cookies, origin, idempotency, normalized i
     const confirmed = (await (await request(`rounds/${roundId}/confirm`, a.accessToken, 'POST', { expectedVersion: largeReceipt.version })).json()).data
     const sent = await request(`rounds/${roundId}/send`, a.accessToken, 'POST', { expectedVersion: confirmed.version })
     assert.equal(sent.status, 200)
+    const locked = (await sent.json()).data
     const settlement = await request(`rounds/${roundId}/settlement?userId=${b.userId}`, a.accessToken)
     assert.equal(settlement.headers.get('cache-control'), 'private, no-store')
     const result = (await settlement.json()).data
@@ -133,6 +134,12 @@ test('Route Handler contracts enforce cookies, origin, idempotency, normalized i
     assert.equal(result.outgoing[0].account.accountNumber, '0001234')
     assert.equal(result.incoming.length, 0)
     assert.equal(result.sharePath, `/settlements/${roundId}`)
+    assert.equal((await request(`rounds/${roundId}/settlement-check`, a.accessToken, 'POST', { expectedVersion: locked.version, checked: 'yes' })).status, 400)
+    assert.equal((await request(`rounds/${roundId}/settlement-check`, a.accessToken, 'POST', { expectedVersion: locked.version, checked: true })).status, 403)
+    assert.equal((await request(`rounds/${roundId}/settlement-check`, b.accessToken, 'POST', { expectedVersion: locked.version, checked: true, senderId: a.userId })).status, 200)
+    const checked = (await (await request(`rounds/${roundId}/settlement`, a.accessToken)).json()).data
+    assert.deepEqual({ checkedCount: checked.checkedCount, requiredCount: checked.requiredCount, allChecked: checked.allChecked }, { checkedCount: 1, requiredCount: 1, allChecked: true })
+    assert.equal((await request(`rounds/${roundId}/complete`, a.accessToken, 'POST', { expectedVersion: locked.version })).status, 200)
     assert.equal((await request('unknown/endpoint', a.accessToken)).status, 404)
   } finally { await client.end() }
 })

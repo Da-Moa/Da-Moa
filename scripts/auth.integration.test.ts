@@ -48,9 +48,11 @@ async function assertCurrencyUpgrade(client: ReturnType<typeof createDatabaseCli
       await client.query(await readFile(new URL(`./migrations/${version}`, import.meta.url), 'utf8'))
       await client.query('INSERT INTO schema_migrations(version,applied_at) VALUES($1,1)', [version])
     }
-    const userId = randomUUID(), sessionId = randomUUID(), now = currentTimestamp()
+    const userId = randomUUID(), legacyMemberId = randomUUID(), sessionId = randomUUID(), now = currentTimestamp()
     await client.query(`INSERT INTO users(id,provider,provider_subject,created_at,updated_at,bank_name,account_number,account_holder,bank_updated_at,onboarding_completed_at)
       VALUES($1,'kakao',$1,$2,$2,'기존 은행','001234','기존 회원',$2,$2)`, [userId, now])
+    await client.query(`INSERT INTO users(id,provider,provider_subject,created_at,updated_at,bank_name,account_number,account_holder,bank_updated_at,onboarding_completed_at)
+      VALUES($1,'kakao',$1,$2,$2,'기존 은행','005678','기존 참여자',$2,$2)`, [legacyMemberId, now])
     await client.query(`INSERT INTO refresh_sessions(id,user_id,token_hash,issued_at,expires_at,purpose)
       VALUES($1,$2,$3,$4,$5,'app')`, [sessionId, userId, hashRefreshToken(sessionId), now, now + 1000])
     for (const currency of ['KRW', 'USD', 'JPY']) {
@@ -59,9 +61,21 @@ async function assertCurrencyUpgrade(client: ReturnType<typeof createDatabaseCli
       await client.query('INSERT INTO group_members(group_id,user_id,joined_at) VALUES($1,$2,$3)', [groupId, userId, now])
       await client.query("INSERT INTO rounds(id,group_id,name,currency,status,created_at) VALUES($1,$2,'기존 회차',$3,'RECORDING',$4)", [roundId, groupId, currency, now])
       await client.query("INSERT INTO round_members(round_id,user_id,display_name_snapshot,joined_at) VALUES($1,$2,'기존 회원',$3)", [roundId, userId, now])
+      if (currency === 'KRW') {
+        await client.query('INSERT INTO group_members(group_id,user_id,joined_at) VALUES($1,$2,$3)', [groupId, legacyMemberId, now])
+        await client.query("INSERT INTO round_members(round_id,user_id,display_name_snapshot,joined_at) VALUES($1,$2,'기존 참여자',$3)", [roundId, legacyMemberId, now])
+        await client.query("UPDATE rounds SET status='COMPLETED',confirmed_at=$2,locked_at=$2,finalized_at=$2,completed_at=$2 WHERE id=$1", [roundId, now])
+        await client.query('INSERT INTO settlement_transfers(round_id,sender_id,receiver_id,amount_minor) VALUES($1,$2,$3,1)', [roundId, legacyMemberId, userId])
+      }
     }
     const beforeRounds = (await client.query('SELECT * FROM rounds ORDER BY id')).rows
     const beforeSession = (await client.query('SELECT * FROM refresh_sessions WHERE id=$1', [sessionId])).rows
+    for (const version of ['004-round-currency.sql', '005-round-creator.sql', '006-receipt-avif.sql', '007-settlement-check.sql']) {
+      await client.query(await readFile(new URL(`./migrations/${version}`, import.meta.url), 'utf8'))
+      await client.query('INSERT INTO schema_migrations(version,applied_at) VALUES($1,1)', [version])
+    }
+    assert.equal((await client.query(`SELECT count(*)::int AS count FROM round_members rm JOIN rounds r ON r.id=rm.round_id
+      WHERE r.status='COMPLETED' AND rm.settlement_checked_at=r.completed_at`)).rows[0].count, 2, '007 must persist its receiver-level state before 008 runs later')
     await applyMigrations(client)
     const upgradedRounds = (await client.query('SELECT * FROM rounds ORDER BY id')).rows
     assert.deepEqual(upgradedRounds.map(({ creator_id: _, ...round }) => round), beforeRounds, '004 and 005 must preserve every existing round and its currency')
@@ -70,6 +84,11 @@ async function assertCurrencyUpgrade(client: ReturnType<typeof createDatabaseCli
     assert.equal((await client.query("SELECT 1 FROM information_schema.columns WHERE table_schema=$1 AND table_name='groups' AND column_name='base_currency'", [schema])).rowCount, 0)
     assert.equal((await client.query("SELECT 1 FROM schema_migrations WHERE version='004-round-currency.sql'")).rowCount, 1)
     assert.equal((await client.query("SELECT 1 FROM schema_migrations WHERE version='005-round-creator.sql'")).rowCount, 1)
+    assert.equal((await client.query("SELECT 1 FROM information_schema.columns WHERE table_schema=$1 AND table_name='round_members' AND column_name='settlement_checked_at'", [schema])).rowCount, 0)
+    assert.equal((await client.query("SELECT 1 FROM information_schema.columns WHERE table_schema=$1 AND table_name='settlement_transfers' AND column_name='received_at'", [schema])).rowCount, 1)
+    assert.equal((await client.query("SELECT 1 FROM schema_migrations WHERE version='007-settlement-check.sql'")).rowCount, 1)
+    assert.equal((await client.query("SELECT 1 FROM schema_migrations WHERE version='008-transfer-receipt-check.sql'")).rowCount, 1)
+    assert.equal((await client.query('SELECT count(*)::int AS count FROM settlement_transfers t JOIN rounds r ON r.id=t.round_id WHERE r.status=\'COMPLETED\' AND t.received_at=r.completed_at')).rows[0].count, 1)
   } finally {
     await client.query('SET search_path TO public')
     await client.query(`DROP SCHEMA ${schema} CASCADE`)

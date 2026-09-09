@@ -6,7 +6,7 @@ import { readAccessToken, type AccessToken } from '../src/lib/auth.ts'
 import { completeOnboarding, signInKakao, updateBankAccount, withdrawAccount } from '../src/lib/auth-store.ts'
 import { createDatabaseClient } from '../src/lib/db.ts'
 import { acceptInvite, createGroup, createInvite, getGroup, getInvite, leaveGroup, listGroups } from '../src/lib/group-store.ts'
-import { addReceipt, checkExclusion, createRound, deleteExpense, excludeMember, getReceipt, getRound, getSettlement, listRounds, removeReceipt, roundCommand, saveExpense } from '../src/lib/round-store.ts'
+import { addReceipt, checkExclusion, createRound, deleteExpense, excludeMember, getReceipt, getRound, getSettlement, listRounds, removeReceipt, roundCommand, saveExpense, setSettlementCheck } from '../src/lib/round-store.ts'
 import type { MutationResult } from '../src/lib/domain-types.ts'
 import { applyMigrations } from './migrations.mjs'
 
@@ -110,7 +110,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       await assert.rejects(leaveGroup(b, key(), leaving.id), code('unfinished_rounds'))
       await assert.rejects(leaveGroup(a, key(), leaving.id), code('unfinished_group_rounds'))
       await saveExpense(a, key(), past.id, { description: '완료할 지출', amount: '2', payerId: a.userId, splitMode: 'ALL', expectedVersion: 1 })
-      for (const action of ['confirm', 'send', 'complete']) await roundCommand(a, key(), past.id, action, { expectedVersion: (await getRound(a, past.id, query())).version })
+      for (const action of ['confirm', 'send', 'force-complete']) await roundCommand(a, key(), past.id, action, { expectedVersion: (await getRound(a, past.id, query())).version })
       await leaveGroup(b, key(), leaving.id)
       await assert.rejects(getGroup(b, leaving.id), code('not_found'))
       assert.equal((await listGroups(b, query())).items.some(group => group.id === leaving.id), false)
@@ -171,7 +171,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       for (const [viewer, detail] of [[a.userId, detailA], [b.userId, detailB], [c.userId, detailC]] as const) {
         assert.ok(detail.transfers.every(row => row.senderId === viewer || row.receiverId === viewer))
       }
-      await command(r.id, 'complete')
+      await command(r.id, 'force-complete')
       for (const action of ['reopen', 'cancel', 'confirm', 'send']) await assert.rejects(command(r.id, action), code('invalid_round_state'))
       await updateBankAccount(b, key(), { bankName: '최신 은행', accountNumber: '00009999', accountHolder: 'B 최신' })
       const newest = await getSettlement(a, r.id)
@@ -193,8 +193,63 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       const result = await getSettlement(b, r.id)
       assert.equal(result.balanceMinor, '-6000')
       assert.deepEqual(result.incoming.map(x => x.amountMinor), ['3000', '3000'])
+      assert.equal(result.checkRequired, true, 'an excluded payer with receivables must still confirm')
+      assert.equal(result.requiredCount, 1)
+      assert.deepEqual(result.confirmations.map(member => ({ userId: member.userId, checkedAt: member.checkedAt })), [{ userId: b.userId, checkedAt: null }])
+      assert.ok(result.incoming.every(transfer => transfer.receivedAt === null))
+      await assert.rejects(command(r.id, 'complete'), code('pending_settlement_checks'))
+      const [first, second] = result.incoming
+      const firstSender = first.senderId === a.userId ? a : c
+      assert.equal((await getSettlement(firstSender, r.id)).outgoing.some(transfer => transfer.receiverId === b.userId), true)
+      const firstCheck = await setSettlementCheck(b, key(), r.id, { expectedVersion: result.version, checked: true, senderId: first.senderId })
+      assert.equal(firstCheck.version, result.version, 'checks must not bump the round version')
+      const partial = await getSettlement(b, r.id)
+      assert.notEqual(partial.incoming.find(transfer => transfer.senderId === first.senderId)?.receivedAt, null)
+      assert.equal(partial.incoming.find(transfer => transfer.senderId === second.senderId)?.receivedAt, null)
+      assert.equal(partial.confirmations[0].checkedAt, null, 'a receiver remains pending until every incoming transfer is checked')
+      assert.equal((await getSettlement(firstSender, r.id)).outgoing.some(transfer => transfer.receiverId === b.userId), false)
+      await setSettlementCheck(b, key(), r.id, { expectedVersion: result.version, checked: false, senderId: first.senderId })
+      assert.equal((await getSettlement(firstSender, r.id)).outgoing.some(transfer => transfer.receiverId === b.userId), true)
+      await setSettlementCheck(b, key(), r.id, { expectedVersion: result.version, checked: true, senderId: first.senderId })
+      await setSettlementCheck(b, key(), r.id, { expectedVersion: result.version, checked: true, senderId: second.senderId })
+      const confirmed = await getSettlement(a, r.id)
+      assert.equal(confirmed.checkedCount, 1)
+      assert.equal(confirmed.allChecked, true)
       await command(r.id, 'complete')
+      assert.ok((await getSettlement(a, r.id)).confirmations.every(member => member.checkedAt !== null), 'completed rounds preserve every check')
       assert.equal((await listRounds(b, query())).items.some(x => x.id === r.id), true)
+    })
+
+    await t.test('participants toggle their own check and only the creator can force completion', async () => {
+      const r = await round([a, b, c])
+      await expense(r.id, a, a.userId, '3000')
+      await command(r.id, 'confirm'); await command(r.id, 'send')
+      const initial = await getSettlement(a, r.id)
+      assert.deepEqual({ checkedAt: initial.checkedAt, checkRequired: initial.checkRequired, checkedCount: initial.checkedCount, requiredCount: initial.requiredCount, allChecked: initial.allChecked },
+        { checkedAt: null, checkRequired: true, checkedCount: 0, requiredCount: 1, allChecked: false })
+      await assert.rejects(setSettlementCheck(outsider, key(), r.id, { expectedVersion: initial.version, checked: true }), code('not_found'))
+      await assert.rejects(setSettlementCheck(a, key(), r.id, { expectedVersion: initial.version, checked: true, senderId: outsider.userId }), code('forbidden'))
+      const requestKey = key()
+      await setSettlementCheck(a, requestKey, r.id, { expectedVersion: initial.version, checked: true })
+      const checkedAt = (await getSettlement(a, r.id)).checkedAt
+      await setSettlementCheck(a, requestKey, r.id, { expectedVersion: initial.version, checked: true })
+      await setSettlementCheck(a, key(), r.id, { expectedVersion: initial.version, checked: true })
+      assert.equal((await getSettlement(a, r.id)).checkedAt, checkedAt, 'repeated checks must preserve the first timestamp')
+      await setSettlementCheck(a, key(), r.id, { expectedVersion: initial.version, checked: false })
+      assert.equal((await getSettlement(a, r.id)).checkedAt, null)
+      await assert.rejects(roundCommand(b, key(), r.id, 'force-complete', { expectedVersion: initial.version }), code('forbidden'))
+      await roundCommand(a, key(), r.id, 'force-complete', { expectedVersion: initial.version })
+      await assert.rejects(setSettlementCheck(a, key(), r.id, { expectedVersion: initial.version + 1, checked: true }), code('invalid_round_state'))
+      const forced = await getSettlement(a, r.id)
+      assert.equal(forced.allChecked, false)
+      assert.ok(forced.confirmations.every(member => member.checkedAt === null), 'forced completion preserves pending confirmations')
+
+      const zero = await round([a, b])
+      await expense(zero.id, a, a.userId, '100', [a.userId])
+      await command(zero.id, 'confirm'); await command(zero.id, 'send')
+      const noTransfers = await getSettlement(a, zero.id)
+      assert.deepEqual({ requiredCount: noTransfers.requiredCount, allChecked: noTransfers.allChecked, confirmations: noTransfers.confirmations }, { requiredCount: 0, allChecked: true, confirmations: [] })
+      await command(zero.id, 'complete')
     })
 
     await t.test('creator, payer-burden and selected burden exclusions block atomically; ALL recalculates', async () => {
@@ -212,7 +267,12 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       const after = await get(r.id)
       assert.equal(after.expenses.find(e => e.id === e1.id)!.participantIds.length, 3)
       assert.equal(after.expenses[0].participantIds.includes(c.userId), false)
-      await command(r.id, 'confirm'); await command(r.id, 'send'); await command(r.id, 'complete')
+      await command(r.id, 'confirm'); await command(r.id, 'send')
+      const excludedSettlement = await getSettlement(c, r.id)
+      assert.equal(excludedSettlement.checkRequired, false)
+      assert.equal(excludedSettlement.requiredCount, 1)
+      await assert.rejects(setSettlementCheck(c, key(), r.id, { expectedVersion: excludedSettlement.version, checked: true }), code('forbidden'))
+      await command(r.id, 'force-complete')
       const two = await round([a, c])
       await assert.rejects(excludeMember(a, key(), two.id, c.userId, { expectedVersion: 1 }), code('minimum_participants'))
       await command(two.id, 'cancel')
@@ -271,6 +331,8 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       await command(r.id, 'confirm'); await command(r.id, 'send')
       const pending = await getSettlement(a, r.id)
       assert.equal(pending.finalized, false); assert.equal(pending.sharePath, null); assert.equal(pending.balanceMinor, null)
+      assert.equal(pending.confirmations.length, 0, 'confirmation targets are derived only after transfers are finalized')
+      assert.equal(pending.allChecked, true)
       await assert.rejects(command(r.id, 'complete'), code('invalid_round_state'))
       // Fail after final shares/balances have been written to prove the whole transaction rolls back.
       const suffix = key().replaceAll('-', ''), fn = `fail_${suffix}`, trigger = `trip_${suffix}`
@@ -295,7 +357,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       const before = await getSettlement(a, r.id)
       await roundCommand(a, drawKey, r.id, 'draw', drawBody)
       assert.deepEqual(await getSettlement(a, r.id), before)
-      await command(r.id, 'complete')
+      await command(r.id, 'force-complete')
     })
 
     await t.test('racing edits/confirm and cancel/confirm cannot both commit, snapshots and pages stay coherent', async () => {
@@ -388,7 +450,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
         assert.equal('account' in s.outgoing[0], currency === 'KRW')
         assert.ok(s.balanceMinor)
         settled.push({ id: r.id, currency, balanceMinor: s.balanceMinor })
-        await command(r.id, 'complete')
+        await command(r.id, 'force-complete')
         await assert.rejects(saveExpense(a, key(), r.id, { amount: '2', expectedVersion: (await get(r.id)).version }, e.id), code('invalid_round_state'))
       }
       for (const previous of settled) {
@@ -411,13 +473,17 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       await acceptInvite(departed, key(), profileInvite.sharePath!.split('/').at(-1)!)
       const r = await createRound(a, key(), profileGroup.id, { name: '프로필 회차', currency: 'KRW', participantIds: [a.userId, departed.userId] })
       await expense(r.id, a, departed.userId, '2000')
-      await command(r.id, 'confirm'); await command(r.id, 'send'); await command(r.id, 'complete')
+      await command(r.id, 'confirm'); await command(r.id, 'send'); await command(r.id, 'force-complete')
 
       assert.equal((await get(r.id)).members.find(member => member.userId === departed.userId)?.profileImageUrl, profileImageUrl)
-      assert.equal((await getSettlement(a, r.id)).outgoing[0].profileImageUrl, profileImageUrl)
+      const activeSettlement = await getSettlement(a, r.id)
+      assert.equal(activeSettlement.outgoing[0].profileImageUrl, profileImageUrl)
+      assert.equal(activeSettlement.confirmations.find(member => member.userId === departed.userId)?.profileImageUrl, profileImageUrl)
       await withdrawAccount(departed)
       assert.equal((await get(r.id)).members.find(member => member.userId === departed.userId)?.profileImageUrl, null)
-      assert.equal((await getSettlement(a, r.id)).outgoing[0].profileImageUrl, null)
+      const deletedSettlement = await getSettlement(a, r.id)
+      assert.equal(deletedSettlement.outgoing[0].profileImageUrl, null)
+      assert.equal(deletedSettlement.confirmations.find(member => member.userId === departed.userId)?.profileImageUrl, null)
       await signInKakao(subject, { displayName: '재가입 전 프로필', email: null, profileImageUrl: 'https://profiles.example.test/changed.png' })
       assert.equal((await getSettlement(a, r.id)).outgoing[0].profileImageUrl, null)
     })

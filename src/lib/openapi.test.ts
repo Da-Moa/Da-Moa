@@ -47,7 +47,8 @@ test('every group, expense and settlement endpoint has documented authorization 
     ['/api/rounds/{roundId}/expenses/{expenseId}/receipts', 'post'],
     ['/api/rounds/{roundId}/expenses/{expenseId}/receipts/{receiptId}', 'delete'],
     ['/api/rounds/{roundId}/members/{userId}/exclude', 'post'],
-    ...['confirm', 'reopen', 'send', 'draw', 'complete'].map(command => [`/api/rounds/{roundId}/${command}`, 'post']),
+    ['/api/rounds/{roundId}/settlement-check', 'post'],
+    ...['confirm', 'reopen', 'send', 'draw', 'complete', 'force-complete'].map(command => [`/api/rounds/{roundId}/${command}`, 'post']),
     ['/api/rounds/{roundId}', 'delete'],
   ]
   for (const [path, method] of mutations) {
@@ -86,6 +87,13 @@ test('OpenAPI component references resolve and financial privacy rules remain ex
   check(document)
   assert.match(paths['/api/rounds/{roundId}/settlement'].get.description, /본인이 지급할 수취인의 최신 계좌/)
   assert.match(paths['/api/rounds/{roundId}/settlement'].get.description, /USD·JPY와 수취 내역에는 계좌 필드가 없습니다/)
+  assert.match(paths['/api/rounds/{roundId}/settlement'].get.description, /각 수취 건의 확인 시각/)
+  assert.ok((openApiDocument.components.schemas.Settlement as DocumentedSchema).required?.includes('confirmations'))
+  assert.deepEqual((openApiDocument.components.schemas.SettlementConfirmation as DocumentedSchema).required, ['userId', 'displayName', 'profileImageUrl', 'checkedAt'])
+  assert.ok((openApiDocument.components.schemas.IncomingTransfer as DocumentedSchema).required?.includes('receivedAt'))
+  const checkInput = paths['/api/rounds/{roundId}/settlement-check'].post.requestBody!.content['application/json'].schema as DocumentedSchema
+  assert.deepEqual(checkInput.required, ['expectedVersion', 'checked'])
+  assert.ok(checkInput.properties?.senderId)
   assert.match(paths['/api/auth/withdraw'].post.description, /deletedAt/)
   assert.match(paths['/api/rounds/{roundId}/send'].post.description, /실제 메시지를 전송하지 않습니다/)
   assert.equal(openApiDocument.components.schemas.MinorAmount.type, 'string')

@@ -4,7 +4,7 @@ import { AppError, errorResponse } from '../../../lib/errors'
 import { acceptInvite, createGroup, createInvite, getGroup, getInvite, leaveGroup, listGroups, revokeInvite } from '../../../lib/group-store'
 import { readJsonBody as jsonBody } from '../../../lib/http'
 import { captureGroupAudience, captureRoundAudience, createRealtimeToken, publishGroupInvalidation, publishRoundInvalidation, realtimeEnabled, type RoundAudience } from '../../../lib/realtime-server'
-import { addReceipt, checkExclusion, createRound, deleteExpense, excludeMember, getReceipt, getRound, getSettlement, listRounds, removeReceipt, roundCommand, saveExpense } from '../../../lib/round-store'
+import { addReceipt, checkExclusion, createRound, deleteExpense, excludeMember, getReceipt, getRound, getSettlement, listRounds, removeReceipt, roundCommand, saveExpense, setSettlementCheck } from '../../../lib/round-store'
 
 export const runtime = 'nodejs'
 
@@ -39,8 +39,9 @@ async function handle(request: NextRequest, context: { params: Promise<{ path: s
     else if (path[0] === 'rounds' && path.length === 2 && method === 'GET') data = await getRound(access, path[1], query)
     else if (path[0] === 'rounds' && path.length === 2 && method === 'DELETE') data = await roundCommand(access, key, path[1], 'cancel', await jsonBody(request))
     else if (path[0] === 'rounds' && path.length === 3 && path[2] === 'settlement' && method === 'GET') data = await getSettlement(access, path[1])
+    else if (path[0] === 'rounds' && path.length === 3 && path[2] === 'settlement-check' && method === 'POST') data = await setSettlementCheck(access, key, path[1], await jsonBody(request))
     else if (path[0] === 'rounds' && path.length === 3 && path[2] === 'expenses' && method === 'POST') data = await saveExpense(access, key, path[1], await jsonBody(request))
-    else if (path[0] === 'rounds' && path.length === 3 && ['confirm', 'reopen', 'send', 'draw', 'complete'].includes(path[2]) && method === 'POST') data = await roundCommand(access, key, path[1], path[2], await jsonBody(request))
+    else if (path[0] === 'rounds' && path.length === 3 && ['confirm', 'reopen', 'send', 'draw', 'complete', 'force-complete'].includes(path[2]) && method === 'POST') data = await roundCommand(access, key, path[1], path[2], await jsonBody(request))
     else if (path[0] === 'rounds' && path.length === 4 && path[2] === 'expenses' && method === 'PATCH') data = await saveExpense(access, key, path[1], await jsonBody(request), path[3])
     else if (path[0] === 'rounds' && path.length === 4 && path[2] === 'expenses' && method === 'DELETE') data = await deleteExpense(access, key, path[1], path[3], await jsonBody(request))
     else if (path[0] === 'rounds' && path.length === 5 && path[2] === 'members' && path[4] === 'exclusion-check' && method === 'GET') data = await checkExclusion(access, path[1], path[3])

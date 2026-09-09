@@ -8,7 +8,7 @@ import { completeOnboarding, signInKakao, withdrawAccount } from '../src/lib/aut
 import { createDatabaseClient } from '../src/lib/db.ts'
 import { AppError } from '../src/lib/errors.ts'
 import { acceptInvite, createGroup, createInvite } from '../src/lib/group-store.ts'
-import { addReceipt, createRound, getRound, roundCommand, saveExpense } from '../src/lib/round-store.ts'
+import { addReceipt, createRound, getRound, getSettlement, roundCommand, saveExpense, setSettlementCheck } from '../src/lib/round-store.ts'
 import { applyMigrations } from './migrations.mjs'
 
 const testUrl = process.env.TEST_DATABASE_URL
@@ -70,8 +70,51 @@ test('reopen racing send commits exactly one state transition', async () => {
   } else {
     assert.equal(current.status, 'LOCKED')
     const drawn = await roundCommand(fixture.owner, key(), fixture.roundId, 'draw', { expectedVersion: current.version })
-    await roundCommand(fixture.owner, key(), fixture.roundId, 'complete', { expectedVersion: drawn.version })
+    await roundCommand(fixture.owner, key(), fixture.roundId, 'force-complete', { expectedVersion: drawn.version })
   }
+})
+
+test('settlement checks compose concurrently and normal/forced completion cannot both commit', async () => {
+  const finalRound = async () => {
+    const fixture = await recordingRound()
+    const confirmed = await roundCommand(fixture.owner, key(), fixture.roundId, 'confirm', { expectedVersion: fixture.version })
+    const locked = await roundCommand(fixture.owner, key(), fixture.roundId, 'send', { expectedVersion: confirmed.version })
+    const finalized = await roundCommand(fixture.owner, key(), fixture.roundId, 'draw', { expectedVersion: locked.version })
+    return { ...fixture, version: finalized.version! }
+  }
+
+  const simultaneous = await group()
+  const third = await member()
+  await acceptInvite(third, key(), simultaneous.token)
+  const round = await createRound(simultaneous.owner, key(), simultaneous.groupId, { name: '복수 수취 경합', currency: 'KRW', participantIds: [simultaneous.owner.userId, simultaneous.participant.userId, third.userId] })
+  const expense = await saveExpense(simultaneous.owner, key(), round.id, { description: '복수 송금', amount: '6', payerId: simultaneous.owner.userId, splitMode: 'ALL', expectedVersion: round.version })
+  const confirmed = await roundCommand(simultaneous.owner, key(), round.id, 'confirm', { expectedVersion: expense.version })
+  const locked = await roundCommand(simultaneous.owner, key(), round.id, 'send', { expectedVersion: confirmed.version })
+  const incoming = (await getSettlement(simultaneous.owner, round.id)).incoming
+  assert.equal(incoming.length, 2)
+  const checks = await Promise.all(incoming.map(transfer => setSettlementCheck(simultaneous.owner, key(), round.id, {
+    expectedVersion: locked.version, checked: true, senderId: transfer.senderId,
+  })))
+  assert.ok(checks.every(result => result.version === locked.version))
+  const checked = await getSettlement(simultaneous.owner, round.id)
+  assert.equal(checked.confirmations.length, 1)
+  assert.ok(checked.incoming.every(transfer => transfer.receivedAt !== null))
+  const completions = await Promise.allSettled([
+    roundCommand(simultaneous.owner, key(), round.id, 'complete', { expectedVersion: locked.version }),
+    roundCommand(simultaneous.owner, key(), round.id, 'force-complete', { expectedVersion: locked.version }),
+  ])
+  assert.equal(completions.filter(result => result.status === 'fulfilled').length, 1)
+  assert.equal((await getRound(simultaneous.owner, round.id, new URLSearchParams())).version, locked.version! + 1)
+
+  const lastCheck = await finalRound()
+  const race = await Promise.allSettled([
+    setSettlementCheck(lastCheck.owner, key(), lastCheck.roundId, { expectedVersion: lastCheck.version, checked: true }),
+    roundCommand(lastCheck.owner, key(), lastCheck.roundId, 'complete', { expectedVersion: lastCheck.version }),
+  ])
+  assert.equal(race[0].status, 'fulfilled')
+  const current = await getSettlement(lastCheck.owner, lastCheck.roundId)
+  assert.equal(current.allChecked, true)
+  if (current.status === 'LOCKED') await roundCommand(lastCheck.owner, key(), lastCheck.roundId, 'complete', { expectedVersion: current.version })
 })
 
 test('round creation racing participant withdrawal never creates unfinished participation for a deleted member', async () => {
@@ -166,7 +209,7 @@ test('an upload already validated before a concurrent round lock is rejected aft
     assert.equal(current.version, fixture.version + 2)
     assert.equal(current.expenses[0].amountMinor, '3')
     const drawn = await roundCommand(fixture.owner, key(), fixture.roundId, 'draw', { expectedVersion: current.version })
-    await roundCommand(fixture.owner, key(), fixture.roundId, 'complete', { expectedVersion: drawn.version })
+    await roundCommand(fixture.owner, key(), fixture.roundId, 'force-complete', { expectedVersion: drawn.version })
   } finally {
     if (gateHeld) await gate.query('ROLLBACK').catch(() => {})
     if (upload) await upload
