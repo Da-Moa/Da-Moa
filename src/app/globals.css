@@ -290,10 +290,16 @@ select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3
 .help-text { color: #657181; font-size: 12px; line-height: 1.6; margin: 0; overflow-wrap: anywhere; }
 .eyebrow { color: #657181; font-size: 13px; overflow-wrap: anywhere; }
 .section-heading { font-size: 20px; line-height: 1.4; margin: 12px 0 0; }
-.round-list-heading { align-items: center; display: flex; gap: 12px; justify-content: space-between; margin-top: 12px; }
-.round-list-heading .section-heading { margin: 0; }
-.round-search-actions { display: flex; justify-content: flex-end; }
-.round-search-button { color: #146db0; flex: 0 0 auto; min-height: 42px; min-width: 42px; }
+.round-search-bar { align-items: center; background: #fff; border: 1px solid #ccd5df; border-radius: 14px; box-shadow: var(--control-shadow); display: flex; gap: 10px; min-height: 48px; padding: 0 14px; }
+.round-search-bar:focus-within { border-color: #5dc4fc; box-shadow: 0 0 0 2px rgba(93, 196, 252, .18); outline: 3px solid #5dc4fc; outline-offset: 3px; }
+.round-search-bar > svg { color: #657181; flex: 0 0 auto; }
+.round-search-bar input { background: transparent; border: 0; color: #191f28; min-height: 46px; min-width: 0; outline: 0; padding: 0; width: 100%; }
+.round-status-filters { display: flex; gap: 8px; overflow-x: auto; padding: 1px; scrollbar-width: none; }
+.round-status-filters::-webkit-scrollbar { display: none; }
+.round-status-filter { background: #fff; border: 1px solid var(--box-border-color); border-radius: 12px; box-shadow: var(--control-shadow); color: #526273; flex: 0 0 auto; font-size: 13px; font-weight: 700; min-height: 40px; padding: 9px 14px; }
+.round-status-filter[aria-pressed='true'] { background: #dceeff; border-color: #81b7df; color: #0d5f9c; }
+.round-status-filter[aria-pressed='true']:hover { background: #cfe6fa; }
+.round-status-filter:not([aria-pressed='true']):hover { background: #eef2f6; }
 .tab-heading.compact { padding: 10px 0 8px; }
 .tab-heading.compact h1 { font-size: 31px; overflow-wrap: anywhere; }
 .heading-status { align-items: center; display: flex; gap: 12px; justify-content: space-between; margin-top: 16px; }
