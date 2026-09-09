@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation'
 import { ArrowRight, ChevronDown, ImagePlus, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { ApiError, apiRequest } from '../../lib/api-client'
 import type { ExclusionCheck, Expense, MutationResult, Receipt, RoundDetail } from '../../lib/domain-types'
-import { formatMoney } from '../../lib/money'
+import { formatAmountInput, formatMoney } from '../../lib/money'
 import { ErrorNotice, Loading, StatusBadge, useAccount, useAction, useResource } from './ui'
 
 function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: RoundDetail; expense: Expense | null; onSaved: () => Promise<unknown>; onCancel: () => void; reload: () => Promise<unknown> }) {
@@ -17,19 +17,35 @@ function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: Rou
   const [participants, setParticipants] = useState(expense?.participantIds ?? [])
   const minor = expense?.amountMinor ?? ''
   const amount = minor && round.currency === 'USD' ? `${minor.padStart(3, '0').slice(0, -2)}.${minor.padStart(3, '0').slice(-2)}` : minor
+  const [amountInput, setAmountInput] = useState(() => formatAmountInput(amount, round.currency) ?? amount)
   async function save(form: HTMLFormElement) {
     const values = new FormData(form)
     const body = {
-      description: String(values.get('description') ?? ''), amount: String(values.get('amount') ?? ''), payerId: String(values.get('payerId') ?? ''), splitMode: mode,
+      description: String(values.get('description') ?? ''), amount: String(values.get('amount') ?? '').replace(/,/g, ''), payerId: String(values.get('payerId') ?? ''), splitMode: mode,
       ...(mode === 'SELECTED' ? { participantIds: values.getAll('participantIds').map(String) } : {}), expectedVersion: expectedVersion.current,
     }
     const result = await action.run(() => apiRequest<MutationResult>(`/api/rounds/${round.id}/expenses${expense ? `/${expense.id}` : ''}`, { method: expense ? 'PATCH' : 'POST', body }))
     if (result) await onSaved()
   }
+  function changeAmount(input: HTMLInputElement) {
+    const cursor = input.selectionStart ?? input.value.length
+    const offset = input.value.slice(0, cursor).replace(/,/g, '').length
+    const formatted = formatAmountInput(input.value, round.currency)
+    if (formatted === null) return
+    setAmountInput(formatted)
+    requestAnimationFrame(() => {
+      let position = 0, remaining = offset
+      while (position < formatted.length && remaining > 0) {
+        if (formatted[position] !== ',') remaining--
+        position++
+      }
+      if (input.isConnected) input.setSelectionRange(position, position)
+    })
+  }
   return <form className="domain-card expense-form stack" id="expense-editor" onSubmit={event => { event.preventDefault(); void save(event.currentTarget) }}>
     <h2>{expense ? '지출 수정' : '지출 기록'}</h2>
     <label className="field"><span>지출 내용</span><input autoFocus defaultValue={expense?.description ?? ''} name="description" maxLength={200} placeholder="예: 저녁 식사" required /></label>
-    <label className="field"><span>총 금액 ({round.currency})</span><input defaultValue={amount} name="amount" inputMode={round.currency === 'USD' ? 'decimal' : 'numeric'} type="text" pattern={round.currency === 'USD' ? '[0-9]+([.][0-9]{1,2})?' : '[0-9]+'} placeholder={round.currency === 'USD' ? '0.00' : '0'} required /><small>기호·쉼표 없이 입력해 주세요.</small></label>
+    <label className="field"><span>총 금액 ({round.currency})</span><input value={amountInput} onChange={event => changeAmount(event.currentTarget)} name="amount" inputMode={round.currency === 'USD' ? 'decimal' : 'numeric'} type="text" pattern={round.currency === 'USD' ? '[0-9]{1,3}(,[0-9]{3})*([.][0-9]{1,2})?' : '[0-9]{1,3}(,[0-9]{3})*'} placeholder={round.currency === 'USD' ? '0.00' : '0'} required /><small>기호·쉼표 없이 입력해 주세요.</small></label>
     <label className="field"><span>실제로 결제한 사람</span><select defaultValue={expense?.payerId ?? account.id} name="payerId" required>{round.members.filter(member => !member.excludedAt || member.userId === expense?.payerId).map(member => <option key={member.userId} value={member.userId}>{member.displayName}{member.excludedAt ? ' (제외됨 · 기존 결제 유지)' : ''}</option>)}</select></label>
     <fieldset className="member-picker"><legend>부담할 사람</legend>
       <label className="check-row"><input type="radio" name="splitMode" value="ALL" checked={mode === 'ALL'} onChange={() => setMode('ALL')} /><span>전체 참여자 균등 분배</span></label>

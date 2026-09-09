@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { formatMoney, parseAmount, requireCurrency } from './money.ts'
+import { formatAmountInput, formatMoney, parseAmount, requireCurrency } from './money.ts'
+
+test('amount input adds thousands separators while preserving partial USD decimals', () => {
+  assert.equal(formatAmountInput('1234567', 'KRW'), '1,234,567')
+  assert.equal(formatAmountInput('1,234,567', 'JPY'), '1,234,567')
+  assert.equal(formatAmountInput('9007199254740993.01', 'USD'), '9,007,199,254,740,993.01')
+  assert.equal(formatAmountInput('.5', 'USD'), null)
+  assert.equal(formatAmountInput('1.', 'USD'), '1.')
+  assert.equal(formatAmountInput('1.234', 'USD'), null)
+  assert.equal(formatAmountInput('-1', 'KRW'), null)
+})
 
 test('currency decimals and amounts beyond Number precision remain exact', () => {
   assert.equal(parseAmount('6000', 'KRW'), 6000n)

@@ -5,6 +5,24 @@ export function requireCurrency(value: unknown): Currency {
   return value
 }
 
+function groupWhole(whole: string): string {
+  const firstGroup = whole.length % 3 || 3
+  const groups = [whole.slice(0, firstGroup)]
+  for (let index = firstGroup; index < whole.length; index += 3) groups.push(whole.slice(index, index + 3))
+  return groups.join(',')
+}
+
+/** Format a valid partial amount while the user is typing, without losing precision. */
+export function formatAmountInput(value: string, currency: Currency): string | null {
+  requireCurrency(currency)
+  const plain = value.replace(/,/g, '')
+  if (!plain) return ''
+  if (!(currency === 'USD' ? /^\d+(?:\.\d{0,2})?$/.test(plain) : /^\d+$/.test(plain))) return null
+  const decimalAt = currency === 'USD' ? plain.indexOf('.') : -1
+  const wholePart = decimalAt < 0 ? plain : plain.slice(0, decimalAt)
+  return `${groupWhole(wholePart)}${decimalAt < 0 ? '' : plain.slice(decimalAt)}`
+}
+
 /** Parse an exact, positive decimal amount without passing through Number. */
 export function parseAmount(amount: unknown, currency: Currency): bigint {
   requireCurrency(currency)
@@ -26,10 +44,7 @@ export function formatMoney(amountMinor: string, currency: Currency): string {
   const absolute = (amount < 0n ? -amount : amount).toString()
   const digits = currency === 'USD' ? absolute.padStart(3, '0') : absolute
   const whole = currency === 'USD' ? digits.slice(0, -2) : digits
-  const firstGroup = whole.length % 3 || 3
-  const groups = [whole.slice(0, firstGroup)]
-  for (let index = firstGroup; index < whole.length; index += 3) groups.push(whole.slice(index, index + 3))
-  const grouped = groups.join(',')
+  const grouped = groupWhole(whole)
   if (currency === 'USD') return `${negative}$${grouped}.${digits.slice(-2)}`
   return `${negative}${grouped}${currency === 'KRW' ? '원' : '엔'}`
 }
