@@ -212,10 +212,10 @@ export default function RoundClient({ roundId }: { roundId: string }) {
     <Link className="back-link" href={data ? `/home/groups/${data.groupId}` : '/home/groups'}>← 모임으로 돌아가기</Link>
     <ErrorNotice error={resource.error} retry={() => void refresh()} />
     {!data ? resource.loading && <Loading /> : <div className="stack">
-      <section className="tab-heading compact"><p>{data.groupName}</p><h1>{data.name}</h1><div className="heading-status"><StatusBadge status={data.status} /><button className="text-button" disabled={resource.loading} onClick={() => void refresh()} type="button">새로고침</button></div></section>
+      <section className="tab-heading compact"><p>{data.groupName}</p><h1>{data.name}</h1><div className="heading-status round-heading-status"><StatusBadge status={data.status} /><button className="text-button" disabled={resource.loading} onClick={() => void refresh()} type="button">새로고침</button></div></section>
       {data.status === 'CONFIRMED' && <p className="notice">지출을 확정했어요. 수정하려면 회차 생성자가 기록 단계를 다시 열어 주세요. 전송 후에는 수정할 수 없어요.</p>}
       {(data.status === 'LOCKED' || data.status === 'COMPLETED') && <div className="notice"><p>{data.status === 'COMPLETED' ? '종료된 회차예요. 모든 정산 기록은 읽기 전용이에요.' : data.finalizedAt ? '기록이 잠겼어요. 본인의 최종 정산 안내를 확인해 주세요.' : '기록이 잠겼어요. 회차 생성자가 나머지를 한 번 추첨하면 최종 금액을 확인할 수 있어요.'}</p><Link className="primary-button" href={`/settlements/${roundId}`} prefetch={false}>내 정산 안내 보기</Link></div>}
-      <section className="domain-card"><div className="row-between"><span>전체 지출</span><strong className="large-money">{formatMoney(data.totalMinor, data.currency)}</strong></div><p className="help-text">{data.memberCount}명 참여 · {data.currency}</p></section>
+      <section className="domain-card"><div className="row-between"><div><span>전체 지출</span><p className="help-text">{data.memberCount}명 참여 · {data.currency}</p></div><strong className="large-money">{formatMoney(data.totalMinor, data.currency)}</strong></div></section>
       <section className="domain-card stack participant-section"><div><h2>회차 참여자</h2></div>
         <ul aria-label="회차 참여자" className="participant-grid">{data.members.map(member => {
           const canExclude = data.isCreator && member.excludedAt === null && member.userId !== data.creatorId && ['RECORDING', 'CONFIRMED'].includes(data.status)

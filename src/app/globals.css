@@ -290,6 +290,8 @@ select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3
 .tab-heading.compact { padding: 10px 0 8px; }
 .tab-heading.compact h1 { font-size: 31px; overflow-wrap: anywhere; }
 .heading-status { align-items: center; display: flex; gap: 12px; justify-content: space-between; margin-top: 16px; }
+.round-heading-status { transform: translateY(8px); }
+.round-heading-status .text-button { margin-right: 8px; }
 .primary-button, .secondary-button { align-items: center; border: 1px solid transparent; border-radius: 12px; box-shadow: var(--control-shadow); display: flex; font-size: 14px; font-weight: 700; gap: 6px; justify-content: center; line-height: 1.5; min-height: 46px; padding: 12px 15px; text-align: center; text-decoration: none; width: 100%; }
 .primary-button { background: #146db0; border-color: #0d5f9c; color: #fff; }
 .secondary-button { background: #eef2f6; border-color: var(--box-border-color); color: #334256; }
