@@ -59,8 +59,46 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       assert.ok(replacement.sharePath)
       await assert.rejects(createGroup(a, key(), { name: 'x'.repeat(101) }), code('invalid_input'))
       await assert.rejects(createRound(a, key(), g.id, { name: '한 명', currency: 'KRW', participantIds: [a.userId] }), code('minimum_participants'))
-      await assert.rejects(createRound(b, key(), g.id, { name: '권한 없음', currency: 'KRW', participantIds: [a.userId, b.userId] }), code('forbidden'))
+      await assert.rejects(createRound(b, key(), g.id, { name: '본인 누락', currency: 'KRW', participantIds: [a.userId, c.userId] }), code('minimum_participants'))
       await assert.rejects(createRound(a, key(), g.id, { name: '외부인', currency: 'KRW', participantIds: [a.userId, outsider.userId] }), code('invalid_participants'))
+    })
+
+    await t.test('any active member starts and manages a round they create', async () => {
+      const withoutGroupOwner = await createRound(b, key(), g.id, { name: '모임 생성자 없는 회차', currency: 'KRW', participantIds: [b.userId, c.userId] })
+      await assert.rejects(get(withoutGroupOwner.id, a), code('not_found'))
+      await assert.rejects(leaveGroup(a, key(), g.id), code('unfinished_group_rounds'))
+      await command(withoutGroupOwner.id, 'cancel', b)
+      const ownerExclusion = await createRound(b, key(), g.id, { name: '모임 생성자 제외', currency: 'KRW', participantIds: [a.userId, b.userId, c.userId] })
+      assert.equal((await checkExclusion(b, ownerExclusion.id, a.userId)).allowed, true)
+      assert.equal((await checkExclusion(b, ownerExclusion.id, b.userId)).reason, 'round_creator_cannot_leave')
+      await excludeMember(b, key(), ownerExclusion.id, a.userId, { expectedVersion: (await get(ownerExclusion.id, b)).version })
+      const membership = (await client.query(`SELECT rm.excluded_at,gm.left_at FROM round_members rm
+        JOIN rounds r ON r.id=rm.round_id
+        JOIN group_members gm ON gm.group_id=r.group_id AND gm.user_id=rm.user_id
+        WHERE rm.round_id=$1 AND rm.user_id=$2`, [ownerExclusion.id, a.userId])).rows[0]
+      assert.notEqual(membership.excluded_at, null)
+      assert.equal(membership.left_at, null)
+      assert.equal((await getGroup(b, g.id)).members.some(member => member.userId === a.userId), true)
+      const next = await createRound(b, key(), g.id, { name: '제외 후 다음 회차', currency: 'KRW', participantIds: [a.userId, b.userId] })
+      await command(next.id, 'cancel', b)
+      await command(ownerExclusion.id, 'cancel', b)
+      const r = await createRound(b, key(), g.id, { name: 'B가 시작한 회차', currency: 'KRW', participantIds: [a.userId, b.userId, c.userId] })
+      const starterView = await get(r.id, b), groupOwnerView = await get(r.id, a)
+      assert.equal(starterView.creatorId, b.userId)
+      assert.equal(starterView.groupCreatorId, a.userId)
+      assert.equal(starterView.isCreator, true)
+      assert.equal(groupOwnerView.isCreator, false)
+      await assert.rejects(roundCommand(a, key(), r.id, 'cancel', { expectedVersion: groupOwnerView.version }), code('forbidden'))
+      const saved = await expense(r.id, a, a.userId, '3000')
+      await saveExpense(b, key(), r.id, { description: '회차 생성자가 수정', amount: '6000', expectedVersion: saved.version }, saved.id)
+      assert.equal((await get(r.id, b)).expenses[0].authorId, a.userId)
+      const byC = await expense(r.id, c, c.userId, '3000')
+      await assert.rejects(saveExpense(a, key(), r.id, { description: '모임 생성자의 수정 시도', amount: '6000', expectedVersion: byC.version }, byC.id), code('forbidden'))
+      const related = await checkExclusion(b, r.id, a.userId)
+      assert.equal(related.reason, 'member_exclusion_blocked')
+      assert.equal(related.expenses[0].id, saved.id)
+      assert.equal((await checkExclusion(b, r.id, b.userId)).reason, 'round_creator_cannot_leave')
+      await command(r.id, 'cancel', b)
     })
 
     await t.test('participants leave without unfinished participation and creators close groups after every round completes', async () => {
@@ -93,7 +131,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       await assert.rejects(getInvite(d, emptyInvite.sharePath!.split('/').at(-1)!), code('not_found'))
     })
 
-    await t.test('empty rounds, author/owner edits, partial edits and immutable completed data', async () => {
+    await t.test('empty rounds, author/round-creator edits, partial edits and immutable completed data', async () => {
       const r = await round()
       await assert.rejects(command(r.id, 'confirm'), code('empty_expenses'))
       const saved = await expense(r.id, c, b.userId, '6000')
@@ -142,13 +180,13 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       assert.equal((await get(r.id)).expenses[0].amountMinor, '9000')
     })
 
-    await t.test('payer outside selected burden retains all receivables, including after exclusion and group departure', async () => {
+    await t.test('payer outside selected burden retains all receivables after round exclusion', async () => {
       const r = await round([a, b, c, d])
       await expense(r.id, c, b.userId, '6000', [a.userId, c.userId])
       const check = await checkExclusion(a, r.id, b.userId)
       assert.equal(check.allowed, true)
       await excludeMember(a, key(), r.id, b.userId, { expectedVersion: (await get(r.id)).version })
-      assert.equal((await getGroup(a, g.id)).members.some(m => m.userId === b.userId), false)
+      assert.equal((await getGroup(a, g.id)).members.some(m => m.userId === b.userId), true)
       assert.equal((await get(r.id, b)).members.find(m => m.userId === b.userId)?.excludedAt !== null, true)
       await assert.rejects(withdrawAccount(b), code('unfinished_rounds'))
       await command(r.id, 'confirm'); await command(r.id, 'send')
@@ -157,8 +195,6 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       assert.deepEqual(result.incoming.map(x => x.amountMinor), ['3000', '3000'])
       await command(r.id, 'complete')
       assert.equal((await listRounds(b, query())).items.some(x => x.id === r.id), true)
-      const reinvite = await createInvite(a, key(), g.id, {})
-      await acceptInvite(b, key(), reinvite.sharePath!.split('/').at(-1)!)
     })
 
     await t.test('creator, payer-burden and selected burden exclusions block atomically; ALL recalculates', async () => {
@@ -177,8 +213,6 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       assert.equal(after.expenses.find(e => e.id === e1.id)!.participantIds.length, 3)
       assert.equal(after.expenses[0].participantIds.includes(c.userId), false)
       await command(r.id, 'confirm'); await command(r.id, 'send'); await command(r.id, 'complete')
-      const reinvite = await createInvite(a, key(), g.id, {})
-      await acceptInvite(c, key(), reinvite.sharePath!.split('/').at(-1)!)
       const two = await round([a, c])
       await assert.rejects(excludeMember(a, key(), two.id, c.userId, { expectedVersion: 1 }), code('minimum_participants'))
       await command(two.id, 'cancel')

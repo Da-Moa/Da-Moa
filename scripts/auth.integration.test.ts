@@ -54,17 +54,22 @@ async function assertCurrencyUpgrade(client: ReturnType<typeof createDatabaseCli
     await client.query(`INSERT INTO refresh_sessions(id,user_id,token_hash,issued_at,expires_at,purpose)
       VALUES($1,$2,$3,$4,$5,'app')`, [sessionId, userId, hashRefreshToken(sessionId), now, now + 1000])
     for (const currency of ['KRW', 'USD', 'JPY']) {
-      const groupId = randomUUID()
+      const groupId = randomUUID(), roundId = randomUUID()
       await client.query('INSERT INTO groups(id,creator_id,name,base_currency,created_at) VALUES($1,$2,$3,$3,$4)', [groupId, userId, currency, now])
-      await client.query("INSERT INTO rounds(id,group_id,name,currency,status,created_at) VALUES($1,$2,'기존 회차',$3,'RECORDING',$4)", [randomUUID(), groupId, currency, now])
+      await client.query('INSERT INTO group_members(group_id,user_id,joined_at) VALUES($1,$2,$3)', [groupId, userId, now])
+      await client.query("INSERT INTO rounds(id,group_id,name,currency,status,created_at) VALUES($1,$2,'기존 회차',$3,'RECORDING',$4)", [roundId, groupId, currency, now])
+      await client.query("INSERT INTO round_members(round_id,user_id,display_name_snapshot,joined_at) VALUES($1,$2,'기존 회원',$3)", [roundId, userId, now])
     }
     const beforeRounds = (await client.query('SELECT * FROM rounds ORDER BY id')).rows
     const beforeSession = (await client.query('SELECT * FROM refresh_sessions WHERE id=$1', [sessionId])).rows
     await applyMigrations(client)
-    assert.deepEqual((await client.query('SELECT * FROM rounds ORDER BY id')).rows, beforeRounds, '004 must preserve every existing round and its currency')
+    const upgradedRounds = (await client.query('SELECT * FROM rounds ORDER BY id')).rows
+    assert.deepEqual(upgradedRounds.map(({ creator_id: _, ...round }) => round), beforeRounds, '004 and 005 must preserve every existing round and its currency')
+    assert.ok(upgradedRounds.every(round => round.creator_id === userId), '005 must assign the prior group creator to existing rounds')
     assert.deepEqual((await client.query('SELECT * FROM refresh_sessions WHERE id=$1', [sessionId])).rows, beforeSession, '004 must not revoke or replace existing app sessions')
     assert.equal((await client.query("SELECT 1 FROM information_schema.columns WHERE table_schema=$1 AND table_name='groups' AND column_name='base_currency'", [schema])).rowCount, 0)
     assert.equal((await client.query("SELECT 1 FROM schema_migrations WHERE version='004-round-currency.sql'")).rowCount, 1)
+    assert.equal((await client.query("SELECT 1 FROM schema_migrations WHERE version='005-round-creator.sql'")).rowCount, 1)
   } finally {
     await client.query('SET search_path TO public')
     await client.query(`DROP SCHEMA ${schema} CASCADE`)
@@ -128,7 +133,7 @@ test('withdrawal checks all unfinished history including excluded members; rejoi
   const now = currentTimestamp()
   await withWriteTransaction(async client => {
     for (const id of roundIds) {
-      await client.query("INSERT INTO rounds(id,group_id,name,currency,status,created_at) VALUES($1,$2,'진행 회차','KRW','RECORDING',$3)", [id, group.id, now])
+      await client.query("INSERT INTO rounds(id,group_id,creator_id,name,currency,status,created_at) VALUES($1,$2,$3,'진행 회차','KRW','RECORDING',$4)", [id, group.id, owner.session.userId, now])
       for (const userId of [owner.session.userId, participant.session.userId, third.session.userId]) {
         await client.query('INSERT INTO round_members(round_id,user_id,display_name_snapshot,joined_at,excluded_at) VALUES($1,$2,$3,$4,$5)', [id, userId, profile.displayName, now, userId === participant.session.userId ? now : null])
       }

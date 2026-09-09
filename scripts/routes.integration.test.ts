@@ -61,6 +61,14 @@ test('Route Handler contracts enforce cookies, origin, idempotency, bounded imag
       assert.equal(rejected.status, 400)
       assert.equal((await rejected.json()).error, 'unsupported_currency')
     }
+    const memberCreated = await request(`groups/${groupId}/rounds`, b.accessToken, 'POST', { name: '참여자가 만든 회차', currency: 'KRW', participantIds: [a.userId, b.userId] })
+    assert.equal(memberCreated.status, 200)
+    const memberRoundId = (await memberCreated.json()).data.id
+    const memberRound = (await (await request(`rounds/${memberRoundId}`, b.accessToken)).json()).data
+    assert.equal(memberRound.creatorId, b.userId)
+    assert.equal(memberRound.groupCreatorId, a.userId)
+    assert.equal(memberRound.isCreator, true)
+    assert.equal((await request(`rounds/${memberRoundId}`, b.accessToken, 'DELETE', { expectedVersion: 1 })).status, 200)
     const created = await request(`groups/${groupId}/rounds`, a.accessToken, 'POST', { name: 'API 회차', currency: 'KRW', participantIds: [a.userId, b.userId] })
     assert.equal(created.status, 200)
     const roundId = (await created.json()).data.id

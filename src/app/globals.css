@@ -328,8 +328,10 @@ select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3
 .participant-section > div:first-child h2 { text-wrap: balance; }
 .participant-grid, .transfer-list { list-style: none; padding: 0; }
 .participant-grid { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.participant-card { align-items: center; background: #fff; border: 1px solid var(--box-border-color); border-radius: 14px; box-shadow: var(--control-shadow); display: grid; gap: 10px; grid-template-columns: auto minmax(0, 1fr); min-width: 0; padding: 12px; }
-.participant-card > .text-button { border-top: 1px solid #e5e8eb; border-radius: 0; grid-column: 1 / -1; justify-content: flex-start; justify-self: stretch; min-height: 40px; padding-top: 10px; }
+.participant-grid > li { min-width: 0; }
+.participant-card { align-items: center; background: #fff; border: 1px solid var(--box-border-color); border-radius: 14px; box-shadow: var(--control-shadow); display: grid; gap: 10px; grid-template-columns: auto minmax(0, 1fr); height: 100%; min-width: 0; padding: 12px; width: 100%; }
+button.participant-card { appearance: none; color: inherit; text-align: left; }
+button.participant-card:not(:disabled):hover { background: #f8fbff; border-color: #9ac9ea; }
 .participant-excluded { background: #f6f7f9; color: #657181; }
 .participant-avatar { align-items: center; background: #eaf4ff; border: 1px solid #c9e1f9; border-radius: 50%; color: #146db0; display: inline-flex; flex: 0 0 auto; font-size: 15px; font-weight: 800; height: 42px; justify-content: center; width: 42px; }
 .participant-excluded .participant-avatar { background: #edf1f5; border-color: #d8dee6; color: #657181; }

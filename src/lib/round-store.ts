@@ -10,15 +10,15 @@ import type { ExclusionCheck, Expense, Member, MutationResult, RoundDetail, Roun
 type Row = Record<string, any>
 
 async function roundFor(client: Database, id: string, userId: string): Promise<Row> {
-  const { rows } = await client.query(`SELECT r.*,g.name AS group_name,g.creator_id,
-    (g.creator_id=$2 AND EXISTS(SELECT 1 FROM group_members gm WHERE gm.group_id=g.id AND gm.user_id=$2 AND gm.left_at IS NULL)) AS is_creator
+  const { rows } = await client.query(`SELECT r.*,g.name AS group_name,g.creator_id AS group_creator_id,
+    (r.creator_id=$2) AS is_creator
     FROM rounds r JOIN groups g ON g.id=r.group_id JOIN round_members m ON m.round_id=r.id AND m.user_id=$2 WHERE r.id=$1`, [id, userId])
   if (!rows[0]) throw missing()
   return rows[0]
 }
 
 function creator(round: Row) {
-  if (!round.is_creator) throw new AppError(403, 'forbidden', '모임 생성자만 할 수 있어요')
+  if (!round.is_creator) throw new AppError(403, 'forbidden', '회차 생성자만 할 수 있어요')
 }
 
 function state(round: Row, expected: RoundStatus) {
@@ -114,7 +114,7 @@ export async function getRound(access: Identity, roundId: string, query: URLSear
     transfers = transfers.filter(transfer => transfer.senderId === account.id || transfer.receiverId === account.id)
     return {
       ...summary({ ...round, ...totals[0], ...balances[0], member_count: members.filter(m => m.excludedAt === null).length }),
-      creatorId: round.creator_id, isCreator: round.is_creator, members, expenses: expenses.items, expensesNextCursor: expenses.nextCursor,
+      creatorId: round.creator_id, groupCreatorId: round.group_creator_id, isCreator: round.is_creator, members, expenses: expenses.items, expensesNextCursor: expenses.nextCursor,
       transfers, pendingRemainderMinor,
     }
   })
@@ -126,13 +126,13 @@ export async function createRound(access: Identity, key: string, groupId: string
   let currency: Currency
   try { currency = requireCurrency(body.currency) } catch { badInput('unsupported_currency', 'USD, KRW, JPY 중 선택해 주세요') }
   return domainMutation(access, key, 'round.create', { groupId, ...body }, async (client, userId) => {
-    await ownerGroup(client, groupId, userId)
-    if (ids.length < 2 || !ids.includes(userId)) throw new AppError(409, 'minimum_participants', '생성자를 포함해 최소 2명을 선택해 주세요')
+    await ownerGroup(client, groupId, userId, false)
+    if (ids.length < 2 || !ids.includes(userId)) throw new AppError(409, 'minimum_participants', '회차 생성자를 포함해 최소 2명을 선택해 주세요')
     const { rows } = await client.query(`SELECT u.id,COALESCE(u.display_name,'카카오 사용자') AS name FROM group_members m JOIN users u ON u.id=m.user_id
       WHERE m.group_id=$1 AND m.user_id=ANY($2::text[]) AND m.left_at IS NULL AND u.deleted_at IS NULL AND u.onboarding_completed_at IS NOT NULL ORDER BY u.id`, [groupId, ids])
     if (rows.length !== ids.length) badInput('invalid_participants', '현재 모임 참여자만 선택할 수 있어요')
     const id = randomUUID(), now = nowSeconds()
-    await client.query('INSERT INTO rounds(id,group_id,name,currency,status,version,created_at) VALUES($1,$2,$3,$4,\'RECORDING\',1,$5)', [id, groupId, name, currency, now])
+    await client.query('INSERT INTO rounds(id,group_id,creator_id,name,currency,status,version,created_at) VALUES($1,$2,$3,$4,$5,\'RECORDING\',1,$6)', [id, groupId, userId, name, currency, now])
     for (const member of rows) await client.query('INSERT INTO round_members(round_id,user_id,display_name_snapshot,joined_at) VALUES($1,$2,$3,$4)', [id, member.id, member.name, now])
     return { id, roundId: id, status: 'RECORDING', version: 1 }
   })
@@ -148,7 +148,7 @@ async function editable(client: Database, round: Row, userId: string, expense?: 
   state(round, 'RECORDING')
   if (round.is_creator) return
   const { rows } = await client.query('SELECT 1 FROM round_members WHERE round_id=$1 AND user_id=$2 AND excluded_at IS NULL', [round.id, userId])
-  if (!rows.length || (expense && expense.author_id !== userId)) throw new AppError(403, 'forbidden', '지출 작성자 또는 모임 생성자만 수정할 수 있어요')
+  if (!rows.length || (expense && expense.author_id !== userId)) throw new AppError(403, 'forbidden', '지출 작성자 또는 회차 생성자만 수정할 수 있어요')
 }
 
 async function expenseInput(client: Database, round: Row, body: Record<string, unknown>, previous?: Row) {
@@ -216,7 +216,7 @@ async function exclusions(client: Database, round: Row, targetId: string): Promi
     FROM expenses e JOIN expense_shares s ON s.expense_id=e.id AND s.user_id=$2
     JOIN round_members a ON a.round_id=e.round_id AND a.user_id=e.author_id
     WHERE e.round_id=$1 AND (e.payer_id=$2 OR e.split_mode='SELECTED') ORDER BY e.created_at,e.id`, [round.id, targetId])
-  const reason = round.creator_id === targetId ? 'creator_cannot_leave' : member.excludedAt !== null ? 'already_excluded' : !['RECORDING', 'CONFIRMED'].includes(round.status) ? 'invalid_round_state' : rows.length ? 'member_exclusion_blocked' : members.filter(m => m.excludedAt === null).length <= 2 ? 'minimum_participants' : null
+  const reason = round.creator_id === targetId ? 'round_creator_cannot_leave' : member.excludedAt !== null ? 'already_excluded' : !['RECORDING', 'CONFIRMED'].includes(round.status) ? 'invalid_round_state' : rows.length ? 'member_exclusion_blocked' : members.filter(m => m.excludedAt === null).length <= 2 ? 'minimum_participants' : null
   return { allowed: reason === null, reason, expenses: rows.map(e => ({ id: e.id, description: e.description, amountMinor: e.amount_minor, authorId: e.author_id, authorName: e.author_name, reason: e.reason })) }
 }
 
@@ -237,9 +237,7 @@ export async function excludeMember(access: Identity, key: string, roundId: stri
     version(round, body.expectedVersion)
     const check = await exclusions(client, round, targetId)
     if (!check.allowed) throw new AppError(409, check.reason === 'minimum_participants' ? check.reason : 'member_exclusion_blocked', check.expenses.length ? '해당 사용자와 연관된 정산이 있습니다.' : check.reason === 'minimum_participants' ? '회차는 최소 2명이어야 합니다' : '해당 사용자는 제외할 수 없어요', check)
-    const now = nowSeconds()
-    await client.query('UPDATE round_members SET excluded_at=$3 WHERE round_id=$1 AND user_id=$2', [roundId, targetId, now])
-    await client.query('UPDATE group_members SET left_at=COALESCE(left_at,$3) WHERE group_id=$1 AND user_id=$2', [round.group_id, targetId, now])
+    await client.query('UPDATE round_members SET excluded_at=$3 WHERE round_id=$1 AND user_id=$2', [roundId, targetId, nowSeconds()])
     await client.query("DELETE FROM expense_shares s USING expenses e WHERE s.expense_id=e.id AND e.round_id=$1 AND e.split_mode='ALL' AND s.user_id=$2", [roundId, targetId])
     return bump(client, roundId)
   })

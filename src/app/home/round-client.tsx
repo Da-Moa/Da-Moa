@@ -98,9 +98,9 @@ function ExpenseCard({ expense, round, canEdit, highlighted, edit, reload }: { e
 }
 
 const exclusionReason: Record<string, string> = {
-  creator_cannot_leave: '모임 생성자는 제외할 수 없어요.', already_excluded: '이미 제외된 참여자예요.',
+  round_creator_cannot_leave: '회차 생성자는 제외할 수 없어요.', already_excluded: '이미 제외된 참여자예요.',
   invalid_round_state: '기록 단계 또는 전송 전 확정 단계에서만 제외를 검토할 수 있어요.',
-  minimum_participants: '회차는 생성자를 포함해 최소 2명이 필요해요.',
+  minimum_participants: '회차는 회차 생성자를 포함해 최소 2명이 필요해요.',
   payer_and_participant: '이 사람이 결제자이면서 부담자예요. 해당 관계를 먼저 수정해 주세요.',
   selected_participant: '특정 사용자 분배의 부담자예요. 해당 기록을 먼저 수정해 주세요.',
 }
@@ -154,7 +154,7 @@ export default function RoundClient({ roundId }: { roundId: string }) {
     if (result) setCheck({ ...result, userId })
   }
   async function exclude() {
-    if (!data || !check || !window.confirm('이 회차와 모임의 다음 회차 멤버 후보에서 제외할까요? 전체 균등 분배가 다시 계산돼요. 다른 기존 회차는 유지돼요.')) return
+    if (!data || !check || !window.confirm('이 회차에서 제외할까요? 전체 균등 분배가 다시 계산돼요. 모임 참여 상태와 다른 회차는 유지돼요.')) return
     await action.run(async () => {
       try {
         await apiRequest(`/api/rounds/${roundId}/members/${check.userId}/exclude`, { method: 'POST', body: { expectedVersion: data.version } })
@@ -181,15 +181,19 @@ export default function RoundClient({ roundId }: { roundId: string }) {
   const finalized = Boolean(data && data.finalizedAt !== null)
   const hasExpenses = Boolean(data && data.totalMinor !== '0')
   return <>
-    <Link className="back-link" href="/home/history">← 내 회차 목록</Link>
+    <Link className="back-link" href={data ? `/home/groups/${data.groupId}` : '/home/groups'}>← 모임으로 돌아가기</Link>
     <ErrorNotice error={resource.error} retry={() => void refresh()} />
     {!data ? resource.loading && <Loading /> : <div className="stack">
       <section className="tab-heading compact"><p>{data.groupName} · {data.currency}</p><h1>{data.name}</h1><div className="heading-status"><StatusBadge status={data.status} /><button className="text-button" disabled={resource.loading} onClick={() => void refresh()} type="button">새로고침</button></div></section>
-      {data.status === 'CONFIRMED' && <p className="notice">지출을 확정했어요. 수정하려면 생성자가 기록 단계를 다시 열어 주세요. 전송 후에는 수정할 수 없어요.</p>}
+      {data.status === 'CONFIRMED' && <p className="notice">지출을 확정했어요. 수정하려면 회차 생성자가 기록 단계를 다시 열어 주세요. 전송 후에는 수정할 수 없어요.</p>}
       <section className="domain-card"><div className="row-between"><span>전체 지출</span><strong className="large-money">{formatMoney(data.totalMinor, data.currency)}</strong></div><p className="help-text">{data.memberCount}명 참여 · {data.currency} · 회차별 별도 정산</p></section>
-      {(data.status === 'LOCKED' || data.status === 'COMPLETED') && <div className="notice"><p>{data.status === 'COMPLETED' ? '종료된 회차예요. 모든 정산 기록은 읽기 전용이에요.' : data.finalizedAt ? '기록이 잠겼어요. 본인의 최종 정산 안내를 확인해 주세요.' : '기록이 잠겼어요. 생성자가 나머지를 한 번 추첨하면 최종 금액을 확인할 수 있어요.'}</p><Link className="primary-button" href={`/settlements/${roundId}`} prefetch={false}>내 정산 안내 보기</Link></div>}
+      {(data.status === 'LOCKED' || data.status === 'COMPLETED') && <div className="notice"><p>{data.status === 'COMPLETED' ? '종료된 회차예요. 모든 정산 기록은 읽기 전용이에요.' : data.finalizedAt ? '기록이 잠겼어요. 본인의 최종 정산 안내를 확인해 주세요.' : '기록이 잠겼어요. 회차 생성자가 나머지를 한 번 추첨하면 최종 금액을 확인할 수 있어요.'}</p><Link className="primary-button" href={`/settlements/${roundId}`} prefetch={false}>내 정산 안내 보기</Link></div>}
       <section className="domain-card stack participant-section"><div><h2>회차 참여자</h2><p className="help-text">참여자와 나의 현재 송금 흐름을 한눈에 확인하세요.</p></div>
-        <ul aria-label="회차 참여자" className="participant-grid">{data.members.map(member => <li className={`participant-card${member.excludedAt !== null ? ' participant-excluded' : ''}`} key={member.userId}><ParticipantAvatar name={member.displayName} /><span className="participant-name"><strong>{member.displayName}{member.userId === account.id ? ' (나)' : ''}</strong><span>{member.userId === data.creatorId && <small className="subtle-tag">생성자</small>}{member.excludedAt !== null && <small className="subtle-tag">제외됨 · 기록 보존</small>}</span></span>{data.isCreator && member.excludedAt === null && member.userId !== data.creatorId && ['RECORDING', 'CONFIRMED'].includes(data.status) && <button aria-haspopup="dialog" aria-label={`${member.displayName} 제외`} className="text-button" disabled={action.busy} onClick={() => void checkExclusion(member.userId)} type="button">제외</button>}</li>)}</ul>
+        <ul aria-label="회차 참여자" className="participant-grid">{data.members.map(member => {
+          const canExclude = data.isCreator && member.excludedAt === null && member.userId !== data.creatorId && ['RECORDING', 'CONFIRMED'].includes(data.status)
+          const card = <><ParticipantAvatar name={member.displayName} /><span className="participant-name"><strong>{member.displayName}{member.userId === account.id ? ' (나)' : ''}</strong><span>{member.userId === data.creatorId && <small className="subtle-tag">회차 생성자</small>}{member.excludedAt !== null && <small className="subtle-tag">제외됨 · 기록 보존</small>}</span></span></>
+          return <li key={member.userId}>{canExclude ? <button aria-controls="participant-exclusion-dialog" aria-haspopup="dialog" aria-label={`${member.displayName} 제외`} className="participant-card" disabled={action.busy} onClick={() => void checkExclusion(member.userId)} type="button">{card}</button> : <div className={`participant-card${member.excludedAt !== null ? ' participant-excluded' : ''}`}>{card}</div>}</li>
+        })}</ul>
         <div className="settlement-flow stack"><div className="row-between"><h3>나의 송금 관계</h3>{hasExpenses && <small className="subtle-tag">{finalized ? '최종' : '현재 예상'} {data.transfers.length}건</small>}</div>
           {data.transfers.length === 0 ? <p className="flow-empty" role="status">{!hasExpenses ? '지출을 기록하면 나의 예상 송금 관계를 표시해요.' : finalized ? '내가 주고받을 금액이 없어요.' : '현재 기록 기준으로 내가 주고받을 금액이 없어요.'}</p> : <ul aria-label={finalized ? '나의 최종 송금 관계' : '나의 현재 예상 송금 관계'} aria-live="polite" className="transfer-list">{data.transfers.map(transfer => {
             const sender = nameOf(transfer.senderId), receiver = nameOf(transfer.receiverId), amount = formatMoney(transfer.amountMinor, data.currency)
@@ -202,11 +206,11 @@ export default function RoundClient({ roundId }: { roundId: string }) {
           {!finalized && hasExpenses && <p className="help-text" role="status">{data.pendingRemainderMinor !== '0' ? `나머지 ${formatMoney(data.pendingRemainderMinor, data.currency)}는 아직 누구에게도 배정하지 않았어요. 추첨 뒤 나의 관계와 금액이 달라질 수 있어요.` : '저장된 지출 전체를 상계한 나의 예상이에요. 지출을 추가·수정·삭제하면 함께 바뀌어요.'}</p>}
         </div>
       </section>
-      <dialog aria-labelledby="exclusion-dialog-heading" className="account-dialog" ref={exclusionDialog} onCancel={() => setCheck(null)} onClick={event => { if (event.target === event.currentTarget) { event.currentTarget.close(); setCheck(null) } }}>
+      <dialog aria-labelledby="exclusion-dialog-heading" className="account-dialog" id="participant-exclusion-dialog" ref={exclusionDialog} onCancel={() => setCheck(null)} onClick={event => { if (event.target === event.currentTarget) { event.currentTarget.close(); setCheck(null) } }}>
         {check && <div className="account-dialog-content stack"><div className="account-dialog-header"><div><p>참여자 제외</p><h2 id="exclusion-dialog-heading">{nameOf(check.userId)}</h2></div><button aria-label="제외 팝업 닫기" className="icon-button account-dialog-close" onClick={() => { exclusionDialog.current?.close(); setCheck(null) }} type="button"><X size={20} /></button></div>
           <div className={`notice${check.allowed ? '' : ' notice-warning'}`} role="status">{!check.allowed && <p>{check.expenses.length ? '해당 사용자와 연관된 정산이 있습니다.' : exclusionReason[check.reason ?? ''] ?? '현재 이 참여자를 제외할 수 없어요.'}</p>}
-            {check.expenses.length > 0 && <><p>아래 내역을 작성자 또는 모임 생성자가 수정한 뒤 다시 제외해 주세요.</p><ul className="exclusion-issues">{check.expenses.map(expense => <li key={expense.id}>{data.expenses.some(item => item.id === expense.id) ? <a href={`#expense-${expense.id}`} onClick={event => { event.preventDefault(); revealExpense(expense.id) }}><strong>{expense.description}</strong></a> : <strong>{expense.description}</strong>}<span>{formatMoney(expense.amountMinor, data.currency)} · 작성 {expense.authorName}</span><b>제외 전 수정 필요</b><small>{exclusionReason[expense.reason] ?? '결제·부담 관계를 먼저 수정해 주세요.'}</small></li>)}</ul><p className="help-text">목록에 안 보이는 지출은 아래 ‘지출 더 보기’로 확인할 수 있어요.</p></>}
-            {check.allowed && (recording ? <><p>이 회차와 모임의 다음 회차 멤버 후보에서 제외할 수 있어요.</p><button className="secondary-button" disabled={action.busy} onClick={() => void exclude()} type="button">이 사용자 제외하기</button></> : <p>생성자가 ‘기록 단계로 다시 열기’를 누른 다음 다시 제외해 주세요.</p>)}
+            {check.expenses.length > 0 && <><p>아래 내역을 작성자 또는 회차 생성자가 수정한 뒤 다시 제외해 주세요.</p><ul className="exclusion-issues">{check.expenses.map(expense => <li key={expense.id}>{data.expenses.some(item => item.id === expense.id) ? <a href={`#expense-${expense.id}`} onClick={event => { event.preventDefault(); revealExpense(expense.id) }}><strong>{expense.description}</strong></a> : <strong>{expense.description}</strong>}<span>{formatMoney(expense.amountMinor, data.currency)} · 작성 {expense.authorName}</span><b>제외 전 수정 필요</b><small>{exclusionReason[expense.reason] ?? '결제·부담 관계를 먼저 수정해 주세요.'}</small></li>)}</ul><p className="help-text">목록에 안 보이는 지출은 아래 ‘지출 더 보기’로 확인할 수 있어요.</p></>}
+            {check.allowed && (recording ? <><p>이 회차에서 제외할 수 있어요. 모임 참여 상태와 다른 회차는 유지돼요.</p><button className="secondary-button" disabled={action.busy} onClick={() => void exclude()} type="button">이 사용자 제외하기</button></> : <p>회차 생성자가 ‘기록 단계로 다시 열기’를 누른 다음 다시 제외해 주세요.</p>)}
           </div>
           <ErrorNotice error={action.error} retry={action.error instanceof ApiError && action.error.code === 'stale_round' ? () => void refresh() : undefined} />
         </div>}
@@ -220,7 +224,7 @@ export default function RoundClient({ roundId }: { roundId: string }) {
         {data.expensesNextCursor && <button className="secondary-button" disabled={more.busy} onClick={() => void loadMore()} type="button">{more.busy ? '불러오는 중…' : '지출 더 보기'}</button>}
       </div>
       <ErrorNotice error={action.error} retry={action.error instanceof ApiError && action.error.code === 'stale_round' ? () => void refresh() : undefined} />
-      {data.isCreator && <section className="domain-card stack"><h2>생성자 정산 관리</h2>
+      {data.isCreator && <section className="domain-card stack"><h2>회차 생성자 정산 관리</h2>
         {recording && <><button className="primary-button" disabled={action.busy || Boolean(editing)} onClick={() => void command('confirm')} type="button">{action.busy ? '처리 중…' : '정산 확정'}</button>{editing && <p className="help-text">작성 중인 지출을 저장하거나 닫은 뒤 확정해 주세요.</p>}<button className="text-button danger-text" disabled={action.busy} onClick={() => void cancel()} type="button">회차 전체 취소</button></>}
         {data.status === 'CONFIRMED' && <><button className="primary-button" disabled={action.busy} onClick={() => void command('send')} type="button">전송 안내 확인</button><button className="secondary-button" disabled={action.busy} onClick={() => void command('reopen')} type="button">기록 단계로 다시 열기</button></>}
         {data.status === 'LOCKED' && <Link className="primary-button" href={`/settlements/${roundId}`} prefetch={false}>{data.finalizedAt ? '정산 안내 · 종료하기' : '나머지 추첨하러 가기'}</Link>}
