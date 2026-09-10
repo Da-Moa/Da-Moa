@@ -111,7 +111,7 @@ test('changed input is blocked until the previous write is resolved explicitly',
   assert.notEqual(requests[1].key, requests[2].key)
 })
 
-test('a confirmed version conflict allows a fresh request using the reviewed latest version', async () => {
+test('a confirmed version conflict allows a fresh request using the latest version', async () => {
   fakeWindow()
   const requests: { key: string | null; body: string }[] = []
   globalThis.fetch = async (_input, init) => {
