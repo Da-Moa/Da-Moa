@@ -12,7 +12,7 @@ import { addReceipt, createRound, getRound, getSettlement, roundCommand, saveExp
 import { applyMigrations } from './migrations.mjs'
 
 const testUrl = process.env.TEST_DATABASE_URL
-if (!testUrl || !new URL(testUrl).pathname.includes('test')) throw new Error('TEST_DATABASE_URL must name an isolated test database')
+if (!testUrl || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(testUrl).hostname) || !new URL(testUrl).pathname.toLowerCase().includes('test')) throw new Error('TEST_DATABASE_URL must name an isolated local test database')
 const applicationName = `settlement-concurrency-${randomUUID()}`
 const runtimeUrl = new URL(testUrl)
 runtimeUrl.searchParams.set('application_name', applicationName)

@@ -19,7 +19,7 @@ cp .env.example .env.local
 | `KAKAO_REDIRECT_URI` | 로컬에서는 `http://localhost:3000/auth/v1/kakao`. 카카오 콘솔에 같은 URI 등록 |
 | `KAKAO_CLIENT_SECRET` | 카카오 콘솔에서 Client Secret을 사용하는 경우만 설정 |
 | `AUTH_JWT_SECRET` | 32바이트 이상의 임의 비밀 문자열 |
-| `DATABASE_URL` | 로컬은 `postgresql://da_moa:da_moa_local@127.0.0.1:55432/da_moa_dev_test`, Vercel은 환경별 Neon 연결 문자열 |
+| `DATABASE_URL` | 로컬은 `postgresql://da_moa:da_moa_local@127.0.0.1:55432/da_moa_dev`, Vercel은 환경별 Neon 연결 문자열 |
 | `ABLY_API_KEY` | 서버 전용 Ably API 키. `da-moa:user:*` 채널의 publish·subscribe 권한이 필요하며 개발·Preview·Production은 별도 앱/키 사용 권장 |
 
 ```bash
@@ -29,7 +29,7 @@ npm run db:seed:test-accounts
 npm run dev
 ```
 
-`npm run db:local:down`은 컨테이너만 중지하고 DB 데이터는 Docker volume에 유지합니다. `.env.local`은 Git·Vercel 배포에 포함되지 않습니다.
+`npm run db:local:down`은 컨테이너만 중지하고 DB 데이터는 Docker volume에 유지합니다. `da_moa_dev_test`를 담던 기존 `postgres-data` 볼륨은 보존하고 개발 DB는 별도 `postgres-dev-data` 볼륨에 생성합니다. `.env.local`은 Git·Vercel 배포에 포함되지 않습니다.
 
 [http://localhost:3000](http://localhost:3000)에서 시작합니다. API 문서는 `/api/docs`, OpenAPI JSON은 `/api/openapi.json`에서 확인할 수 있습니다. [intent.md](intent.md)는 정책 결정 기록, [spec.md](spec.md)는 요구사항·상태·권한·인수 기준입니다. 금액 부호는 최신 명세를 따라 **부담액 − 결제액**, 양수는 보낼 돈·음수는 받을 돈입니다.
 
@@ -72,7 +72,7 @@ npm test
 npm run build
 ```
 
-`npm test`는 `node --import tsx --test`로 금액·분배·인증·권한·API 계약을 검증합니다. DB 트랜잭션·롤백·동시 요청과 Route Handler 검증에는 **이름에 `test`가 포함된 별도 DB**를 먼저 만들고 `TEST_DATABASE_URL`로 지정합니다. 테스트가 마이그레이션과 검증용 회원·모임·지출을 실제로 저장하므로 개발·운영 DB를 사용하지 않습니다. 테스트 명령은 `.env.local`을 자동으로 읽지 않습니다.
+`npm test`는 `node --import tsx --test`로 금액·분배·인증·권한·API 계약을 검증합니다. DB 트랜잭션·롤백·동시 요청과 Route Handler 검증에는 **로컬 호스트에서 이름에 `test`가 포함된 별도 DB**를 먼저 만들고 `TEST_DATABASE_URL`로 지정합니다. 테스트가 마이그레이션과 검증용 회원·모임·지출을 실제로 저장하므로 개발·운영 DB를 사용하지 않습니다. 테스트 명령은 `.env.local`을 자동으로 읽지 않습니다.
 
 ```bash
 export TEST_DATABASE_URL='postgresql://사용자:비밀번호@127.0.0.1:5432/da_moa_test'
@@ -118,3 +118,4 @@ npm run db:seed:test-accounts
 
 회차별 통화 선택 전환은 `004` 추가 마이그레이션으로 적용합니다. 기존 `001~003` 파일과 과거 회차의 통화·금액·정산 결과를 유지하며 인증 이행·기존 세션 폐기를 반복하지 않습니다.
 회차 생성자 분리는 `005`, 신규 증빙의 AVIF 변환 저장과 앱의 바이트 상한 제거는 `006` 추가 마이그레이션으로 적용합니다.
+기존 완료 회차의 정산 확인 시각은 `007`에서 임시 회원 단위 값으로 이행하고, `008`에서 각 수취 이체로 복사한 뒤 임시 컬럼을 제거합니다. `008`은 반드시 `007` 다음에 적용합니다.

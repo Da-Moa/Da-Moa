@@ -10,7 +10,7 @@ import type { ExclusionCheck, Expense, MutationResult, Receipt, RoundDetail } fr
 import { expenseInputMaximum, formatAmountInput, formatMoney } from '../../lib/money'
 import { ErrorNotice, Loading, ParticipantAvatar, StatusBadge, useAccount, useAction, useResource } from './ui'
 
-function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: RoundDetail; expense: Expense | null; onSaved: () => Promise<unknown>; onCancel: () => void; reload: () => Promise<unknown> }) {
+function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: RoundDetail; expense: Expense | null; onSaved: () => Promise<unknown>; onCancel: () => void; reload: () => Promise<RoundDetail | null> }) {
   const { account } = useAccount()
   const action = useAction()
   const expectedVersion = useRef(round.version)
@@ -21,6 +21,10 @@ function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: Rou
   const maximumMinor = expenseInputMaximum(round.totalMinor, expense?.amountMinor, round.currency)
   const [amountInput, setAmountInput] = useState(() => formatAmountInput(amount, round.currency, maximumMinor) ?? amount)
   useEffect(() => setAmountInput(current => formatAmountInput(current, round.currency, maximumMinor) ?? current), [maximumMinor, round.currency])
+  async function useLatestVersion() {
+    const latest = await reload()
+    if (latest) { expectedVersion.current = latest.version; action.setError(null) }
+  }
   async function save(form: HTMLFormElement) {
     if (maximumMinor === 0n) return
     const values = new FormData(form)
@@ -57,7 +61,7 @@ function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: Rou
       {mode === 'SELECTED' && <div className="selected-members">{round.members.filter(member => !member.excludedAt).map(member => <label className="check-row" key={member.userId}><input checked={participants.includes(member.userId)} onChange={event => setParticipants(current => event.target.checked ? [...current, member.userId] : current.filter(id => id !== member.userId))} name="participantIds" type="checkbox" value={member.userId} /><span>{member.displayName}</span></label>)}</div>}
     </fieldset>
     {round.status !== 'RECORDING' && <p className="notice notice-warning">다른 변경으로 기록 단계가 끝났어요. 입력을 확인한 뒤 창을 닫고 최신 상태를 확인해 주세요.</p>}
-    <ErrorNotice error={action.error} retry={action.error instanceof ApiError && action.error.code === 'stale_round' ? () => void reload() : undefined} />
+    <ErrorNotice error={action.error} retry={action.error instanceof ApiError && action.error.code === 'stale_round' ? () => void useLatestVersion() : undefined} />
     <div className="quick-actions"><button className="primary-button" disabled={action.busy || round.status !== 'RECORDING' || maximumMinor === 0n} type="submit">{action.busy ? '저장 중…' : '지출 저장'}</button><button className="secondary-button" disabled={action.busy} type="button" onClick={onCancel}>닫기</button></div>
   </form>
 }

@@ -17,7 +17,7 @@ import { acceptInvite, createGroup, createInvite, getGroup, getInvite, listGroup
 import { applyMigrations } from './migrations.mjs'
 
 const testUrl = process.env.TEST_DATABASE_URL
-if (!testUrl || !new URL(testUrl).pathname.includes('test')) throw new Error('TEST_DATABASE_URL must name an isolated test database; authentication tests never use DATABASE_URL implicitly')
+if (!testUrl || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(testUrl).hostname) || !new URL(testUrl).pathname.toLowerCase().includes('test')) throw new Error('TEST_DATABASE_URL must name an isolated local test database; authentication tests never use DATABASE_URL implicitly')
 process.env.DATABASE_URL = testUrl
 process.env.AUTH_JWT_SECRET = 'isolated-auth-integration-test-secret-at-least-32-bytes'
 
@@ -55,6 +55,7 @@ async function assertCurrencyUpgrade(client: ReturnType<typeof createDatabaseCli
       VALUES($1,'kakao',$1,$2,$2,'기존 은행','005678','기존 참여자',$2,$2)`, [legacyMemberId, now])
     await client.query(`INSERT INTO refresh_sessions(id,user_id,token_hash,issued_at,expires_at,purpose)
       VALUES($1,$2,$3,$4,$5,'app')`, [sessionId, userId, hashRefreshToken(sessionId), now, now + 1000])
+    let missingCreatorRoundId = '', lateJoinedRoundId = ''
     for (const currency of ['KRW', 'USD', 'JPY']) {
       const groupId = randomUUID(), roundId = randomUUID()
       await client.query('INSERT INTO groups(id,creator_id,name,base_currency,created_at) VALUES($1,$2,$3,$3,$4)', [groupId, userId, currency, now])
@@ -62,18 +63,28 @@ async function assertCurrencyUpgrade(client: ReturnType<typeof createDatabaseCli
       await client.query("INSERT INTO rounds(id,group_id,name,currency,status,created_at) VALUES($1,$2,'기존 회차',$3,'RECORDING',$4)", [roundId, groupId, currency, now])
       await client.query("INSERT INTO round_members(round_id,user_id,display_name_snapshot,joined_at) VALUES($1,$2,'기존 회원',$3)", [roundId, userId, now])
       if (currency === 'KRW') {
+        lateJoinedRoundId = roundId
         await client.query('INSERT INTO group_members(group_id,user_id,joined_at) VALUES($1,$2,$3)', [groupId, legacyMemberId, now])
-        await client.query("INSERT INTO round_members(round_id,user_id,display_name_snapshot,joined_at) VALUES($1,$2,'기존 참여자',$3)", [roundId, legacyMemberId, now])
+        await client.query("INSERT INTO round_members(round_id,user_id,display_name_snapshot,joined_at) VALUES($1,$2,'기존 참여자',$3)", [roundId, legacyMemberId, now + 1])
         await client.query("UPDATE rounds SET status='COMPLETED',confirmed_at=$2,locked_at=$2,finalized_at=$2,completed_at=$2 WHERE id=$1", [roundId, now])
         await client.query('INSERT INTO settlement_transfers(round_id,sender_id,receiver_id,amount_minor) VALUES($1,$2,$3,1)', [roundId, legacyMemberId, userId])
       }
+      if (currency === 'JPY') missingCreatorRoundId = roundId
     }
+    await client.query('DELETE FROM round_members WHERE round_id=$1 AND user_id=$2', [missingCreatorRoundId, userId])
     const beforeRounds = (await client.query('SELECT * FROM rounds ORDER BY id')).rows
     const beforeSession = (await client.query('SELECT * FROM refresh_sessions WHERE id=$1', [sessionId])).rows
     for (const version of ['004-round-currency.sql', '005-round-creator.sql', '006-receipt-avif.sql', '007-settlement-check.sql']) {
       await client.query(await readFile(new URL(`./migrations/${version}`, import.meta.url), 'utf8'))
       await client.query('INSERT INTO schema_migrations(version,applied_at) VALUES($1,1)', [version])
     }
+    const backfilledCreator = (await client.query(`SELECT rm.display_name_snapshot,rm.joined_at,r.created_at FROM round_members rm
+      JOIN rounds r ON r.id=rm.round_id WHERE rm.round_id=$1 AND rm.user_id=$2`, [missingCreatorRoundId, userId])).rows[0]
+    assert.equal(backfilledCreator.display_name_snapshot, '카카오 사용자')
+    assert.equal(backfilledCreator.joined_at, backfilledCreator.created_at, '005 must restore a missing legacy creator membership at round creation')
+    const correctedMembership = (await client.query(`SELECT rm.joined_at,r.completed_at FROM round_members rm
+      JOIN rounds r ON r.id=rm.round_id WHERE rm.round_id=$1 AND rm.user_id=$2`, [lateJoinedRoundId, legacyMemberId])).rows[0]
+    assert.equal(correctedMembership.joined_at, correctedMembership.completed_at, '007 must repair a legacy member timestamp later than completion')
     assert.equal((await client.query(`SELECT count(*)::int AS count FROM round_members rm JOIN rounds r ON r.id=rm.round_id
       WHERE r.status='COMPLETED' AND rm.settlement_checked_at=r.completed_at`)).rows[0].count, 2, '007 must persist its receiver-level state before 008 runs later')
     await applyMigrations(client)

@@ -8,9 +8,9 @@ export const runtime = 'nodejs'
 export async function GET(request: NextRequest) {
   try {
     const account = await getAccount(readAccessToken(request.cookies.get(ACCESS_TOKEN_COOKIE_NAME)?.value), true)
-    const { bankName, accountNumber, accountHolder, ...profile } = account
+    const { id, displayName, email, profileImageUrl, purpose, deletedAt, onboardingCompletedAt, bankName, accountNumber, accountHolder } = account
     const bankAccount = bankName && accountNumber && accountHolder ? { bankName, accountNumber, accountHolder } : null
-    return NextResponse.json({ data: { ...profile, bankAccount } }, { headers: { 'Cache-Control': 'private, no-store' } })
+    return NextResponse.json({ data: { id, displayName, email, profileImageUrl, purpose, deletedAt, onboardingCompletedAt, bankAccount } }, { headers: { 'Cache-Control': 'private, no-store' } })
   } catch (error) {
     return errorResponse(error)
   }

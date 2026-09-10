@@ -31,6 +31,8 @@ type DocumentedSchema = {
   required?: string[]
   properties?: Record<string, DocumentedSchema>
   enum?: string[]
+  format?: string
+  nullable?: boolean
   additionalProperties?: boolean
   maxItems?: number
   description?: string
@@ -75,16 +77,21 @@ test('every group, expense and settlement endpoint has documented authorization 
 
 test('OpenAPI component references resolve and financial privacy rules remain explicit', () => {
   const document = openApiDocument as unknown as Record<string, unknown>
-  function check(value: unknown) {
+  function check(value: unknown, name?: string) {
     if (!value || typeof value !== 'object') return
     const record = value as Record<string, unknown>
+    if (Array.isArray(record.required)) assert.ok(record.required.length, 'OpenAPI required arrays must not be empty')
+    if (['createdAt', 'updatedAt', 'expiresAt'].includes(name ?? '')) {
+      assert.equal(record.format, 'int64', `${name} must be a timestamp`)
+      assert.notEqual(record.nullable, true, `${name} must not be nullable`)
+    }
     if (typeof record.$ref === 'string') {
       assert.ok(record.$ref.startsWith('#/'), record.$ref)
       let target: unknown = document
       for (const segment of record.$ref.slice(2).split('/')) target = (target as Record<string, unknown>)?.[segment]
       assert.ok(target, record.$ref)
     }
-    for (const child of Object.values(record)) check(child)
+    for (const [key, child] of Object.entries(record)) check(child, key)
   }
   check(document)
   assert.match(paths['/api/rounds/{roundId}/settlement'].get.description, /본인이 지급할 수취인의 최신 계좌/)

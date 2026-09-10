@@ -47,6 +47,7 @@ async function handle(request: NextRequest, context: { params: Promise<{ path: s
     else if (path[0] === 'rounds' && path.length === 5 && path[2] === 'members' && path[4] === 'exclusion-check' && method === 'GET') data = await checkExclusion(access, path[1], path[3])
     else if (path[0] === 'rounds' && path.length === 5 && path[2] === 'members' && path[4] === 'exclude' && method === 'POST') data = await excludeMember(access, key, path[1], path[3], await jsonBody(request))
     else if (path[0] === 'rounds' && path.length === 5 && path[2] === 'expenses' && path[4] === 'receipts' && method === 'POST') {
+      if (!access) throw new AppError(401, 'unauthorized', '로그인이 필요합니다')
       let form: FormData
       try { form = await request.formData() } catch { throw new AppError(400, 'invalid_input', '영수증 업로드 형식을 확인해 주세요') }
       const file = form.get('file')

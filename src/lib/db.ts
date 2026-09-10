@@ -33,7 +33,7 @@ async function transaction<T>(write: boolean, work: (client: Client) => Promise<
     try { await client.query('ROLLBACK') } catch { /* A lost COMMIT response is resolved with the request key. */ }
     throw error
   } finally {
-    await client.end()
+    try { await client.end() } catch (error) { console.error('Database client cleanup failed', error) }
   }
 }
 

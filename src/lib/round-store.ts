@@ -4,6 +4,7 @@ import { withReadTransaction, type Database } from './db'
 import { AppError, badInput } from './errors'
 import { domainMutation, idsInput, missing, nowSeconds, onlyKeys, ownerGroup, pageOf, pagination, textInput, type Identity } from './group-store'
 import { formatMoney, MAX_EXPENSE_MAJOR, MAX_ROUND_TOTAL_MAJOR, minorLimit, parseAmount, requireCurrency, type Currency } from './money'
+import { replayMutation } from './mutations'
 import { calculateBase, finalizeSettlement, previewSettlement } from './split'
 import type { ExclusionCheck, Expense, MutationResult, RoundDetail, RoundMember, RoundStatus, RoundSummary, SettlementDTO, SettlementTransfer } from './domain-types'
 
@@ -390,8 +391,13 @@ export async function getSettlement(access: Identity, roundId: string): Promise<
 
 async function convertReceipt(content: Uint8Array, claimedType: string) {
   const source = Buffer.from(content)
+  let sharp: typeof import('sharp').default
+  try { sharp = (await import('sharp')).default }
+  catch (error) {
+    console.error('receipt_converter_unavailable', error)
+    throw new AppError(503, 'storage_unavailable', '영수증을 저장할 수 없어요. 같은 요청 키로 다시 시도해 주세요')
+  }
   try {
-    const { default: sharp } = await import('sharp')
     const image = sharp(source, { failOn: 'error' })
     const format = (await image.metadata()).format
     const mimeType = format === 'jpeg' ? 'image/jpeg' : format === 'png' ? 'image/png' : format === 'webp' ? 'image/webp' : null
@@ -400,14 +406,29 @@ async function convertReceipt(content: Uint8Array, claimedType: string) {
     return { content: converted, mimeType: 'image/avif', sha256: createHash('sha256').update(converted).digest('hex') }
   } catch (error) {
     if (error instanceof AppError) throw error
-    throw new AppError(415, 'unsupported_receipt_type', 'JPEG, PNG, WebP 이미지 파일을 선택해 주세요')
+    if (error instanceof Error && /input buffer|vipsjpeg|vipspng|(?:jpeg|png|webp)load|webp:/i.test(error.message)) {
+      throw new AppError(415, 'unsupported_receipt_type', 'JPEG, PNG, WebP 이미지 파일을 선택해 주세요')
+    }
+    console.error('receipt_conversion_failed', error)
+    throw new AppError(503, 'storage_unavailable', '영수증을 저장할 수 없어요. 같은 요청 키로 다시 시도해 주세요')
   }
 }
 
 export async function addReceipt(access: Identity, key: string, roundId: string, expenseId: string, expectedVersion: number, bytes: Uint8Array, type: string) {
   const sourceSha256 = createHash('sha256').update(bytes).digest('hex')
+  const payload = { roundId, expenseId, expectedVersion, sourceSha256, type }
+  const replayed = await withReadTransaction(async client => {
+    const account = await requireAccount(client, access)
+    const replay = await replayMutation<MutationResult>(client, account.id, 'receipt.create', key, payload)
+    if (replay.result) return replay.result
+    const round = await roundFor(client, roundId, account.id), expense = await expenseFor(client, roundId, expenseId)
+    await editable(client, round, account.id, expense)
+    version(round, expectedVersion)
+    return null
+  })
+  if (replayed) return replayed
   const file = await convertReceipt(bytes, type)
-  return domainMutation(access, key, 'receipt.create', { roundId, expenseId, expectedVersion, sourceSha256, type }, async (client, userId) => {
+  return domainMutation(access, key, 'receipt.create', payload, async (client, userId) => {
     const round = await roundFor(client, roundId, userId), expense = await expenseFor(client, roundId, expenseId)
     await editable(client, round, userId, expense)
     version(round, expectedVersion)

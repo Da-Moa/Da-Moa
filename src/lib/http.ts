@@ -26,6 +26,8 @@ export async function readBytes(request: Request, limit: number, code = 'request
 export async function readJsonBody(request: Request, limit = 1024 * 1024) {
   const bytes = await readBytes(request, limit)
   if (!bytes.length) return {}
-  try { return objectBody(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))) }
+  let parsed: unknown
+  try { parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) }
   catch { throw new AppError(400, 'invalid_input', '올바른 JSON 입력이 필요합니다') }
+  return objectBody(parsed)
 }

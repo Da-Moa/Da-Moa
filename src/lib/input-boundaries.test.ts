@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { errorResponse } from './errors.ts'
+import { AppError, errorResponse } from './errors.ts'
 import { pageOf, pagination } from './group-store.ts'
 import { readJsonBody } from './http.ts'
 
@@ -17,9 +17,21 @@ test('pagination cursors include only the position and reject malformed or overf
 
 test('JSON bodies are bounded before parsing and database physical limits are input errors', async () => {
   await assert.rejects(readJsonBody(new Request('http://localhost', { method: 'POST', body: 'x'.repeat(100) }), 50), error => (error as { status: number }).status === 413)
-  await assert.rejects(readJsonBody(new Request('http://localhost', { method: 'POST', body: '[]' })), error => (error as { status: number }).status === 400)
+  await assert.rejects(readJsonBody(new Request('http://localhost', { method: 'POST', body: '[]' })), error => error instanceof AppError && error.message === '입력값을 확인해 주세요')
+  await assert.rejects(readJsonBody(new Request('http://localhost', { method: 'POST', body: '{' })), error => error instanceof AppError && error.message === '올바른 JSON 입력이 필요합니다')
   assert.deepEqual(await readJsonBody(new Request('http://localhost', { method: 'POST', body: '{"amount":"9007199254740993"}' })), { amount: '9007199254740993' })
   assert.equal(errorResponse({ code: '22003' }).status, 400)
-  assert.equal(errorResponse(new Error('secret connection details')).status, 503)
-  assert.equal(JSON.stringify(await errorResponse(new Error('secret')).json()).includes('secret'), false)
+})
+
+test('unknown server errors are logged without exposing their details', async () => {
+  const original = console.error
+  const calls: unknown[][] = []
+  const error = new Error('secret connection details')
+  let response: Response
+  console.error = (...args: unknown[]) => { calls.push(args) }
+  try { response = errorResponse(error) }
+  finally { console.error = original }
+  assert.deepEqual(calls, [['Unhandled server error', error]])
+  assert.equal(response.status, 503)
+  assert.equal(JSON.stringify(await response.json()).includes('secret'), false)
 })

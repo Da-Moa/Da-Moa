@@ -3,6 +3,14 @@ ALTER TABLE round_members
   ADD CONSTRAINT round_members_settlement_checked_at_check
     CHECK (settlement_checked_at IS NULL OR settlement_checked_at >= joined_at);
 
+-- Repair legacy timestamps that predate the completed-round lifecycle constraint.
+UPDATE round_members rm
+SET joined_at = r.completed_at
+FROM rounds r
+WHERE r.id = rm.round_id
+  AND r.status = 'COMPLETED'
+  AND rm.joined_at > r.completed_at;
+
 -- Existing completed rounds predate manual confirmation and must remain complete.
 UPDATE round_members rm
 SET settlement_checked_at = r.completed_at

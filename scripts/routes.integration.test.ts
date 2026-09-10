@@ -11,7 +11,7 @@ import { GET as me } from '../src/app/api/me/route.ts'
 import { applyMigrations } from './migrations.mjs'
 
 const testUrl = process.env.TEST_DATABASE_URL
-if (!testUrl || !new URL(testUrl).pathname.includes('test')) throw new Error('TEST_DATABASE_URL must name an isolated test database')
+if (!testUrl || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(testUrl).hostname) || !new URL(testUrl).pathname.toLowerCase().includes('test')) throw new Error('TEST_DATABASE_URL must name an isolated local test database')
 process.env.DATABASE_URL = testUrl
 process.env.AUTH_JWT_SECRET ||= 'integration-only-not-a-production-secret-0123456789'
 const origin = 'http://localhost:3087'
@@ -96,6 +96,7 @@ test('Route Handler contracts enforce cookies, origin, idempotency, normalized i
     const e = (await save.json()).data
     const replay = await request(`rounds/${roundId}/expenses`, a.accessToken, 'POST', expenseBody, { 'Idempotency-Key': requestKey })
     assert.deepEqual((await replay.json()).data, e)
+    assert.equal((await request(`rounds/${roundId}/expenses/${e.id}/receipts`, null, 'POST', {})).status, 401)
     const form = new FormData()
     const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#369' } }).png().toBuffer()
     form.set('file', new File([png], 'receipt.png', { type: 'image/png' }))

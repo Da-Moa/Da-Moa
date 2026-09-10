@@ -2,7 +2,7 @@ import { MAX_GROUP_MEMBERS } from './domain-types'
 
 type Schema = Record<string, unknown>
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` })
-const object = (properties: Record<string, Schema>, required: string[] = []): Schema => ({ type: 'object', properties, required })
+const object = (properties: Record<string, Schema>, required: string[] = []): Schema => ({ type: 'object', properties, ...(required.length ? { required } : {}) })
 const array = (items: Schema): Schema => ({ type: 'array', items })
 const string: Schema = { type: 'string' }
 const integer: Schema = { type: 'integer', minimum: 1 }
@@ -10,7 +10,8 @@ const id: Schema = { type: 'string', format: 'uuid' }
 const minor: Schema = { type: 'string', pattern: '^\\d+$', description: '통화 최소 단위의 정확한 정수 문자열. USD는 센트, KRW·JPY는 원·엔.' }
 const currency: Schema = { type: 'string', enum: ['KRW', 'JPY', 'USD'] }
 const status: Schema = { type: 'string', enum: ['RECORDING', 'CONFIRMED', 'LOCKED', 'COMPLETED'] }
-const timestamp: Schema = { type: 'integer', format: 'int64', nullable: true, description: 'UTC epoch seconds' }
+const timestamp: Schema = { type: 'integer', format: 'int64', description: 'UTC epoch seconds' }
+const nullableTimestamp: Schema = { ...timestamp, nullable: true }
 const profileImage: Schema = { type: 'string', format: 'uri', nullable: true, description: '활성 회원의 최신 카카오 프로필 이미지 URL. 탈퇴했거나 이미지가 없으면 null.' }
 const bankFields = { bankName: { type: 'string', minLength: 1, maxLength: 100 }, accountNumber: { type: 'string', minLength: 1, maxLength: 100, description: '숫자·공백·하이픈 입력. 구분자를 제거한 숫자 1~64자와 선행 0을 보존합니다.' }, accountHolder: { type: 'string', minLength: 1, maxLength: 100 } }
 const versionBody = object({ expectedVersion: integer }, ['expectedVersion'])
@@ -41,7 +42,7 @@ const domainResponses = {
 const groupFields = { id, creatorId: { ...id, description: '모임 생성자 ID. 초대와 모임 관리를 담당합니다.' }, name: string, createdAt: timestamp }
 const roundFields = {
   id, groupId: id, groupName: string, name: string, currency, status, version: integer, createdAt: timestamp,
-  finalizedAt: timestamp, completedAt: timestamp, balanceMinor: { type: 'string', pattern: '^-?\\d+$', nullable: true },
+  finalizedAt: nullableTimestamp, completedAt: nullableTimestamp, balanceMinor: { type: 'string', pattern: '^-?\\d+$', nullable: true },
   totalMinor: minor, memberCount: { type: 'integer', minimum: 0 },
 }
 const domainSchemas = {
@@ -55,12 +56,12 @@ const domainSchemas = {
   }, ['error', 'message']),
   BankAccount: object(bankFields, ['bankName', 'accountNumber', 'accountHolder']),
   CurrentBankAccount: object({ bankName: { type: 'string', nullable: true }, accountNumber: { type: 'string', nullable: true }, accountHolder: { type: 'string', nullable: true } }, ['bankName', 'accountNumber', 'accountHolder']),
-  Me: object({ id, displayName: { type: 'string', nullable: true }, email: { type: 'string', nullable: true }, profileImageUrl: profileImage, purpose: { type: 'string', enum: ['app', 'onboarding'] }, deletedAt: timestamp, onboardingCompletedAt: timestamp, bankAccount: { type: 'object', nullable: true, properties: bankFields, description: '본인의 현재 계좌 또는 null. 실계좌·예금주 검증 전입니다.' } }, ['id', 'displayName', 'email', 'profileImageUrl', 'purpose', 'deletedAt', 'onboardingCompletedAt', 'bankAccount']),
+  Me: object({ id, displayName: { type: 'string', nullable: true }, email: { type: 'string', nullable: true }, profileImageUrl: profileImage, purpose: { type: 'string', enum: ['app', 'onboarding'] }, deletedAt: nullableTimestamp, onboardingCompletedAt: nullableTimestamp, bankAccount: { type: 'object', nullable: true, properties: bankFields, description: '본인의 현재 계좌 또는 null. 실계좌·예금주 검증 전입니다.' } }, ['id', 'displayName', 'email', 'profileImageUrl', 'purpose', 'deletedAt', 'onboardingCompletedAt', 'bankAccount']),
   Group: object(groupFields, Object.keys(groupFields)),
-  GroupMember: object({ userId: id, displayName: string, excludedAt: timestamp }, ['userId', 'displayName', 'excludedAt']),
+  GroupMember: object({ userId: id, displayName: string, excludedAt: nullableTimestamp }, ['userId', 'displayName', 'excludedAt']),
   GroupDetail: object({ ...groupFields, members: { ...array(ref('GroupMember')), maxItems: MAX_GROUP_MEMBERS, description: '생성자를 포함해 최대 10명이며 생성자가 첫 번째입니다.' }, isCreator: { type: 'boolean', description: '조회 사용자가 현재 활성 모임 생성자인지 여부' }, invites: array(object({ id, expiresAt: timestamp }, ['id', 'expiresAt'])) }, [...Object.keys(groupFields), 'members', 'isCreator', 'invites']),
   Round: object(roundFields, Object.keys(roundFields)),
-  RoundMember: object({ userId: id, displayName: string, profileImageUrl: profileImage, excludedAt: timestamp }, ['userId', 'displayName', 'profileImageUrl', 'excludedAt']),
+  RoundMember: object({ userId: id, displayName: string, profileImageUrl: profileImage, excludedAt: nullableTimestamp }, ['userId', 'displayName', 'profileImageUrl', 'excludedAt']),
   Expense: object({ id, authorId: id, payerId: id, description: string, amountMinor: minor, splitMode: expenseFields.splitMode, participantIds: array(id), baseShareMinor: { ...minor, nullable: true }, remainderUnits: { type: 'integer', minimum: 0, nullable: true }, shares: array(object({ userId: id, amountMinor: { ...minor, nullable: true }, receivedRemainder: { type: 'boolean', nullable: true } }, ['userId', 'amountMinor', 'receivedRemainder'])), receipts: array(ref('Receipt')), createdAt: timestamp, updatedAt: timestamp }, ['id', 'authorId', 'payerId', 'description', 'amountMinor', 'splitMode', 'participantIds', 'baseShareMinor', 'remainderUnits', 'shares', 'receipts', 'createdAt', 'updatedAt']),
   Receipt: object({ id, mimeType: { type: 'string', enum: ['image/avif', 'image/jpeg', 'image/png', 'image/webp'], description: '신규 업로드는 image/avif이며 나머지는 기존 저장 자료 조회 호환 값입니다.' }, byteSize: { type: 'integer', minimum: 1, description: '변환 후 저장된 이미지의 바이트 크기입니다. 앱 자체 상한은 없습니다.' } }, ['id', 'mimeType', 'byteSize']),
   SettlementTransfer: object({ senderId: id, receiverId: id, amountMinor: minor }, ['senderId', 'receiverId', 'amountMinor']),
@@ -68,9 +69,9 @@ const domainSchemas = {
   MutationResult: object({ id, roundId: id, status, version: integer, inviteId: id, linkUnavailable: { type: 'boolean' }, sharePath: { type: 'string', description: '초대 최초 발급에서만 /invites/{token} 경로를 반환하며 재시도 기록에는 저장하지 않음' } }, ['id']),
   ExclusionCheck: object({ allowed: { type: 'boolean' }, reason: { type: 'string', nullable: true }, expenses: array(object({ id, description: string, amountMinor: minor, authorId: id, authorName: string, reason: string }, ['id', 'description', 'amountMinor', 'authorId', 'authorName', 'reason'])) }, ['allowed', 'reason', 'expenses']),
   OutgoingTransfer: object({ receiverId: id, displayName: string, profileImageUrl: profileImage, amountMinor: minor, account: ref('CurrentBankAccount') }, ['receiverId', 'displayName', 'profileImageUrl', 'amountMinor']),
-  IncomingTransfer: object({ senderId: id, displayName: string, profileImageUrl: profileImage, amountMinor: minor, receivedAt: timestamp }, ['senderId', 'displayName', 'profileImageUrl', 'amountMinor', 'receivedAt']),
-  SettlementConfirmation: object({ userId: id, displayName: string, profileImageUrl: profileImage, checkedAt: timestamp }, ['userId', 'displayName', 'profileImageUrl', 'checkedAt']),
-  Settlement: object({ roundId: id, name: string, groupName: string, status, version: integer, isCreator: { type: 'boolean', description: '조회 사용자가 이 회차의 생성자인지 여부' }, finalized: { type: 'boolean' }, currency, balanceMinor: { type: 'string', pattern: '^-?\\d+$', nullable: true, description: '부담액 − 결제액. 양수는 보낼 돈, 음수는 받을 돈. 최종 저장 전에는 null.' }, checkedAt: timestamp, checkRequired: { type: 'boolean', description: '조회 사용자가 한 건 이상 수취하는지 여부' }, checkedCount: { type: 'integer', minimum: 0, description: '모든 수취 건을 확인한 수취인 수' }, requiredCount: { type: 'integer', minimum: 0, description: '한 건 이상 수취하는 사용자 수' }, allChecked: { type: 'boolean', description: '모든 송금 건의 수취 확인 여부. 송금 건이 없으면 true.' }, confirmations: { ...array(ref('SettlementConfirmation')), description: '수취인별 이름 스냅샷, 활성 카카오 프로필, 전체 수취 완료 시각. 한 건이라도 미확인이면 checkedAt은 null입니다.' }, outgoing: { ...array(ref('OutgoingTransfer')), description: '조회 사용자가 아직 보내야 하는 미확인 송금. 수취 확인 시 제외되고 확인 해제 시 복원됩니다.' }, incoming: array(ref('IncomingTransfer')), sharePath: { type: 'string', nullable: true, example: '/settlements/00000000-0000-4000-8000-000000000001', description: '최종 저장 후 제공하며 이전에는 null. 로그인한 본인의 안내를 조회하는 경로이며 초대 링크가 아님.' } }, ['roundId', 'name', 'groupName', 'status', 'version', 'isCreator', 'finalized', 'currency', 'balanceMinor', 'checkedAt', 'checkRequired', 'checkedCount', 'requiredCount', 'allChecked', 'confirmations', 'outgoing', 'incoming', 'sharePath']),
+  IncomingTransfer: object({ senderId: id, displayName: string, profileImageUrl: profileImage, amountMinor: minor, receivedAt: nullableTimestamp }, ['senderId', 'displayName', 'profileImageUrl', 'amountMinor', 'receivedAt']),
+  SettlementConfirmation: object({ userId: id, displayName: string, profileImageUrl: profileImage, checkedAt: nullableTimestamp }, ['userId', 'displayName', 'profileImageUrl', 'checkedAt']),
+  Settlement: object({ roundId: id, name: string, groupName: string, status, version: integer, isCreator: { type: 'boolean', description: '조회 사용자가 이 회차의 생성자인지 여부' }, finalized: { type: 'boolean' }, currency, balanceMinor: { type: 'string', pattern: '^-?\\d+$', nullable: true, description: '부담액 − 결제액. 양수는 보낼 돈, 음수는 받을 돈. 최종 저장 전에는 null.' }, checkedAt: nullableTimestamp, checkRequired: { type: 'boolean', description: '조회 사용자가 한 건 이상 수취하는지 여부' }, checkedCount: { type: 'integer', minimum: 0, description: '모든 수취 건을 확인한 수취인 수' }, requiredCount: { type: 'integer', minimum: 0, description: '한 건 이상 수취하는 사용자 수' }, allChecked: { type: 'boolean', description: '모든 송금 건의 수취 확인 여부. 송금 건이 없으면 true.' }, confirmations: { ...array(ref('SettlementConfirmation')), description: '수취인별 이름 스냅샷, 활성 카카오 프로필, 전체 수취 완료 시각. 한 건이라도 미확인이면 checkedAt은 null입니다.' }, outgoing: { ...array(ref('OutgoingTransfer')), description: '조회 사용자가 아직 보내야 하는 미확인 송금. 수취 확인 시 제외되고 확인 해제 시 복원됩니다.' }, incoming: array(ref('IncomingTransfer')), sharePath: { type: 'string', nullable: true, example: '/settlements/00000000-0000-4000-8000-000000000001', description: '최종 저장 후 제공하며 이전에는 null. 로그인한 본인의 안내를 조회하는 경로이며 초대 링크가 아님.' } }, ['roundId', 'name', 'groupName', 'status', 'version', 'isCreator', 'finalized', 'currency', 'balanceMinor', 'checkedAt', 'checkRequired', 'checkedCount', 'requiredCount', 'allChecked', 'confirmations', 'outgoing', 'incoming', 'sharePath']),
   GroupPage: object({ items: array(ref('Group')), nextCursor: { type: 'string', nullable: true } }, ['items', 'nextCursor']),
   RoundPage: object({ items: array(ref('Round')), nextCursor: { type: 'string', nullable: true } }, ['items', 'nextCursor']),
 }
