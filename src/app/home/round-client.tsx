@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { ArrowRight, ChevronDown, ImagePlus, Pencil, Plus, Trash2, X } from 'lucide-react'
@@ -9,6 +9,13 @@ import { ApiError, apiRequest } from '../../lib/api-client'
 import type { ExclusionCheck, Expense, MutationResult, Receipt, RoundDetail } from '../../lib/domain-types'
 import { expenseInputMaximum, formatAmountInput, formatMoney } from '../../lib/money'
 import { ErrorNotice, Loading, ParticipantAvatar, StatusBadge, useAccount, useAction, useResource } from './ui'
+
+const expenseDayFormatter = new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' })
+function expenseDay(createdAt: number) {
+  const date = new Date(createdAt * 1000)
+  const dateTime = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+  return { dateTime, label: expenseDayFormatter.format(date) }
+}
 
 function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: RoundDetail; expense: Expense | null; onSaved: () => Promise<unknown>; onCancel: () => void; reload: () => Promise<RoundDetail | null> }) {
   const { account } = useAccount()
@@ -226,6 +233,7 @@ export default function RoundClient({ roundId }: { roundId: string }) {
   const profileOf = (id: string) => data?.members.find(member => member.userId === id)?.profileImageUrl ?? null
   const finalized = Boolean(data && data.finalizedAt !== null)
   const hasExpenses = Boolean(data && data.totalMinor !== '0')
+  const orderedExpenses = data?.expenses.slice().reverse() ?? []
   return <>
     <Link className="back-link" href={data ? `/home/groups/${data.groupId}` : '/home/groups'}>← 모임으로 돌아가기</Link>
     <ErrorNotice error={resource.error} retry={() => void refresh()} />
@@ -266,7 +274,10 @@ export default function RoundClient({ roundId }: { roundId: string }) {
       <div className="stack" hidden={!expensesOpen} id="round-expenses">
         {editing && <ExpenseForm key={editing === 'new' ? 'new' : editing.id} round={data} expense={editing === 'new' ? null : editing} reload={refresh} onSaved={async () => { setEditing(null); setCheck(null); await refresh() }} onCancel={closeEditor} />}
         {data.expenses.length === 0 && <p className="empty-card">지출 내역이 없습니다. 지출을 기록한 뒤 정산을 확정해 주세요.</p>}
-        {data.expenses.slice().reverse().map(expense => <ExpenseCard key={expense.id} expense={expense} round={data} canEdit={Boolean(recording && (data.isCreator || expense.authorId === account.id && myself && !myself.excludedAt))} highlighted={check?.expenses.some(issue => issue.id === expense.id) ?? false} edit={() => setEditing(expense)} reload={refresh} />)}
+        {orderedExpenses.map((expense, index) => {
+          const day = expenseDay(expense.createdAt), previousDay = index ? expenseDay(orderedExpenses[index - 1].createdAt).dateTime : null
+          return <Fragment key={expense.id}>{day.dateTime !== previousDay && <div className="expense-day-divider"><time dateTime={day.dateTime}>{day.label}</time></div>}<ExpenseCard expense={expense} round={data} canEdit={Boolean(recording && (data.isCreator || expense.authorId === account.id && myself && !myself.excludedAt))} highlighted={check?.expenses.some(issue => issue.id === expense.id) ?? false} edit={() => setEditing(expense)} reload={refresh} /></Fragment>
+        })}
         <ErrorNotice error={more.error} retry={() => void refresh()} />
         {data.expensesNextCursor && <button className="secondary-button" disabled={more.busy} onClick={() => void loadMore()} type="button">{more.busy ? '불러오는 중…' : '지출 더 보기'}</button>}
       </div>

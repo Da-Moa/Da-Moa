@@ -418,6 +418,9 @@ button.participant-card:not(:disabled):hover { background: #f8fbff; border-color
 .state-locked { background: #eee6ff; color: #623ba4; }
 .state-completed { background: #e5f4eb; color: #2c6847; }
 .copy-link { display: grid; gap: 12px; }
+.expense-day-divider { align-items: center; color: #657181; display: flex; font-size: 12px; font-weight: 700; gap: 10px; }
+.expense-day-divider::before, .expense-day-divider::after { background: #cbd5e1; content: ''; flex: 1; height: 1px; }
+.expense-day-divider time { white-space: nowrap; }
 .expense-card { scroll-margin-top: 20px; }
 .expense-card-heading { border-bottom: 1px solid #e5e8eb; padding-bottom: 12px; }
 .expense-card-actions { border-top: 1px solid #e5e8eb; padding-top: 12px; }

@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import sharp from 'sharp'
 import { signInKakao, completeOnboarding } from '../src/lib/auth-store.ts'
 import { readAccessToken, ACCESS_TOKEN_COOKIE_NAME, REFRESH_TOKEN_COOKIE_NAME } from '../src/lib/auth.ts'
+import { withWriteTransaction } from '../src/lib/db.ts'
 
 const database = process.env.TEST_DATABASE_URL
 assert.ok(database && ['localhost', '127.0.0.1', '[::1]'].includes(new URL(database).hostname), 'TEST_DATABASE_URL must point to an isolated local PostgreSQL database')
@@ -186,9 +187,15 @@ try {
   await waitFor("!document.querySelector('.expense-form') && document.querySelectorAll('.expense-card').length === 2")
   assert.equal(await evaluate("window.__staleAlertObserver.disconnect(); window.__staleAlertSeen"), false)
   assert.equal((await api(owner.session, `/api/rounds/${roundId}`)).expenses.filter(expense => expense.description === '버전 충돌 복구').length, 1)
+  await withWriteTransaction(client => client.query('UPDATE expenses SET created_at=created_at-172800 WHERE id=$1', [firstSavedRound.expenses[0].id]))
+  await click('새로고침')
+  await waitFor("document.querySelectorAll('#round-expenses > .expense-day-divider').length === 2")
+  assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('#round-expenses > .expense-day-divider time'), time => time.dateTime)"), await evaluate("Array.from(new Set(Array.from(document.querySelectorAll('#round-expenses > .expense-day-divider time'), time => time.dateTime)))"))
+  assert.equal(await evaluate("document.querySelectorAll('#round-expenses > .expense-day-divider + .expense-card').length"), 2)
+  assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('#round-expenses > .expense-card h3'), heading => heading.textContent)"), ['저녁 식사', '버전 충돌 복구'])
   await evaluate("Array.from(document.querySelectorAll('.expense-card')).find(card => card.textContent.includes('버전 충돌 복구')).querySelector('button.danger-text').click()")
   await waitFor("document.querySelectorAll('.expense-card').length === 1")
-  console.log('PASS stale expense submission automatically reloads and saves once without an error card')
+  console.log('PASS stale expense auto-save and created-day expense dividers')
 
   await click('지출 추가')
   await fill('input[name=description]', '응답 복구 검증')
