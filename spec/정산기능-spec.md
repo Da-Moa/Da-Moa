@@ -1,12 +1,12 @@
 # 모임·정산 요구사항 및 설계 명세
 
-작성 기준: 2026-09-07. [intent.md](intent.md), 이후 대화에서 정한 금액 부호·트랜잭션 정책, 현재 저장소의 실제 구현을 기준으로 한다. **구현을 위한 명세이며 기능 구현 완료를 의미하지 않는다.**
+작성 기준: 2026-09-07. [정산기능-intent.md](../intent/정산기능-intent.md), 이후 대화에서 정한 금액 부호·트랜잭션 정책, 현재 저장소의 실제 구현을 기준으로 한다. **구현을 위한 명세이며 기능 구현 완료를 의미하지 않는다.**
 
 ## 1. 적용 기준과 범위
 
 ### 1.1 원문과 최신 결정의 차이
 
-`intent.md` 6절의 부호 설명은 최신 대화와 반대다. 구현·API·테스트에는 아래 규칙을 적용한다.
+`정산기능-intent.md` 6절의 부호 설명은 최신 대화와 반대다. 구현·API·테스트에는 아래 규칙을 적용한다.
 
 ```text
 개인 정산 잔액 = 부담액 합계 − 실제 결제액 합계
@@ -50,19 +50,19 @@ OCR, 계좌 검증 API, 금융기관을 통한 실제 송금·입금 자동 검�
 
 | 현재 파일 | 현재 동작 | 필요한 변경 |
 |---|---|---|
-| [package.json](package.json) | Next App Router, React, TypeScript, Neon, Ably, `node:test`·`tsx` | Node 기준을 22.18 이상으로 맞추고 화면 무효화용 Ably WebSocket 클라이언트 사용 |
-| [tsconfig.json](tsconfig.json) | `target: ES2017` | BigInt 연산·리터럴 사용에 맞춰 ES2020 이상으로 변경 |
-| [scripts/migrate-auth.mjs](scripts/migrate-auth.mjs) | `users`, `refresh_sessions` 생성·확장 | 기존 인증 마이그레이션 유지, 도메인 및 가입 상태 마이그레이션 추가 |
-| [src/lib/auth.ts](src/lib/auth.ts) | OIDC state·nonce·PKCE, JWT 검증·발급 | 토큰 암호 검증 재사용, 안전한 로그인 복귀 경로 처리 추가 |
-| [src/lib/auth-store.ts](src/lib/auth-store.ts) | 회원 upsert, 세션 회전, 회원 물리 삭제 | 세션 목적·회원 활성 상태 조회, 계좌 등록, 원자적 탈퇴·재가입 처리 |
-| [src/app/auth/v1/kakao/route.ts](src/app/auth/v1/kakao/route.ts) | 로그인 후 `/home` 고정 이동 | 가입·재가입 분기, 초대·정산 화면으로 복귀 |
-| [src/app/api/auth/withdraw/route.ts](src/app/api/auth/withdraw/route.ts) | 사용자 행 삭제 후 쿠키 제거 | 진행 회차 차단, 소프트 삭제, 모든 세션 폐기, 멤버십 이탈 |
-| [src/app/home/authenticated-home.tsx](src/app/home/authenticated-home.tsx) | JWT와 사용자 존재 확인 | 활성 세션·계정·가입 완료 검사 후 안전한 화면 데이터 조회 |
-| [src/app/home/refresh-session.tsx](src/app/home/refresh-session.tsx) | 갱신 실패 시 로그인 이동 | 진입 목적지 유지, 인증 장애와 DB 장애 구분 |
-| [src/app/home/home-client.tsx](src/app/home/home-client.tsx) | 고정 예시·로컬 계산·파일명 표시 | 실제 목록, 회차 화면 연결, 계좌 관리, 정확한 금액·탈퇴 문구로 교체 |
-| [src/lib/split.ts](src/lib/split.ts) | `number`, 앞사람부터 나머지 배분 | 최소 단위 정수의 기본 분배와 잠금 후 추첨 분리 |
-| [src/lib/openapi.ts](src/lib/openapi.ts) | 인증 API만 정의 | 신규 계약·상태 오류 추가. OpenAPI 3.0.3과 기존 Swagger 유지 |
-| [vercel.json](vercel.json) | 빌드 전에 `npm run db:migrate` | 추가 마이그레이션 실행 경로와 배포 런타임 검증 |
+| [package.json](../package.json) | Next App Router, React, TypeScript, Neon, Ably, `node:test`·`tsx` | Node 기준을 22.18 이상으로 맞추고 화면 무효화용 Ably WebSocket 클라이언트 사용 |
+| [tsconfig.json](../tsconfig.json) | `target: ES2017` | BigInt 연산·리터럴 사용에 맞춰 ES2020 이상으로 변경 |
+| [scripts/migrate-auth.mjs](../scripts/migrate-auth.mjs) | `users`, `refresh_sessions` 생성·확장 | 기존 인증 마이그레이션 유지, 도메인 및 가입 상태 마이그레이션 추가 |
+| [src/lib/auth.ts](../src/lib/auth.ts) | OIDC state·nonce·PKCE, JWT 검증·발급 | 토큰 암호 검증 재사용, 안전한 로그인 복귀 경로 처리 추가 |
+| [src/lib/auth-store.ts](../src/lib/auth-store.ts) | 회원 upsert, 세션 회전, 회원 물리 삭제 | 세션 목적·회원 활성 상태 조회, 계좌 등록, 원자적 탈퇴·재가입 처리 |
+| [src/app/auth/v1/kakao/route.ts](../src/app/auth/v1/kakao/route.ts) | 로그인 후 `/home` 고정 이동 | 가입·재가입 분기, 초대·정산 화면으로 복귀 |
+| [src/app/api/auth/withdraw/route.ts](../src/app/api/auth/withdraw/route.ts) | 사용자 행 삭제 후 쿠키 제거 | 진행 회차 차단, 소프트 삭제, 모든 세션 폐기, 멤버십 이탈 |
+| [src/app/home/authenticated-home.tsx](../src/app/home/authenticated-home.tsx) | JWT와 사용자 존재 확인 | 활성 세션·계정·가입 완료 검사 후 안전한 화면 데이터 조회 |
+| [src/app/home/refresh-session.tsx](../src/app/home/refresh-session.tsx) | 갱신 실패 시 로그인 이동 | 진입 목적지 유지, 인증 장애와 DB 장애 구분 |
+| [src/app/home/home-client.tsx](../src/app/home/home-client.tsx) | 고정 예시·로컬 계산·파일명 표시 | 실제 목록, 회차 화면 연결, 계좌 관리, 정확한 금액·탈퇴 문구로 교체 |
+| [src/lib/split.ts](../src/lib/split.ts) | `number`, 앞사람부터 나머지 배분 | 최소 단위 정수의 기본 분배와 잠금 후 추첨 분리 |
+| [src/lib/openapi.ts](../src/lib/openapi.ts) | 인증 API만 정의 | 신규 계약·상태 오류 추가. OpenAPI 3.0.3과 기존 Swagger 유지 |
+| [vercel.json](../vercel.json) | 빌드 전에 `npm run db:migrate` | 추가 마이그레이션 실행 경로와 배포 런타임 검증 |
 
 현재 ‘내가 받을 금액’은 1인 부담액이므로 실제 순잔액으로 교체한다. 홈에서 서로 다른 회차의 미입금액을 추정하거나 다른 통화의 금액을 한 숫자로 합치지 않는다.
 
@@ -561,7 +561,7 @@ Server Component도 같은 인증·권한 함수를 거쳐 최소 데이터만 �
 
 변경 API의 DB 트랜잭션이 커밋된 뒤 Next.js `after()`에서 Ably로 이벤트를 발행한다. 이벤트에는 재조회 키만 포함하고, 각 탭은 해당 키와 연결된 기존 GET API를 다시 호출한다. 클라이언트 토큰은 활성 세션을 다시 확인하고 본인 채널의 subscribe 권한만 부여한다. 발행 실패는 저장 응답을 실패로 바꾸지 않으며 재연결 시 현재 등록된 자료를 다시 조회한다.
 
-구현 시 [로컬 Route Handler 가이드](node_modules/next/dist/docs/01-app/01-getting-started/15-route-handlers.md), [서버·클라이언트 컴포넌트 가이드](node_modules/next/dist/docs/01-app/01-getting-started/05-server-and-client-components.md), [데이터 보안 가이드](node_modules/next/dist/docs/01-app/02-guides/data-security.md), [Neon 설치 문서](node_modules/@neondatabase/serverless/README.md)를 기준으로 확인한다.
+구현 시 [로컬 Route Handler 가이드](../node_modules/next/dist/docs/01-app/01-getting-started/15-route-handlers.md), [서버·클라이언트 컴포넌트 가이드](../node_modules/next/dist/docs/01-app/01-getting-started/05-server-and-client-components.md), [데이터 보안 가이드](../node_modules/next/dist/docs/01-app/02-guides/data-security.md), [Neon 설치 문서](../node_modules/@neondatabase/serverless/README.md)를 기준으로 확인한다.
 
 ### 12.2 마이그레이션·배포
 
