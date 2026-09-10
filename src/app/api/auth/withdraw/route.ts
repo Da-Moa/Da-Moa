@@ -1,49 +1,32 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { after, NextRequest, NextResponse } from 'next/server'
 import {
   ACCESS_TOKEN_COOKIE_NAME,
   authCookieOptions,
   OIDC_COOKIE_NAMES,
   readAccessToken,
   REFRESH_TOKEN_COOKIE_NAME,
+  RETURN_TO_COOKIE_NAME,
   refreshCookieOptions,
 } from '../../../../lib/auth'
-import { deleteUser } from '../../../../lib/auth-store'
+import { withdrawAccount } from '../../../../lib/auth-store'
+import { AppError, errorResponse } from '../../../../lib/errors'
+import { publishDepartureInvalidation } from '../../../../lib/realtime-server'
 
 export const runtime = 'nodejs'
 
-function clearAuthCookies(response: NextResponse) {
-  response.cookies.set(ACCESS_TOKEN_COOKIE_NAME, '', authCookieOptions(0))
-  response.cookies.set(REFRESH_TOKEN_COOKIE_NAME, '', refreshCookieOptions(0))
-  Object.values(OIDC_COOKIE_NAMES).forEach((name) => response.cookies.set(name, '', authCookieOptions(0)))
-}
-
-function unauthorizedResponse() {
-  const response = NextResponse.json({ error: 'unauthorized' }, { status: 401 })
-  clearAuthCookies(response)
-  response.headers.set('Cache-Control', 'no-store')
-  return response
-}
-
 export async function POST(request: NextRequest) {
-  if (request.headers.get('origin') !== request.nextUrl.origin) {
-    const response = NextResponse.json({ error: 'forbidden' }, { status: 403 })
-    response.headers.set('Cache-Control', 'no-store')
-    return response
-  }
-
-  const access = readAccessToken(request.cookies.get(ACCESS_TOKEN_COOKIE_NAME)?.value)
-  if (!access) return unauthorizedResponse()
-
   try {
-    if (!(await deleteUser(access.userId))) return unauthorizedResponse()
-  } catch {
-    const response = NextResponse.json({ error: 'withdrawal_unavailable' }, { status: 503 })
-    response.headers.set('Cache-Control', 'no-store')
+    if (request.headers.get('origin') !== request.nextUrl.origin) throw new AppError(403, 'forbidden', '허용되지 않은 요청입니다')
+    const access = readAccessToken(request.cookies.get(ACCESS_TOKEN_COOKIE_NAME)?.value)
+    const result = await withdrawAccount(access)
+    after(() => publishDepartureInvalidation(result.groupIds))
+    const response = NextResponse.json({ ok: true }, { headers: { 'Cache-Control': 'private, no-store' } })
+    response.cookies.set(ACCESS_TOKEN_COOKIE_NAME, '', authCookieOptions(0))
+    response.cookies.set(REFRESH_TOKEN_COOKIE_NAME, '', refreshCookieOptions(0))
+    response.cookies.set(RETURN_TO_COOKIE_NAME, '', authCookieOptions(0))
+    for (const name of Object.values(OIDC_COOKIE_NAMES)) response.cookies.set(name, '', authCookieOptions(0))
     return response
+  } catch (error) {
+    return errorResponse(error)
   }
-
-  const response = NextResponse.json({ ok: true })
-  clearAuthCookies(response)
-  response.headers.set('Cache-Control', 'no-store')
-  return response
 }

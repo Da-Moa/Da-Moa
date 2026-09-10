@@ -1,24 +1,22 @@
-import { randomUUID, timingSafeEqual } from 'node:crypto'
+import { timingSafeEqual } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import {
   ACCESS_TOKEN_COOKIE_NAME,
-  ACCESS_TOKEN_MAX_AGE_SECONDS,
   authCookieOptions,
-  createAccessToken,
-  createRefreshToken,
-  currentTimestamp,
+  createReturnToCookie,
   exchangeKakaoAuthorizationCode,
   getKakaoUserProfile,
   getKakaoConfig,
-  hashRefreshToken,
+  ONBOARDING_MAX_AGE_SECONDS,
   OIDC_COOKIE_NAMES,
   REFRESH_TOKEN_COOKIE_NAME,
-  REFRESH_TOKEN_MAX_AGE_SECONDS,
+  RETURN_TO_COOKIE_NAME,
+  readReturnToCookie,
   refreshCookieOptions,
   type KakaoProfile,
   verifyKakaoIdToken,
 } from '../../../../lib/auth'
-import { createRefreshSession, upsertKakaoUser } from '../../../../lib/auth-store'
+import { signInKakao } from '../../../../lib/auth-store'
 
 export const runtime = 'nodejs'
 
@@ -30,9 +28,10 @@ function clearOidcCookies(response: NextResponse) {
 function loginRedirect(request: NextRequest, error: string) {
   const url = new URL('/login', request.url)
   url.searchParams.set('error', error)
+  url.searchParams.set('returnTo', readReturnToCookie(request.cookies.get(RETURN_TO_COOKIE_NAME)?.value, request.cookies.get(OIDC_COOKIE_NAMES.state)?.value))
   const response = NextResponse.redirect(url)
   clearOidcCookies(response)
-  response.headers.set('Cache-Control', 'no-store')
+  response.headers.set('Cache-Control', 'private, no-store')
   return response
 }
 
@@ -71,31 +70,25 @@ export async function GET(request: NextRequest) {
       // A verified ID token is sufficient to sign in; profile data is optional.
     }
 
-    const issuedAt = currentTimestamp()
-    const user = await upsertKakaoUser(subject, profile, issuedAt)
-    const sessionId = randomUUID()
-    const refreshToken = createRefreshToken(user.id, sessionId, undefined, issuedAt)
-    await createRefreshSession({
-      expiresAt: issuedAt + REFRESH_TOKEN_MAX_AGE_SECONDS,
-      id: sessionId,
-      issuedAt,
-      tokenHash: hashRefreshToken(refreshToken),
-      userId: user.id,
-    })
-
-    const response = NextResponse.redirect(new URL('/home', request.url))
+    const session = await signInKakao(subject, profile)
+    const returnTo = readReturnToCookie(request.cookies.get(RETURN_TO_COOKIE_NAME)?.value, state)
+    const destination = session.purpose === 'onboarding' ? `/onboarding?returnTo=${encodeURIComponent(returnTo)}` : returnTo
+    const response = NextResponse.redirect(new URL(destination, request.url))
     response.cookies.set(
       ACCESS_TOKEN_COOKIE_NAME,
-      createAccessToken(user.id, sessionId, undefined, issuedAt),
-      authCookieOptions(ACCESS_TOKEN_MAX_AGE_SECONDS),
+      session.accessToken,
+      authCookieOptions(session.accessMaxAge),
     )
     response.cookies.set(
       REFRESH_TOKEN_COOKIE_NAME,
-      refreshToken,
-      refreshCookieOptions(REFRESH_TOKEN_MAX_AGE_SECONDS),
+      session.refreshToken,
+      refreshCookieOptions(session.refreshMaxAge),
     )
+    response.cookies.set(RETURN_TO_COOKIE_NAME,
+      session.purpose === 'onboarding' ? createReturnToCookie(returnTo, state) : '',
+      authCookieOptions(session.purpose === 'onboarding' ? ONBOARDING_MAX_AGE_SECONDS : 0))
     clearOidcCookies(response)
-    response.headers.set('Cache-Control', 'no-store')
+    response.headers.set('Cache-Control', 'private, no-store')
     return response
   } catch {
     return loginRedirect(request, 'failed')
