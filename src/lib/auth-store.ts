@@ -15,9 +15,11 @@ import { withWriteTransaction, type Database } from './db'
 import { AppError } from './errors'
 import { objectBody, replayMutation, saveMutation } from './mutations'
 import { testAccountForKey } from './test-accounts'
+import { normalizeBankAccountInput, type BankAccountInput } from './bank-account'
+import { bankAccountRequestFingerprint, inquireRealName, OpenBankingError } from './openbanking'
+import { allocateBankTranId, assertBankVerification, getOpenBankingStatus, getServiceToken, invalidateServiceToken, prepareBankVerification, requestDisconnect } from './openbanking-store'
 
 export type UserAccount = Pick<Account, 'displayName' | 'email' | 'profileImageUrl'>
-export type BankAccount = { bankName: string; accountNumber: string; accountHolder: string }
 export type AuthSession = {
   userId: string
   purpose: 'app' | 'onboarding'
@@ -40,26 +42,20 @@ type RefreshSessionRotationInput = RefreshSessionInput & {
   previousTokenHash: string
 }
 
-export function parseBankAccount(value: unknown): BankAccount {
-  const body = objectBody(value)
-  const text = (field: string) => {
-    const value = body[field]
-    if (typeof value !== 'string' || !value.trim() || value.trim().length > 100 || /[\u0000-\u001f\u007f]/.test(value)) {
-      throw new AppError(400, 'invalid_bank_account', '은행명과 예금주를 1~100자로 입력해 주세요')
+async function verifyBankAccount(bank: BankAccountInput) {
+  let token = await getServiceToken()
+  try { return await inquireRealName(bank, token, await allocateBankTranId()) }
+  catch (error) {
+    if (!(error instanceof OpenBankingError) || !error.reauth) throw error
+    // This is the institution token; a rejected token must not restart the user's OAuth.
+    await invalidateServiceToken(token)
+    token = await getServiceToken()
+    try { return await inquireRealName(bank, token, await allocateBankTranId()) }
+    catch (retryError) {
+      if (retryError instanceof OpenBankingError && retryError.reauth) throw new OpenBankingError('configuration', retryError.providerCode)
+      throw retryError
     }
-    return value.trim()
   }
-  const bankName = text('bankName')
-  const accountHolder = text('accountHolder')
-  const raw = body.accountNumber
-  if (typeof raw !== 'string' || !raw || raw.length > 100 || /[^0-9 -]/.test(raw)) {
-    throw new AppError(400, 'invalid_bank_account', '계좌번호는 숫자, 공백, 하이픈으로 입력해 주세요')
-  }
-  const accountNumber = raw.replace(/[ -]/g, '')
-  if (!/^[0-9]{1,64}$/.test(accountNumber)) {
-    throw new AppError(400, 'invalid_bank_account', '계좌번호는 숫자 1~64자리로 입력해 주세요')
-  }
-  return { bankName, accountNumber, accountHolder }
 }
 
 async function issueSession(client: Database, userId: string, purpose: 'app' | 'onboarding', now: number): Promise<AuthSession> {
@@ -114,38 +110,72 @@ export function signInTestAccount(key: unknown) {
   })
 }
 
-export function completeOnboarding(access: AccessToken | null, input: unknown) {
-  const bank = parseBankAccount(input)
-  const body = objectBody(input)
-  return withWriteTransaction(async (client) => {
+function assertBankVersion(account: Account, expectedVersion: number) {
+  if (account.bankVersion !== expectedVersion) throw new AppError(409, 'bank_account_conflict', '계좌가 변경됐어요. 최신 계좌를 확인하고 다시 입력해 주세요')
+}
+
+async function assertOnboarding(client: Database, account: Account, bank: BankAccountInput) {
+  if (account.purpose !== 'onboarding') throw new AppError(409, 'already_onboarded', '이미 가입을 완료했습니다')
+  if (account.deletedAt !== null && !bank.confirmRejoin) throw new AppError(400, 'rejoin_confirmation_required', '이전 기록을 유지하여 재가입하는 데 동의해 주세요')
+  if ((await getOpenBankingStatus(client, account.id)).status === 'DISCONNECT_PENDING') {
+    throw new AppError(409, 'openbanking_disconnect_pending', '이전 계좌 연결을 정리하고 있어요. 정리가 끝나면 다시 가입해 주세요')
+  }
+  assertBankVersion(account, bank.expectedBankVersion)
+}
+
+export async function completeOnboarding(access: AccessToken | null, input: unknown) {
+  const bank = normalizeBankAccountInput(objectBody(input), { onboarding: true, allowTestBanks: process.env.OPENBANKING_ENV === 'test' })
+  await withWriteTransaction(async client => {
     const account = await requireAccount(client, access, true)
-    if (account.purpose !== 'onboarding') throw new AppError(409, 'already_onboarded', '이미 가입을 완료했습니다')
-    if (account.deletedAt !== null && body.confirmRejoin !== true) {
-      throw new AppError(400, 'rejoin_confirmation_required', '이전 기록을 유지하여 재가입하는 데 동의해 주세요')
-    }
+    await assertOnboarding(client, account, bank)
+  })
+  const capture = bank.verifyWithOpenBanking ? await prepareBankVerification(access, bank.expectedBankVersion, true) : null
+  const verified = bank.verifyWithOpenBanking ? await verifyBankAccount(bank) : null
+  const saved = verified ?? bank
+  return withWriteTransaction(async (client) => {
+    const account = capture ? await assertBankVerification(client, access, capture, bank.expectedBankVersion, true) : await requireAccount(client, access, true)
+    await assertOnboarding(client, account, bank)
     const now = currentTimestamp()
     await client.query(`
       UPDATE users SET bank_name = $2, account_number = $3, account_holder = $4,
-        bank_updated_at = $5, deleted_at = NULL, onboarding_completed_at = $5, updated_at = $5
+        bank_updated_at = $5, deleted_at = NULL, onboarding_completed_at = $5, updated_at = $5,
+        bank_code = $6, bank_verified_at = $7, bank_verification_tran_id = $8, bank_version = bank_version + 1
       WHERE id = $1
-    `, [account.id, bank.bankName, bank.accountNumber, bank.accountHolder, now])
+    `, [account.id, saved.bankName, saved.accountNumber, saved.accountHolder, now, saved.bankCode, verified?.verifiedAt ?? null, verified?.verificationTranId ?? null])
     await client.query('UPDATE refresh_sessions SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL', [account.id, now])
     // Memberships deliberately stay inactive after rejoining.
     return issueSession(client, account.id, 'app', now)
   })
 }
 
-export function updateBankAccount(access: AccessToken | null, requestKey: string, input: unknown) {
-  const bank = parseBankAccount(input)
-  return withWriteTransaction(async (client) => {
+export async function updateBankAccount(access: AccessToken | null, requestKey: string, input: unknown) {
+  const bank = normalizeBankAccountInput(objectBody(input), { allowTestBanks: process.env.OPENBANKING_ENV === 'test' })
+  const operation = 'bank-account.update'
+  const initial = await withWriteTransaction(async client => {
     const account = await requireAccount(client, access)
-    const operation = 'bank-account.update'
-    const prior = await replayMutation<{ id: string }>(client, account.id, operation, requestKey, bank)
+    const fingerprint = bankAccountRequestFingerprint(account.id, bank)
+    const prior = await replayMutation<{ id: string; bankVersion: number }>(client, account.id, operation, requestKey, fingerprint)
+    return { ...prior, fingerprint }
+  })
+  if (initial.result) return initial.result
+  const capture = bank.verifyWithOpenBanking ? await prepareBankVerification(access, bank.expectedBankVersion) : null
+  const verified = bank.verifyWithOpenBanking ? await verifyBankAccount(bank) : null
+  const saved = verified ?? bank
+  return withWriteTransaction(async client => {
+    // Replay precedes the version assertion: a concurrent copy may already have committed this exact request.
+    const current = await requireAccount(client, access)
+    const prior = await replayMutation<{ id: string; bankVersion: number }>(client, current.id, operation, requestKey, initial.fingerprint)
     if (prior.result) return prior.result
+    const account = capture ? await assertBankVerification(client, access, capture, bank.expectedBankVersion) : current
+    assertBankVersion(account, bank.expectedBankVersion)
     const now = currentTimestamp()
     await client.query(`UPDATE users SET bank_name = $2, account_number = $3, account_holder = $4,
-      bank_updated_at = $5, updated_at = $5 WHERE id = $1`, [account.id, bank.bankName, bank.accountNumber, bank.accountHolder, now])
-    const result = { id: account.id }
+      bank_updated_at = $5, updated_at = $5, bank_code = $6,
+      bank_verified_at = CASE WHEN $7::bigint IS NOT NULL THEN $7 WHEN bank_code=$6 AND account_number=$3 AND account_holder=$4 THEN bank_verified_at ELSE NULL END,
+      bank_verification_tran_id = CASE WHEN $7::bigint IS NOT NULL THEN $8 WHEN bank_code=$6 AND account_number=$3 AND account_holder=$4 THEN bank_verification_tran_id ELSE NULL END,
+      bank_version = bank_version + 1 WHERE id = $1`,
+    [account.id, saved.bankName, saved.accountNumber, saved.accountHolder, now, saved.bankCode, verified?.verifiedAt ?? null, verified?.verificationTranId ?? null])
+    const result = { id: account.id, bankVersion: bank.expectedBankVersion + 1 }
     await saveMutation(client, account.id, operation, requestKey, prior.digest, account.id, result)
     return result
   })
@@ -166,7 +196,8 @@ export function withdrawAccount(access: AccessToken | null) {
     await client.query('UPDATE users SET deleted_at = $2, updated_at = $2 WHERE id = $1', [account.id, now])
     await client.query('UPDATE refresh_sessions SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL', [account.id, now])
     await client.query('UPDATE group_members SET left_at = $2 WHERE user_id = $1 AND left_at IS NULL', [account.id, now])
-    return { ok: true, groupIds: memberships.map(row => String(row.group_id)) }
+    const openBankingDisconnect = await requestDisconnect(client, account.id)
+    return { ok: true, userId: account.id, openBankingDisconnect, groupIds: memberships.map(row => String(row.group_id)) }
   })
 }
 

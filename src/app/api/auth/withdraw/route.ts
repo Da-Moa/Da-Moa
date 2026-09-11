@@ -11,6 +11,8 @@ import {
 import { withdrawAccount } from '../../../../lib/auth-store'
 import { AppError, errorResponse } from '../../../../lib/errors'
 import { publishDepartureInvalidation } from '../../../../lib/realtime-server'
+import { retryDisconnect } from '../../../../lib/openbanking-store'
+import { OPENBANKING_CALLBACK_COOKIE, openBankingCallbackCookieOptions } from '../../../../lib/openbanking-callback'
 
 export const runtime = 'nodejs'
 
@@ -20,10 +22,12 @@ export async function POST(request: NextRequest) {
     const access = readAccessToken(request.cookies.get(ACCESS_TOKEN_COOKIE_NAME)?.value)
     const result = await withdrawAccount(access)
     after(() => publishDepartureInvalidation(result.groupIds))
-    const response = NextResponse.json({ ok: true }, { headers: { 'Cache-Control': 'private, no-store' } })
+    if (result.openBankingDisconnect === 'pending') after(() => retryDisconnect(result.userId).then(() => undefined))
+    const response = NextResponse.json({ ok: true, openBankingDisconnect: result.openBankingDisconnect }, { headers: { 'Cache-Control': 'private, no-store' } })
     response.cookies.set(ACCESS_TOKEN_COOKIE_NAME, '', authCookieOptions(0))
     response.cookies.set(REFRESH_TOKEN_COOKIE_NAME, '', refreshCookieOptions(0))
     response.cookies.set(RETURN_TO_COOKIE_NAME, '', authCookieOptions(0))
+    response.cookies.set(OPENBANKING_CALLBACK_COOKIE, '', openBankingCallbackCookieOptions(0))
     for (const name of Object.values(OIDC_COOKIE_NAMES)) response.cookies.set(name, '', authCookieOptions(0))
     return response
   } catch (error) {

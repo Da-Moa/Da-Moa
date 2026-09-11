@@ -34,6 +34,6 @@ export type SettlementDTO = {
   finalized: boolean; currency: Currency; balanceMinor: string | null; sharePath: string | null;
   checkedAt: number | null; checkRequired: boolean; checkedCount: number; requiredCount: number; allChecked: boolean;
   confirmations: { userId: string; displayName: string; profileImageUrl: string | null; checkedAt: number | null }[];
-  outgoing: { receiverId: string; displayName: string; profileImageUrl: string | null; amountMinor: string; account?: { bankName: string | null; accountNumber: string | null; accountHolder: string | null } }[];
+  outgoing: { receiverId: string; displayName: string; profileImageUrl: string | null; amountMinor: string; account?: { bankName: string | null; accountNumber: string | null; accountHolder: string | null; verifiedAt: number | null } }[];
   incoming: { senderId: string; displayName: string; profileImageUrl: string | null; amountMinor: string; receivedAt: number | null }[]
 }
