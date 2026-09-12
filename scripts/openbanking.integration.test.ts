@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { after, afterEach, before, test } from 'node:test'
 import { currentTimestamp, readAccessToken, type AccessToken } from '../src/lib/auth.ts'
 import { signInKakao } from '../src/lib/auth-store.ts'
@@ -84,6 +86,26 @@ async function connection(userId: string) {
   return withReadTransaction(async client => (await client.query('SELECT * FROM openbanking_connections WHERE user_id=$1', [userId])).rows[0])
 }
 
+test('disconnect CLI reports due work beyond its 100-member batch and finishes it on the next run', async () => {
+  const ids = Array.from({ length: 101 }, () => randomUUID())
+  await withWriteTransaction(async client => {
+    await client.query(`INSERT INTO users(id,provider,provider_subject,created_at,updated_at,deleted_at)
+      SELECT id,'test',id,$2,$2,$2 FROM unnest($1::text[]) AS id`, [ids, currentTimestamp()])
+    await client.query(`INSERT INTO openbanking_connections(user_id,connection_id,environment,status,disconnect_requested_at,disconnect_next_attempt_at)
+      SELECT id,id::uuid,'test','DISCONNECT_PENDING',$2,$2 FROM unnest($1::text[]) AS id`, [ids, currentTimestamp()])
+  })
+  // These pending placeholders have no grants to revoke; fail any unexpected external request.
+  const result = await promisify(execFile)(process.execPath, ['--import', 'tsx', '--input-type=module', '--eval',
+    "globalThis.fetch = async () => { throw new Error('External requests forbidden in this test') }; await import('./scripts/retry-openbanking-disconnect.mjs')"],
+  { env: process.env, timeout: 60_000 }).then(value => ({ ...value, code: 0 }), error => ({ code: error.code, stdout: String(error.stdout) }))
+  assert.equal(result.code, 1, 'an unfinished batch must not signal successful cleanup')
+  assert.match(result.stdout, /completed:\s*100\b/)
+  assert.match(result.stdout, /pending:\s*0\b/)
+  assert.match(result.stdout, /needsOperator:\s*0\b/)
+  assert.match(result.stdout, /remainingDue:\s*1\b/)
+  assert.deepEqual(await retryDisconnect(), { completed: 1, pending: 0, skipped: 0, needsOperator: 0, remainingDue: 0 })
+})
+
 test('OAuth state binds member and original session, superseded state and replay cannot exchange codes', async () => {
   const a = await member(), b = await member()
   let exchanges = 0
@@ -141,7 +163,7 @@ test('first OAuth response arriving after withdrawal is only cleaned up, and pen
   token.resolve(Response.json(tokenBody('late-access')))
   assert.equal((await callback).error, 'openbanking_unavailable')
   assert.equal((await connection(user.access.userId)).status, 'DISCONNECT_PENDING')
-  assert.deepEqual(await retryDisconnect(user.access.userId), { completed: 1, pending: 0, skipped: 0, needsOperator: 0 })
+  assert.deepEqual(await retryDisconnect(user.access.userId), { completed: 1, pending: 0, skipped: 0, needsOperator: 0, remainingDue: 0 })
   assert.equal(closes, 1)
   assert.equal((await connection(user.access.userId)).status, 'DISCONNECTED')
   assert.ok((await startOpenBanking(rejoinAccess, 'onboarding')).authorizationUrl)

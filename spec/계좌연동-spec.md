@@ -149,12 +149,12 @@ stateDiagram-v2
 | 메서드·경로 | 인증·요청 | 응답·동작 |
 |---|---|---|
 | GET `/api/me` | 기존 app/onboarding 세션 | 기존 응답에 `bankVersion`, 계좌 `bankCode/verifiedAt`, `openBanking:{status,authenticatedAt,environment}` 추가 |
-| POST `/api/me/openbanking` | app/onboarding 세션. `{context:"onboarding"|"settings",returnTo?}` | 미연결·재동의 시 `{data:{authorizationUrl}}`. 유효 연결이면 `{data:{returnTo}}`로 입력 단계 복귀 |
+| POST `/api/me/openbanking` | app/onboarding 세션. `{context:"onboarding"\|"settings",returnTo?}` | 미연결·재동의 시 `{data:{authorizationUrl}}`. 유효 연결이면 `{data:{returnTo}}`로 입력 단계 복귀 |
 | GET `/api/me/openbanking/accounts` | 활성 app/onboarding 세션과 유효한 본인 연결. 사용자 ID를 입력받지 않음 | `{data:{accounts:[{fintechUseNum,bankCode,bankName,accountHolder,accountNumber,accountNumberMasked}]}}`. 전체 번호가 제공되지 않으면 `accountNumber:null` |
 | GET `/auth/v1/openbanking` | 공급자 콜백 파라미터, 서버 state, 시작 세션 검증 | 사용자 토큰 교환·저장 후 안전한 앱 경로로 303 이동. 토큰을 URL에 넣지 않음 |
 | POST `/api/me/onboarding` | onboarding 세션, 아래 계좌 입력과 재가입 동의 | 기존 `{data:{id,returnTo}}` 및 새 앱 세션 쿠키 |
 | PUT `/api/me/bank-account` | 활성 app 세션, UUID `Idempotency-Key`, 아래 계좌 입력 | `{data:{id,bankVersion}}` |
-| POST `/api/auth/withdraw` | 활성 app 세션, 기존 빈 본문 | 기존 `{ok:true}`에 `openBankingDisconnect:"completed"|"pending"` 추가. 쿠키 삭제 |
+| POST `/api/auth/withdraw` | 활성 app 세션, 기존 빈 본문 | 기존 `{ok:true}`에 `openBankingDisconnect:"completed"\|"pending"` 추가. 쿠키 삭제 |
 
 계좌 입력 계약:
 
@@ -296,7 +296,7 @@ stateDiagram-v2
 ### 8.2 재시도·토큰 폐기
 
 - 해제 대기 상태는 DB에 남긴다. 요청 처리 후 일회성 실행만으로 외부 해제 완료를 보장하지 않는다.
-- 작은 운영 스크립트 `scripts/retry-openbanking-disconnect.mjs`가 처리 시각이 지난 대기 연결을 조회해 같은 해제 함수를 호출하도록 한다. 운영 스케줄러에서 주기적으로 실행하며 별도 큐 프레임워크를 도입하지 않는다. 반환값의 `needsOperator`는 해제 대기 중 다음 재시도 시각이 없거나, 결과가 불명확하거나, 진행 중 작업의 임대가 만료된 연결을 별도로 집계한다. 미래 시각의 일시 실패 재시도는 운영 확인 대상으로 집계하지 않는다. 자동 재시도 대상에서 빠진 작업도 이 집계에 남으며, `pending` 또는 `needsOperator`가 1 이상이면 CLI는 종료 코드 1을 반환한다.
+- 작은 운영 스크립트 `scripts/retry-openbanking-disconnect.mjs`가 처리 시각이 지난 대기 연결을 최대 100개 조회해 같은 해제 함수를 호출하도록 한다. 운영 스케줄러에서 주기적으로 실행하며 별도 큐 프레임워크를 도입하지 않는다. 반환값의 `needsOperator`는 해제 대기 중 다음 재시도 시각이 없거나, 결과가 불명확하거나, 진행 중 작업의 임대가 만료된 연결을 별도로 집계한다. 미래 시각의 일시 실패 재시도는 운영 확인 대상으로 집계하지 않는다. 자동 재시도 대상에서 빠진 작업도 이 집계에 남는다. `remainingDue`는 실행 후에도 재시도 예정 시각이 지난 모든 대기 연결을 집계하며, 진행 중·결과 불명 연결도 시각 조건을 충족하면 포함하므로 `needsOperator`와 중복될 수 있다. `pending`, `needsOperator`, `remainingDue` 중 하나라도 1 이상이면 CLI는 종료 코드 1을 반환한다.
 - 짧은 DB 임대로 연결 하나의 해제 실행을 선점하고, 외부 요청 뒤 같은 연결 ID·상태·임대 소유를 검사한다. 실행 중 종료된 작업은 임대 만료 후 복구 대상으로 회수하되, 외부 재호출 여부는 아래 결과 확인 규칙으로 판단한다.
 - 확정된 일시 실패는 1·2·4·8·16분, 이후 최대 30분 간격을 기본값으로 재시도한다. 시간 초과처럼 결과가 불명확하면 공급자 상태 조회 또는 공식적으로 안전한 중복 요청 규격에 따라 복구한다. 이 수단이 확인되지 않으면 무조건 재발송하지 않고 대기 상태에서 운영 확인한다. 영구 설정·권한 오류도 자동 반복을 멈추고 원인 해결 후 재시도한다.
 - 사용자 토큰이 해제에 필요하면 일반 작업에서 접근할 수 없게 제한해 암호화 보관하고, 외부 해제 확인 후 폐기한다. 토큰 만료 자체를 외부 동의 해제 성공으로 간주하지 않는다.

@@ -464,10 +464,11 @@ export async function retryDisconnect(userId?: string, options: { retryRejected?
   for (const id of ids) {
     try { counts[await disconnectOne(id)]++ } catch { counts.pending++ }
   }
-  const needsOperator = await withReadTransaction(async client => Number((await client.query(`SELECT count(*) AS count
-    FROM openbanking_connections WHERE status='DISCONNECT_PENDING' AND ($1::text IS NULL OR user_id=$1)
-      AND (disconnect_next_attempt_at IS NULL OR operation_outcome='unknown'
-        OR (operation_outcome='in_progress' AND (operation_lease_until IS NULL OR operation_lease_until<=$2)))`,
-  [userId ?? null, currentTimestamp()])).rows[0].count))
-  return { ...counts, needsOperator }
+  const outstanding = await withReadTransaction(async client => (await client.query(`SELECT
+    count(*) FILTER (WHERE disconnect_next_attempt_at IS NULL OR operation_outcome='unknown'
+      OR (operation_outcome='in_progress' AND (operation_lease_until IS NULL OR operation_lease_until<=$2))) AS needs_operator,
+    count(*) FILTER (WHERE disconnect_next_attempt_at<=$2) AS remaining_due
+    FROM openbanking_connections WHERE status='DISCONNECT_PENDING' AND ($1::text IS NULL OR user_id=$1)`,
+  [userId ?? null, currentTimestamp()])).rows[0])
+  return { ...counts, needsOperator: Number(outstanding.needs_operator), remainingDue: Number(outstanding.remaining_due) }
 }
