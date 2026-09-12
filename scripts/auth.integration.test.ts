@@ -7,7 +7,7 @@ import {
   type AccessToken,
 } from '../src/lib/auth.ts'
 import {
-  completeOnboarding, deleteRefreshSession, rotateRefreshSession, signInKakao, updateBankAccount, withdrawAccount,
+  deleteRefreshSession, rotateRefreshSession, signInKakao, withdrawAccount,
   type AuthSession,
 } from '../src/lib/auth-store.ts'
 import { getAccount } from '../src/lib/authorization.ts'
@@ -15,6 +15,7 @@ import { createDatabaseClient, withReadTransaction, withWriteTransaction } from 
 import { AppError } from '../src/lib/errors.ts'
 import { acceptInvite, createGroup, createInvite, getGroup, getInvite, listGroups } from '../src/lib/group-store.ts'
 import { applyMigrations } from './migrations.mjs'
+import { completeTestOnboarding as completeOnboarding, updateTestBankAccount as updateBankAccount } from './openbanking-test-support.ts'
 
 const testUrl = process.env.TEST_DATABASE_URL
 if (!testUrl || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(testUrl).hostname) || !new URL(testUrl).pathname.toLowerCase().includes('test')) throw new Error('TEST_DATABASE_URL must name an isolated local test database; authentication tests never use DATABASE_URL implicitly')
@@ -137,7 +138,7 @@ test('onboarding purpose, bank normalization, request replay, logout, and one-ti
   await assert.rejects(updateBankAccount(access, key, { ...nextBank, accountNumber: '123' }), codeIs('idempotency_conflict'))
   assert.equal((await getAccount(access)).accountNumber, '000987')
   const mutation = await withReadTransaction(async client => client.query('SELECT response_metadata FROM mutation_requests WHERE actor_id=$1 AND request_key=$2', [app.userId, key]))
-  assert.deepEqual(mutation.rows.map(row => row.response_metadata), [{ id: app.userId }])
+  assert.deepEqual(mutation.rows.map(row => row.response_metadata), [{ id: app.userId, bankVersion: 2 }])
 
   const client = createDatabaseClient(process.env.TEST_DATABASE_URL!)
   try {
@@ -169,6 +170,9 @@ test('withdrawal checks all unfinished history including excluded members; rejoi
       }
     }
   })
+  const replacedDuringSettlement = await updateBankAccount(participant.access, randomUUID(), { ...bank, accountNumber: '000777' })
+  assert.equal(replacedDuringSettlement.bankVersion, 2, 'unfinished settlement blocks withdrawal but permits verified representative account replacement')
+  assert.equal((await getAccount(participant.access)).accountNumber, '000777')
   await assert.rejects(withdrawAccount(participant.access), error => {
     assert.ok(error instanceof AppError)
     assert.equal(error.code, 'unfinished_rounds')

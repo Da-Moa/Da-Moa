@@ -14,6 +14,21 @@ const timestamp: Schema = { type: 'integer', format: 'int64', description: 'UTC 
 const nullableTimestamp: Schema = { ...timestamp, nullable: true }
 const profileImage: Schema = { type: 'string', format: 'uri', nullable: true, description: '활성 회원의 최신 카카오 프로필 이미지 URL. 탈퇴했거나 이미지가 없으면 null.' }
 const bankFields = { bankName: { type: 'string', minLength: 1, maxLength: 100 }, accountNumber: { type: 'string', minLength: 1, maxLength: 100, description: '숫자·공백·하이픈 입력. 구분자를 제거한 숫자 1~64자와 선행 0을 보존합니다.' }, accountHolder: { type: 'string', minLength: 1, maxLength: 100 } }
+const bankVersion: Schema = { type: 'integer', minimum: 0 }
+const bankInputFields = {
+  bankCode: { type: 'string', pattern: '^\\d{3}$', description: '지원 금융기관의 표준 코드' },
+  accountNumber: { type: 'string', maxLength: 64, description: '숫자·ASCII 공백·하이픈. 정규화 후 숫자 1~16자리, 선행 0 보존.' },
+  birthDate: { type: 'string', format: 'date', description: 'YYYY-MM-DD. 금결원 확인 모드에서만 필수이며 확인 전 저장에는 보내지 않습니다. DB에 저장하지 않습니다.' },
+  accountHolder: { type: 'string', minLength: 1, maxLength: 100, description: 'NFC·앞뒤 공백 정리 후 1~40자. 계좌실명조회 응답과 정확히 비교합니다.' },
+  expectedBankVersion: bankVersion,
+  verifyWithOpenBanking: { type: 'boolean', default: true, description: 'false: 금결원 호출 없이 계좌 저장. true 또는 생략: 사용자 동의와 계좌실명조회 후 저장.' },
+}
+const bankInputRequired = ['bankCode', 'accountNumber', 'accountHolder', 'expectedBankVersion']
+const bankVerificationModes = { oneOf: [
+  { properties: { verifyWithOpenBanking: { enum: [false] } }, required: ['verifyWithOpenBanking'], not: { required: ['birthDate'] } },
+  { properties: { verifyWithOpenBanking: { enum: [true] } }, required: ['birthDate'] },
+] }
+const openBankingFields = { status: { type: 'string', enum: ['NOT_CONNECTED', 'CONNECTED', 'REAUTH_REQUIRED', 'DISCONNECT_PENDING', 'DISCONNECTED'] }, authenticatedAt: nullableTimestamp, environment: { type: 'string', enum: ['test', 'production'] } }
 const versionBody = object({ expectedVersion: integer }, ['expectedVersion'])
 const settlementCheckBody = object({ expectedVersion: integer, checked: { type: 'boolean' }, senderId: { ...id, description: '생략하면 본인의 모든 수취 건, 지정하면 해당 송금자의 한 건만 변경합니다.' } }, ['expectedVersion', 'checked'])
 const expenseFields = {
@@ -35,7 +50,7 @@ const mutationParameters = [
 ]
 const domainResponses = {
   DomainFailure: {
-    description: '요청 오류. 409는 상태·버전·제외·인원 제한·미종료 회차·멱등 키 충돌, 503은 같은 키로 재시도할 저장소 오류입니다.',
+    description: '요청 오류. 409는 상태·버전·제외·인원 제한·미종료 회차·멱등 키 충돌, 424 openbanking_test_data_missing은 금융결제원 계좌실명조회 테스트 응답 미등록·불일치, 503은 같은 키로 재시도할 저장소·외부 서비스 오류입니다.',
     content: { 'application/json': { schema: ref('ApiError') } },
   },
 }
@@ -54,9 +69,11 @@ const domainSchemas = {
     message: string,
     details: { type: 'object', additionalProperties: true, description: '현재 버전, 제외 차단 관련 지출 또는 탈퇴를 막는 회차 등. 계좌·인증 토큰은 포함하지 않음.' },
   }, ['error', 'message']),
-  BankAccount: object(bankFields, ['bankName', 'accountNumber', 'accountHolder']),
-  CurrentBankAccount: object({ bankName: { type: 'string', nullable: true }, accountNumber: { type: 'string', nullable: true }, accountHolder: { type: 'string', nullable: true } }, ['bankName', 'accountNumber', 'accountHolder']),
-  Me: object({ id, displayName: { type: 'string', nullable: true }, email: { type: 'string', nullable: true }, profileImageUrl: profileImage, purpose: { type: 'string', enum: ['app', 'onboarding'] }, deletedAt: nullableTimestamp, onboardingCompletedAt: nullableTimestamp, bankAccount: { type: 'object', nullable: true, properties: bankFields, description: '본인의 현재 계좌 또는 null. 실계좌·예금주 검증 전입니다.' } }, ['id', 'displayName', 'email', 'profileImageUrl', 'purpose', 'deletedAt', 'onboardingCompletedAt', 'bankAccount']),
+  BankAccount: { ...object(bankInputFields, bankInputRequired), ...bankVerificationModes, additionalProperties: false },
+  RegisteredBankAccount: object({ fintechUseNum: { type: 'string', pattern: '^\\d{24}$', description: '등록계좌 선택용 식별자. 대표 계좌 저장 요청에는 사용하지 않습니다.' }, bankCode: bankInputFields.bankCode, bankName: string, accountHolder: string,
+    accountNumber: { type: 'string', nullable: true, pattern: '^\\d{1,16}$', description: '금융결제원이 전체 번호를 제공한 경우에만 값이 있습니다. 미제공 시 null.' }, accountNumberMasked: string }, ['fintechUseNum', 'bankCode', 'bankName', 'accountHolder', 'accountNumber', 'accountNumberMasked']),
+  CurrentBankAccount: object({ bankName: { type: 'string', nullable: true }, accountNumber: { type: 'string', nullable: true }, accountHolder: { type: 'string', nullable: true }, verifiedAt: { ...nullableTimestamp, description: 'null이면 계좌번호와 함께 “확인되지 않은 계좌입니다.”를 표시합니다.' } }, ['bankName', 'accountNumber', 'accountHolder', 'verifiedAt']),
+  Me: object({ id, displayName: { type: 'string', nullable: true }, email: { type: 'string', nullable: true }, profileImageUrl: profileImage, purpose: { type: 'string', enum: ['app', 'onboarding'] }, deletedAt: nullableTimestamp, onboardingCompletedAt: nullableTimestamp, bankVersion, openBanking: object(openBankingFields, Object.keys(openBankingFields)), bankAccount: { type: 'object', nullable: true, properties: { ...bankFields, bankCode: { type: 'string', nullable: true }, verifiedAt: nullableTimestamp }, description: '본인의 현재 대표 계좌. verifiedAt=null이면 “확인되지 않은 계좌입니다.”를 표시합니다. 수동 저장·기존 계좌 모두 해당하며 OAuth 연결만으로 확인 상태가 되지 않습니다. 확인 이력은 실제 이체 성공을 보장하지 않습니다.' } }, ['id', 'displayName', 'email', 'profileImageUrl', 'purpose', 'deletedAt', 'onboardingCompletedAt', 'bankAccount', 'bankVersion', 'openBanking']),
   Group: object(groupFields, Object.keys(groupFields)),
   GroupMember: object({ userId: id, displayName: string, excludedAt: nullableTimestamp }, ['userId', 'displayName', 'excludedAt']),
   GroupDetail: object({ ...groupFields, members: { ...array(ref('GroupMember')), maxItems: MAX_GROUP_MEMBERS, description: '생성자를 포함해 최대 10명이며 생성자가 첫 번째입니다.' }, isCreator: { type: 'boolean', description: '조회 사용자가 현재 활성 모임 생성자인지 여부' }, invites: array(object({ id, expiresAt: timestamp }, ['id', 'expiresAt'])) }, [...Object.keys(groupFields), 'members', 'isCreator', 'invites']),
@@ -93,15 +110,17 @@ function operation(tag: string, summary: string, options: OperationOptions = {})
     ...(options.request ? { requestBody: { required: true, content: { [options.multipart ? 'multipart/form-data' : 'application/json']: { schema: options.request } } } } : {}),
     responses: {
       '200': { description: '요청 성공', content: { 'application/json': { schema: object({ data: options.response ?? ref('MutationResult') }, ['data']) } } },
-      ...Object.fromEntries(['400', '401', '403', '404', '409', '503', ...(options.multipart ? ['415'] : [])].map(code => [code, { $ref: '#/components/responses/DomainFailure' }])),
+      ...Object.fromEntries(['400', '401', '403', '404', '409', '422', '424', '429', '503', ...(options.multipart ? ['415'] : [])].map(code => [code, { $ref: '#/components/responses/DomainFailure' }])),
     },
   }
 }
 const roundCommand = (summary: string, description: string) => operation('정산', summary, { mutation: true, request: versionBody, description })
 const domainPaths = {
   '/api/me': { get: operation('계정', '본인 프로필·가입 상태·계좌 조회', { response: ref('Me'), description: 'app 또는 onboarding 목적의 활성 세션으로 본인 데이터만 조회합니다. 일반 기능은 가입 완료 app 세션이 필요합니다.' }) },
-  '/api/me/onboarding': { post: operation('계정', '가입·명시적 재가입과 계좌 등록 완료', { response: object({ id, returnTo: string }, ['id', 'returnTo']), request: object({ ...bankFields, confirmRejoin: { type: 'boolean', description: '탈퇴 계정의 명시적 재가입 동의' } }, ['bankName', 'accountNumber', 'accountHolder']), parameters: [mutationParameters[0]], description: '10분 onboarding 세션을 검증하고 계좌·가입 상태와 새 app 세션을 함께 저장합니다. 기존 모임·관리 권한은 복구하지 않습니다. 성공 시 HttpOnly 쿠키를 교체합니다.' }) },
-  '/api/me/bank-account': { put: operation('계정', '본인 계좌 최신값 저장', { mutation: true, request: ref('BankAccount') }) },
+  '/api/me/openbanking': { post: operation('계정', '금융결제원 사용자 인증 시작 또는 기존 연결 재사용', { parameters: [mutationParameters[0]], request: { ...object({ context: { type: 'string', enum: ['onboarding', 'settings'] }, returnTo: string }, ['context']), additionalProperties: false }, response: { oneOf: [object({ authorizationUrl: { type: 'string', format: 'uri' } }, ['authorizationUrl']), object({ returnTo: string }, ['returnTo'])] }, description: 'app/onboarding 세션과 시작 목적을 검사합니다. 유효한 기존 연결은 재사용하고, 이전 탈퇴 해제 대기 중에는 새 인증을 막습니다.' }) },
+  '/api/me/openbanking/accounts': { get: operation('계정', '본인의 등록계좌 조회 및 자동 입력', { response: object({ accounts: array(ref('RegisteredBankAccount')) }, ['accounts']), description: 'app/onboarding 세션의 사용자 토큰으로 본인의 활성·조회 동의·개인 계좌 중 지원 은행만 조회합니다. 조회 후 세션·연결 버전과 상태를 재검사합니다. 은행·예금주와 제공 가능한 전체 번호를 자동 입력에 사용하며, 번호 미제공 시 직접 입력합니다. 목록 선택만으로 실명조회 검증을 생략하지 않습니다. private, no-store 응답이며 사용자 ID·계좌번호를 쿼리로 받지 않습니다.' }) },
+  '/api/me/onboarding': { post: operation('계정', '계좌 저장 후 가입·명시적 재가입 완료', { response: object({ id, returnTo: string }, ['id', 'returnTo']), request: { ...object({ ...bankInputFields, confirmRejoin: { type: 'boolean', description: '탈퇴 계정의 명시적 재가입 동의' } }, bankInputRequired), ...bankVerificationModes, additionalProperties: false }, parameters: [mutationParameters[0]], description: 'verifyWithOpenBanking=false이면 금결원 동의·생년월일 없이 계좌를 확인 전 상태로 저장하고 가입을 완료합니다. true 또는 생략이면 사용자 인증과 기관 계좌실명조회·예금주 일치가 필요합니다. 계좌·가입·새 app 세션을 원자적으로 저장하며 이전 탈퇴 해제 대기 중 재가입을 막고 기존 모임·관리 권한은 복구하지 않습니다. 쿠키 응답 유실은 카카오 재로그인으로 복구합니다.' }) },
+  '/api/me/bank-account': { put: operation('계정', '대표 계좌 저장 또는 금결원 계좌 확인', { mutation: true, request: ref('BankAccount'), response: object({ id, bankVersion }, ['id', 'bankVersion']), description: 'verifyWithOpenBanking=false이면 외부 호출 없이 저장하며 계좌가 바뀌면 검증 이력을 초기화합니다. true 또는 생략이면 실명조회 후 버전·회원·연결을 재검사합니다. 기존 금결원 연결은 유지하며 진행 중 정산도 교체를 막지 않습니다. 검증 실패는 자동으로 미확인 저장하지 않으며, 같은 성공 멱등 키는 외부 재조회 없이 반환합니다.' }) },
   '/api/groups': {
     get: operation('모임', '활성 모임 목록', { response: ref('GroupPage'), parameters: pageParameters }),
     post: operation('모임', '모임 생성', { mutation: true, request: { ...object({ name: string }, ['name']), additionalProperties: false } }),
@@ -159,6 +178,9 @@ export const openApiDocument = {
   tags: [{ name: '인증', description: '카카오 로그인과 토큰 관리' }, { name: '계정' }, { name: '모임' }, { name: '지출' }, { name: '정산' }],
   paths: {
     ...documentedDomainPaths,
+    '/auth/v1/openbanking': {
+      get: { tags: ['인증'], summary: '금융결제원 사용자 인증 콜백', description: '일회용 state·시작 세션을 검사하고 서버에서 토큰을 교환합니다. 처리 중 탈퇴한 결과는 활성 연결로 저장하지 않습니다.', parameters: ['state', 'code', 'error'].map(name => ({ name, in: 'query', schema: string })), responses: { '303': { description: '안전한 온보딩 또는 계정 화면으로 복귀. 오류는 안전한 코드만 전달합니다.' } } },
+    },
     '/api/auth/kakao': {
       get: {
         tags: ['인증'],
@@ -252,7 +274,7 @@ export const openApiDocument = {
       post: {
         tags: ['인증'],
         summary: '회원 탈퇴',
-        description: '참여 이력이 있는 미종료 회차가 있으면 409 unfinished_rounds로 차단합니다. 가능하면 deletedAt 설정·모든 세션 폐기·모임 멤버십 이탈을 함께 처리합니다. 동일 카카오 재가입 시 같은 ID·과거 기록을 유지하고 이전 모임·관리 권한은 복원하지 않습니다. 카카오 계정 자체는 삭제하지 않습니다.',
+        description: '참여 이력이 있는 미종료 회차가 있으면 409 unfinished_rounds로 차단합니다. 허용되면 deletedAt 설정·모든 세션 폐기·모임 이탈·금융결제원 해제 대기를 함께 저장합니다. 외부 연결 해제 실패는 지속 재시도하며 이전 해제 정리 전 새 금결원 인증·재가입은 보류합니다. 동일 카카오 재가입 시 같은 ID·과거 기록을 유지하고 이전 모임·관리 권한은 복원하지 않습니다.',
         parameters: [
           {
             name: 'Origin',
@@ -264,7 +286,7 @@ export const openApiDocument = {
         ],
         security: [{ accessCookie: [] }],
         responses: {
-          '200': { $ref: '#/components/responses/Ok' },
+          '200': { description: '로컬 탈퇴 완료', content: { 'application/json': { schema: object({ ok: { type: 'boolean' }, openBankingDisconnect: { type: 'string', enum: ['completed', 'pending'] } }, ['ok', 'openBankingDisconnect']) } } },
           '401': { $ref: '#/components/responses/Unauthorized' },
           '403': { $ref: '#/components/responses/Forbidden' },
           '409': { $ref: '#/components/responses/DomainFailure' },

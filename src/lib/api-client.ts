@@ -9,8 +9,23 @@ export class ApiError extends Error {
 }
 
 let refreshRequest: Promise<Response> | undefined
-type PendingMutation = { signature: string; key: string; body: unknown }
+type PendingMutation = { signature: string; key: string; body: unknown; discarded?: boolean }
 const unfinishedRequests = new Map<string, PendingMutation>()
+
+export function discardPendingRequest(path: string, method: string) {
+  const operation = `${method} ${path}`
+  const pending = unfinishedRequests.get(operation)
+  if (!pending) return
+  pending.body = undefined
+  pending.signature = ''
+  pending.discarded = true
+  unfinishedRequests.delete(operation)
+}
+
+export function discardBankAccountRequests() {
+  discardPendingRequest('/api/me/bank-account', 'PUT')
+  discardPendingRequest('/api/me/onboarding', 'POST')
+}
 
 function snapshot(body: unknown): unknown {
   if (body instanceof FormData) {
@@ -47,13 +62,17 @@ export async function apiRequest<T>(path: string, options: { method?: string; bo
   const mutation = method !== 'GET'
   const operation = `${method} ${path}`
   const signature = mutation ? await fingerprint(path, method, options.body) : ''
+  options.signal?.throwIfAborted()
   let pending: PendingMutation | undefined
   if (mutation) {
     pending = unfinishedRequests.get(operation)
     if (pending && pending.signature !== signature) {
       const previous = pending
       const error = new ApiError(409, 'unresolved_request', '이전 요청의 저장 결과를 먼저 확인해야 해요. 변경한 입력은 아직 저장되지 않았어요.')
-      error.recover = () => apiRequest(path, { method, body: previous.body })
+      error.recover = () => {
+        if (previous.discarded) return Promise.reject(new ApiError(409, 'request_discarded', '이전 입력을 지웠어요. 저장된 계좌를 확인한 뒤 다시 입력해 주세요.'))
+        return apiRequest(path, { method, body: previous.body })
+      }
       throw error
     }
     pending ??= { signature, key: crypto.randomUUID(), body: snapshot(options.body) }
@@ -61,7 +80,7 @@ export async function apiRequest<T>(path: string, options: { method?: string; bo
   }
   const body = pending ? pending.body : options.body
   const multipart = body instanceof FormData
-  const forget = () => { if (pending && unfinishedRequests.get(operation) === pending) unfinishedRequests.delete(operation) }
+  const forget = () => { if (pending && unfinishedRequests.get(operation) === pending) discardPendingRequest(path, method) }
   const headers = new Headers()
   if (body !== undefined && !multipart) headers.set('Content-Type', 'application/json')
   if (pending) headers.set('Idempotency-Key', pending.key)
@@ -86,10 +105,12 @@ export async function apiRequest<T>(path: string, options: { method?: string; bo
   if (response.ok && options.response === 'blob') return await response.blob() as T
   const result = await response.json().catch(() => null) as { data?: T; error?: string; message?: string; details?: unknown } | null
   if (response.status === 401) {
+    discardBankAccountRequests()
     window.location.assign(`/login?returnTo=${encodeURIComponent(destination())}`)
     throw new ApiError(401, 'unauthorized', '로그인이 필요해요.')
   }
   if (response.status === 403 && result?.error === 'onboarding_required') {
+    discardBankAccountRequests()
     window.location.assign(`/onboarding?returnTo=${encodeURIComponent(destination())}`)
   }
   if (!response.ok) {
