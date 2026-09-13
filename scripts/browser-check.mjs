@@ -1,12 +1,14 @@
-// Run against an isolated local DB + dev server, with Chrome --remote-debugging-port=9223.
+// Settlement UI regression only: legacy account fixtures in an isolated local DB.
+// Real KFTC authentication/account verification is covered by the separate live-check procedure.
+// Run with a dev server using that same test DB and Chrome --remote-debugging-port=9223.
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import sharp from 'sharp'
-import { signInKakao, completeOnboarding } from '../src/lib/auth-store.ts'
-import { readAccessToken, ACCESS_TOKEN_COOKIE_NAME, REFRESH_TOKEN_COOKIE_NAME } from '../src/lib/auth.ts'
+import { signInKakao } from '../src/lib/auth-store.ts'
+import { ACCESS_TOKEN_COOKIE_NAME, REFRESH_TOKEN_COOKIE_NAME } from '../src/lib/auth.ts'
 import { withWriteTransaction } from '../src/lib/db.ts'
 
 const database = process.env.TEST_DATABASE_URL
@@ -52,6 +54,7 @@ ws.addEventListener('message', event => {
 })
 async function evaluate(expression) {
   const result = await cdp('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })
+    .catch(error => { throw new Error(`${error.message}: ${expression.slice(0, 180)}`) })
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text)
   return result.result.value
 }
@@ -91,8 +94,19 @@ const runId = randomUUID()
 const settlementAmountMinor = 13593n
 async function user(label, number, onboarding = false) {
   const subject = `browser-${runId}-${label}`
-  const limited = await signInKakao(subject, { displayName: `검증 ${label}`, email: null, profileImageUrl: null })
-  const session = onboarding ? limited : await completeOnboarding(readAccessToken(limited.accessToken), { bankName: `${label}은행`, accountNumber: number, accountHolder: `검증 ${label}` })
+  const profile = { displayName: `검증 ${label}`, email: null, profileImageUrl: null }
+  const limited = await signInKakao(subject, profile)
+  if (onboarding) return { subject, session: limited }
+  // The TEST_DATABASE_URL guard above confines this legacy fixture to the isolated test database.
+  await withWriteTransaction(async client => {
+    const result = await client.query(`UPDATE users SET bank_name=$2, account_number=$3, account_holder=$4,
+      bank_updated_at=created_at, onboarding_completed_at=created_at
+      WHERE id=$1 AND provider='kakao' AND provider_subject=$5 AND onboarding_completed_at IS NULL`,
+    [limited.userId, `${label}은행`, number, profile.displayName, subject])
+    assert.equal(result.rowCount, 1)
+  })
+  const session = await signInKakao(subject, profile)
+  assert.equal(session.purpose, 'app')
   return { subject, session }
 }
 
@@ -101,19 +115,32 @@ try {
   await cdp('Fetch.enable', { patterns: [{ urlPattern: `${origin}/api/rounds/*/expenses`, requestStage: 'Response' }] })
   await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
   await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
-  const owner = await user('A', '001111', true)
+  const newcomer = await user('신규', '', true)
+  const owner = await user('A', '001111')
   const payer = await user('B', '002222')
   const participant = await user('C', '003333')
   const extraD = await user('D', '004444')
   const extraE = await user('E', '005555')
+  await setSession(newcomer.session)
+  await navigate('/onboarding', '계좌 먼저 저장')
+  await waitFor("Boolean(document.querySelector('[name=bankCode]'))")
+  assert.equal(await evaluate("document.querySelectorAll('[name=bankCode], [name=accountNumber], [name=accountHolder]').length"), 3)
+  assert.equal(await evaluate("Boolean(document.querySelector('[name=birthDate]'))"), false)
+  const newcomerAccount = await api(newcomer.session, '/api/me')
+  assert.equal(newcomerAccount.purpose, 'onboarding')
+  assert.equal(newcomerAccount.bankAccount, null)
+  assert.equal(newcomerAccount.openBanking.status, 'NOT_CONNECTED')
+  await fill('[name=bankCode]', '004')
+  await fill('[name=accountNumber]', '0001234567')
+  await fill('[name=accountHolder]', '신규')
+  await evaluate("document.querySelector('form').requestSubmit()")
+  await waitFor("location.pathname.startsWith('/home')")
+  const savedAccount = await evaluate("fetch('/api/me').then(response => response.json()).then(result => ({ purpose: result.data.purpose, verifiedAt: result.data.bankAccount.verifiedAt, status: result.data.openBanking.status }))")
+  assert.deepEqual(savedAccount, { purpose: 'app', verifiedAt: null, status: 'NOT_CONNECTED' })
+  console.log('PASS onboarding saves an unverified account without KFTC authorization or a birth date')
   await setSession(owner.session)
-  await navigate('/onboarding', '계좌 등록하고 시작하기')
-  await fill('[name=bankName]', 'A은행'); await fill('[name=accountNumber]', '001111'); await fill('[name=accountHolder]', '검증 A')
-  await click('계좌 등록하고 시작하기')
-  await waitFor(`location.pathname === '/home' && ${hasText('함께 쓴 돈, 함께 정리해요')}`)
-  const ownerCookies = (await cdp('Network.getCookies', { urls: [origin, `${origin}/api/auth`] })).cookies
-  owner.session = { ...owner.session, accessToken: ownerCookies.find(cookie => cookie.name === ACCESS_TOKEN_COOKIE_NAME).value, refreshToken: ownerCookies.find(cookie => cookie.name === REFRESH_TOKEN_COOKIE_NAME).value }
-  console.log('PASS onboarding through the real HTTP API')
+  await navigate('/home', '함께 쓴 돈, 함께 정리해요')
+  console.log('SETUP settlement regression uses legacy account fixtures seeded only in TEST_DATABASE_URL')
 
   await navigate('/home/groups', '새 모임 만들기')
   assert.equal(await evaluate("Boolean(document.querySelector('[name=currency]'))"), false)
@@ -293,9 +320,15 @@ try {
   await waitFor(hasText('정산 안내 링크 복사'))
   assert.equal(await evaluate("document.querySelector('.bank-details').textContent.includes('002222')"), true)
   assert.equal(await evaluate("Array.from(document.querySelectorAll('.bank-details')).some(dl => dl.textContent.includes('003333'))"), false)
-  await api(payer.session, '/api/me/bank-account', 'PUT', { bankName: 'B새은행', accountNumber: '000888', accountHolder: '검증 B' })
+  await withWriteTransaction(async client => {
+    const result = await client.query(`UPDATE users SET bank_name='B새은행', account_number='000888',
+      bank_updated_at=extract(epoch FROM now())::bigint, bank_version=bank_version+1
+      WHERE id=$1 AND provider_subject=$2`, [payer.session.userId, payer.subject])
+    assert.equal(result.rowCount, 1)
+  })
   await click('최신 정보 새로고침')
   await waitFor("document.querySelector('.bank-details')?.textContent.includes('000888')")
+  console.log('PASS settlement recipient shows the latest test-DB account fixture; account verification API is not exercised here')
   const artifactDir = process.env.BROWSER_ARTIFACT_DIR ?? join(tmpdir(), 'da-moa-browser-artifacts')
   await mkdir(artifactDir, { recursive: true })
   const screenshot = await cdp('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true })
@@ -387,15 +420,36 @@ try {
   payer.session = await signInKakao(payer.subject, { displayName: '검증 B', email: null, profileImageUrl: null })
   assert.equal(payer.session.purpose, 'onboarding')
   await setSession(payer.session)
-  await navigate('/onboarding', '재가입 완료')
-  await evaluate("document.querySelector('input[type=checkbox]').click()")
-  await click('재가입 완료')
+  await navigate('/onboarding', '계좌 저장하고 재가입')
+  assert.equal(await evaluate(hasText('이전 모임으로 자동 복귀하지 않으며 새 초대가 필요해요.')), true)
+  await waitFor("Boolean(document.querySelector('[name=bankCode]'))")
+  assert.equal(await evaluate("document.querySelectorAll('[name=bankCode], [name=accountNumber], [name=accountHolder]').length"), 3)
+  assert.equal(await evaluate("Boolean(document.querySelector('[name=birthDate]'))"), false)
+  assert.equal(await evaluate(hasText('확인되지 않은 계좌입니다.')), true)
+  const rejoining = await api(payer.session, '/api/me')
+  assert.equal(rejoining.purpose, 'onboarding')
+  assert.notEqual(rejoining.deletedAt, null)
+  assert.equal(rejoining.openBanking.status, 'NOT_CONNECTED')
+  await fill('[name=bankCode]', '004')
+  await fill('[name=accountNumber]', '0002223333')
+  await fill('[name=accountHolder]', '검증 B')
+  assert.deepEqual(await evaluate("(() => { const form = document.querySelector('form'); const consent = form.querySelector('input[type=checkbox]'); form.requestSubmit(); return { required: consent.required, checked: consent.checked, missingConsent: consent.validity.valueMissing, valid: form.checkValidity() }; })()"), { required: true, checked: false, missingConsent: true, valid: false })
+  assert.equal((await api(payer.session, '/api/me')).purpose, 'onboarding')
+  await evaluate("document.querySelector('form input[type=checkbox]').click()")
+  assert.equal(await evaluate("document.querySelector('form').checkValidity()"), true)
+  await click('계좌 저장하고 재가입')
   await waitFor("location.pathname === '/home'")
-  await navigate('/home/groups', '모임을 만들거나 초대 링크를 받아 참여해 주세요.')
-  await navigate('/home/history', '지출과 제외 검증')
+  const rejoined = await evaluate("fetch('/api/me').then(response => response.json()).then(result => ({ id: result.data.id, purpose: result.data.purpose, deletedAt: result.data.deletedAt, accountNumber: result.data.bankAccount.accountNumber, verifiedAt: result.data.bankAccount.verifiedAt, status: result.data.openBanking.status }))")
+  assert.deepEqual(rejoined, { id: payer.session.userId, purpose: 'app', deletedAt: null, accountNumber: '0002223333', verifiedAt: null, status: 'NOT_CONNECTED' })
+  const retained = await withWriteTransaction(async client => {
+    const memberships = await client.query('SELECT 1 FROM group_members WHERE user_id=$1 AND left_at IS NULL', [payer.session.userId])
+    const history = await client.query('SELECT 1 FROM round_members WHERE user_id=$1 AND round_id=$2', [payer.session.userId, roundId])
+    return { activeMemberships: memberships.rowCount, historicalParticipation: history.rowCount }
+  })
+  assert.deepEqual(retained, { activeMemberships: 0, historicalParticipation: 1 })
   assert.ok(dialogs.some(text => text.includes('이대로 사용자들에게 메시지를 전송할까요?')))
   assert.deepEqual(exceptions, [])
-  console.log('PASS leaver history, soft withdrawal, explicit rejoin, no automatic membership restoration')
+  console.log('PASS leaver history, soft withdrawal, consent-required manual rejoin without birth date or OAuth, and no automatic membership restoration')
   console.log(`Browser evidence: ${join(artifactDir, 'settlement.png')}`)
 } finally {
   ws.close()

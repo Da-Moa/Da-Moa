@@ -9,6 +9,7 @@ import {
   refreshCookieOptions,
 } from '../../../../lib/auth'
 import { deleteRefreshSession } from '../../../../lib/auth-store'
+import { OPENBANKING_CALLBACK_COOKIE, openBankingCallbackCookieOptions } from '../../../../lib/openbanking-callback'
 
 export const runtime = 'nodejs'
 
@@ -16,6 +17,7 @@ function clearAuthCookies(response: NextResponse) {
   response.cookies.set(ACCESS_TOKEN_COOKIE_NAME, '', authCookieOptions(0))
   response.cookies.set(REFRESH_TOKEN_COOKIE_NAME, '', refreshCookieOptions(0))
   response.cookies.set(RETURN_TO_COOKIE_NAME, '', authCookieOptions(0))
+  response.cookies.set(OPENBANKING_CALLBACK_COOKIE, '', openBankingCallbackCookieOptions(0))
 }
 
 export async function POST(request: NextRequest) {

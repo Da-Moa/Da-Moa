@@ -8,6 +8,7 @@ const access = { userId: 'u', sessionId: 's', issuedAt: 1 }
 const row = {
   id: 'u', display_name: '사용자', email: null, profile_image_url: null,
   bank_name: '은행', account_number: '0012', account_holder: '사용자',
+  bank_code: null, bank_verified_at: null, bank_version: 0,
   deleted_at: null, onboarding_completed_at: '1', purpose: 'app',
 }
 const client = (rows: object[]) => ({ query: async () => ({ rows }) }) as unknown as Database

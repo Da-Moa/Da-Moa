@@ -3,12 +3,14 @@ import { randomUUID } from 'node:crypto'
 import test from 'node:test'
 import sharp from 'sharp'
 import { readAccessToken, type AccessToken } from '../src/lib/auth.ts'
-import { completeOnboarding, signInKakao, updateBankAccount, withdrawAccount } from '../src/lib/auth-store.ts'
+import { signInKakao, updateBankAccount as saveBankAccount, withdrawAccount } from '../src/lib/auth-store.ts'
+import { getAccount } from '../src/lib/authorization.ts'
 import { createDatabaseClient } from '../src/lib/db.ts'
 import { acceptInvite, createGroup, createInvite, getGroup, getInvite, leaveGroup, listGroups } from '../src/lib/group-store.ts'
 import { addReceipt, checkExclusion, createRound, deleteExpense, excludeMember, getReceipt, getRound, getSettlement, listRounds, removeReceipt, roundCommand, saveExpense, setSettlementCheck } from '../src/lib/round-store.ts'
 import type { MutationResult } from '../src/lib/domain-types.ts'
 import { applyMigrations } from './migrations.mjs'
+import { completeTestOnboarding as completeOnboarding, updateTestBankAccount as updateBankAccount } from './openbanking-test-support.ts'
 
 const testUrl = process.env.TEST_DATABASE_URL
 if (!testUrl || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(testUrl).hostname) || !new URL(testUrl).pathname.toLowerCase().includes('test')) throw new Error('TEST_DATABASE_URL must name an isolated local test database')
@@ -176,6 +178,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       assert.equal(sc.balanceMinor, '3000')
       assert.equal(sa.outgoing[0].receiverId, b.userId)
       assert.equal(sa.outgoing[0].amountMinor, '3000')
+      assert.equal(typeof sa.outgoing[0].account?.verifiedAt, 'number')
       assert.equal(sb.incoming.length, 2)
       assert.equal(sb.outgoing.length, 0)
       assert.equal(JSON.stringify(sa).includes('D은행'), false)
@@ -195,6 +198,12 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       const newest = await getSettlement(a, r.id)
       assert.equal(newest.outgoing[0].account?.accountNumber, '00009999')
       assert.equal(newest.outgoing[0].amountMinor, '3000')
+      const current = await getAccount(b)
+      await saveBankAccount(b, key(), { bankCode: '004', accountNumber: '00008888', accountHolder: 'B 최신', expectedBankVersion: current.bankVersion, verifyWithOpenBanking: false })
+      const unverified = await getSettlement(a, r.id)
+      assert.equal(unverified.outgoing[0].account?.accountNumber, '00008888')
+      assert.equal(unverified.outgoing[0].account?.verifiedAt, null)
+      assert.equal(unverified.outgoing[0].amountMinor, '3000')
       assert.equal((await get(r.id)).expenses[0].amountMinor, '9000')
     })
 

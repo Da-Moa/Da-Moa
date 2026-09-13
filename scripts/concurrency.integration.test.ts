@@ -4,12 +4,13 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { before, test } from 'node:test'
 import sharp from 'sharp'
 import { currentTimestamp, readAccessToken, type AccessToken } from '../src/lib/auth.ts'
-import { completeOnboarding, signInKakao, withdrawAccount } from '../src/lib/auth-store.ts'
+import { signInKakao, withdrawAccount } from '../src/lib/auth-store.ts'
 import { createDatabaseClient } from '../src/lib/db.ts'
 import { AppError } from '../src/lib/errors.ts'
 import { acceptInvite, createGroup, createInvite, leaveGroup } from '../src/lib/group-store.ts'
 import { addReceipt, createRound, getRound, getSettlement, roundCommand, saveExpense, setSettlementCheck } from '../src/lib/round-store.ts'
 import { applyMigrations } from './migrations.mjs'
+import { completeTestOnboarding as completeOnboarding } from './openbanking-test-support.ts'
 
 const testUrl = process.env.TEST_DATABASE_URL
 if (!testUrl || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(testUrl).hostname) || !new URL(testUrl).pathname.toLowerCase().includes('test')) throw new Error('TEST_DATABASE_URL must name an isolated local test database')

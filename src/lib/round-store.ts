@@ -372,7 +372,7 @@ export async function getSettlement(access: Identity, roundId: string): Promise<
     result.balanceMinor = balances[0]?.balance_minor ?? '0'
     result.sharePath = `/settlements/${roundId}`
     // Only the viewer's actual recipients are joined to bank fields; ownership gives no extra bank visibility.
-    const bankFields = round.currency === 'KRW' ? ',u.bank_name,u.account_number,u.account_holder' : ''
+    const bankFields = round.currency === 'KRW' ? ',u.bank_name,u.account_number,u.account_holder,u.bank_verified_at' : ''
     const { rows: outgoing } = await client.query(`SELECT t.receiver_id,t.amount_minor,m.display_name_snapshot,
       CASE WHEN u.deleted_at IS NULL THEN u.profile_image_url ELSE NULL END AS profile_image_url${bankFields} FROM settlement_transfers t
       JOIN round_members m ON m.round_id=t.round_id AND m.user_id=t.receiver_id JOIN users u ON u.id=t.receiver_id
@@ -382,7 +382,8 @@ export async function getSettlement(access: Identity, roundId: string): Promise<
       JOIN round_members m ON m.round_id=t.round_id AND m.user_id=t.sender_id JOIN users u ON u.id=t.sender_id
       WHERE t.round_id=$1 AND t.receiver_id=$2 ORDER BY t.sender_id`, [roundId, account.id])
     result.outgoing = outgoing.map(row => ({ receiverId: row.receiver_id, displayName: row.display_name_snapshot, profileImageUrl: row.profile_image_url, amountMinor: row.amount_minor,
-      ...(round.currency === 'KRW' ? { account: { bankName: row.bank_name, accountNumber: row.account_number, accountHolder: row.account_holder } } : {}) }))
+      ...(round.currency === 'KRW' ? { account: { bankName: row.bank_name, accountNumber: row.account_number, accountHolder: row.account_holder,
+        verifiedAt: row.bank_verified_at === null ? null : Number(row.bank_verified_at) } } : {}) }))
     result.incoming = incoming.map(row => ({ senderId: row.sender_id, displayName: row.display_name_snapshot, profileImageUrl: row.profile_image_url, amountMinor: row.amount_minor,
       receivedAt: row.received_at === null ? null : Number(row.received_at) }))
     return result

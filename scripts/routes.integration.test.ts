@@ -4,11 +4,12 @@ import test from 'node:test'
 import { NextRequest } from 'next/server'
 import sharp from 'sharp'
 import { ACCESS_TOKEN_COOKIE_NAME, readAccessToken } from '../src/lib/auth.ts'
-import { completeOnboarding, signInKakao } from '../src/lib/auth-store.ts'
+import { signInKakao } from '../src/lib/auth-store.ts'
 import { createDatabaseClient } from '../src/lib/db.ts'
 import { GET as dispatch } from '../src/app/api/[...path]/route.ts'
 import { GET as me } from '../src/app/api/me/route.ts'
 import { applyMigrations } from './migrations.mjs'
+import { completeTestOnboarding as completeOnboarding } from './openbanking-test-support.ts'
 
 const testUrl = process.env.TEST_DATABASE_URL
 if (!testUrl || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(testUrl).hostname) || !new URL(testUrl).pathname.toLowerCase().includes('test')) throw new Error('TEST_DATABASE_URL must name an isolated local test database')

@@ -11,6 +11,9 @@ export type Account = {
   bankName: string | null
   accountNumber: string | null
   accountHolder: string | null
+  bankCode: string | null
+  bankVerifiedAt: number | null
+  bankVersion: number
   deletedAt: number | null
   onboardingCompletedAt: number | null
   purpose: 'app' | 'onboarding'
@@ -20,7 +23,7 @@ export async function requireAccount(client: Database, access: AccessToken | nul
   if (!access) throw new AppError(401, 'unauthorized', '로그인이 필요합니다')
   const { rows } = await client.query(`
     SELECT u.id, u.display_name, u.email, u.profile_image_url,
-           u.bank_name, u.account_number, u.account_holder,
+           u.bank_name, u.account_number, u.account_holder, u.bank_code, u.bank_verified_at, u.bank_version,
            u.deleted_at, u.onboarding_completed_at, s.purpose
     FROM refresh_sessions s JOIN users u ON u.id = s.user_id
     WHERE s.id = $1 AND s.user_id = $2 AND s.revoked_at IS NULL AND s.expires_at > $3
@@ -40,6 +43,9 @@ export async function requireAccount(client: Database, access: AccessToken | nul
     bankName: row.bank_name,
     accountNumber: row.account_number,
     accountHolder: row.account_holder,
+    bankCode: row.bank_code,
+    bankVerifiedAt: row.bank_verified_at === null ? null : Number(row.bank_verified_at),
+    bankVersion: Number(row.bank_version),
     deletedAt: row.deleted_at === null ? null : Number(row.deleted_at),
     onboardingCompletedAt: row.onboarding_completed_at === null ? null : Number(row.onboarding_completed_at),
     purpose: row.purpose,
