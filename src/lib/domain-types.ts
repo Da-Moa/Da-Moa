@@ -15,8 +15,8 @@ export type RoundSummary = {
 export type Receipt = { id: string; mimeType: string; byteSize: number }
 export type Expense = {
   id: string; authorId: string; payerId: string; description: string; amountMinor: string;
-  splitMode: 'ALL' | 'SELECTED'; participantIds: string[]; baseShareMinor: string | null; remainderUnits: number | null;
-  shares: { userId: string; amountMinor: string | null; receivedRemainder: boolean | null }[];
+  splitMode: 'ALL' | 'SELECTED' | 'CUSTOM'; participantIds: string[]; baseShareMinor: string | null; remainderUnits: number | null;
+  shares: { userId: string; assignedAmountMinor: string | null; amountMinor: string | null; receivedRemainder: boolean | null }[];
   receipts: Receipt[]; createdAt: number; updatedAt: number
 }
 export type SettlementTransfer = { senderId: string; receiverId: string; amountMinor: string }

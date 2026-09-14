@@ -5,7 +5,7 @@ import { AppError, badInput } from './errors'
 import { domainMutation, idsInput, missing, nowSeconds, onlyKeys, ownerGroup, pageOf, pagination, textInput, type Identity } from './group-store'
 import { formatMoney, MAX_EXPENSE_MAJOR, MAX_ROUND_TOTAL_MAJOR, minorLimit, parseAmount, requireCurrency, type Currency } from './money'
 import { replayMutation } from './mutations'
-import { calculateBase, finalizeSettlement, previewSettlement } from './split'
+import { calculateBase, finalizeSettlement, previewSettlement, validateCustomShares } from './split'
 import type { ExclusionCheck, Expense, MutationResult, RoundDetail, RoundMember, RoundStatus, RoundSummary, SettlementDTO, SettlementTransfer } from './domain-types'
 
 type Row = Record<string, any>
@@ -53,11 +53,11 @@ async function expensesFor(client: Database, roundId: string, query?: URLSearchP
   const { rows: receipts } = await client.query('SELECT id,expense_id,mime_type,byte_size FROM expense_receipts WHERE expense_id=ANY($1::text[]) ORDER BY created_at,id', [ids])
   const items: Expense[] = rows.map(row => {
     const part = shares.filter(share => share.expense_id === row.id)
-    const base = calculateBase(BigInt(row.amount_minor), part.length)
+    const base = row.split_mode === 'CUSTOM' ? null : calculateBase(BigInt(row.amount_minor), part.length)
     return {
       id: row.id, authorId: row.author_id, payerId: row.payer_id, description: row.description, amountMinor: row.amount_minor,
-      splitMode: row.split_mode, participantIds: part.map(s => s.user_id), baseShareMinor: row.base_share_minor ?? base.base.toString(), remainderUnits: row.remainder_units ?? base.remainder,
-      shares: part.map(s => ({ userId: s.user_id, amountMinor: s.final_amount_minor, receivedRemainder: s.received_remainder })),
+      splitMode: row.split_mode, participantIds: part.map(s => s.user_id), baseShareMinor: base ? row.base_share_minor ?? base.base.toString() : null, remainderUnits: base ? row.remainder_units ?? base.remainder : 0,
+      shares: part.map(s => ({ userId: s.user_id, assignedAmountMinor: s.assigned_amount_minor, amountMinor: s.final_amount_minor, receivedRemainder: s.received_remainder })),
       receipts: receipts.filter(r => r.expense_id === row.id).map(r => ({ id: r.id, mimeType: r.mime_type, byteSize: r.byte_size })),
       createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
     }
@@ -65,11 +65,13 @@ async function expensesFor(client: Database, roundId: string, query?: URLSearchP
   return limit === null ? { items, nextCursor: null } : pageOf(items, limit, row => row)
 }
 
-async function settlementExpensesFor(client: Database, roundId: string): Promise<Pick<Expense, 'id' | 'payerId' | 'amountMinor' | 'splitMode' | 'participantIds'>[]> {
+async function settlementExpensesFor(client: Database, roundId: string): Promise<(Pick<Expense, 'id' | 'payerId' | 'amountMinor' | 'splitMode' | 'participantIds'> & { shares: Pick<Expense['shares'][number], 'userId' | 'assignedAmountMinor'>[] })[]> {
   const { rows } = await client.query(`SELECT e.id,e.payer_id,e.amount_minor,e.split_mode,
-    ARRAY(SELECT s.user_id FROM expense_shares s WHERE s.expense_id=e.id ORDER BY s.user_id) AS participant_ids
+    ARRAY(SELECT s.user_id FROM expense_shares s WHERE s.expense_id=e.id ORDER BY s.user_id) AS participant_ids,
+    (SELECT json_agg(json_build_object('userId',s.user_id,'assignedAmountMinor',s.assigned_amount_minor::text) ORDER BY s.user_id)
+      FROM expense_shares s WHERE s.expense_id=e.id) AS shares
     FROM expenses e WHERE e.round_id=$1 ORDER BY e.id`, [roundId])
-  return rows.map(row => ({ id: row.id, payerId: row.payer_id, amountMinor: row.amount_minor, splitMode: row.split_mode, participantIds: row.participant_ids }))
+  return rows.map(row => ({ id: row.id, payerId: row.payer_id, amountMinor: row.amount_minor, splitMode: row.split_mode, participantIds: row.participant_ids, shares: row.shares ?? [] }))
 }
 
 async function settlementChecksFor(client: Database, roundId: string) {
@@ -168,7 +170,7 @@ async function editable(client: Database, round: Row, userId: string, expense?: 
 }
 
 async function expenseInput(client: Database, round: Row, body: Record<string, unknown>, previous?: Row) {
-  onlyKeys(body, ['description', 'amount', 'payerId', 'splitMode', 'participantIds', 'expectedVersion'])
+  onlyKeys(body, ['description', 'amount', 'payerId', 'splitMode', 'participantIds', 'customShares', 'expectedVersion'])
   const description = textInput(body.description === undefined ? previous?.description : body.description, 500)
   const currency = round.currency as Currency
   let amount: bigint
@@ -177,25 +179,54 @@ async function expenseInput(client: Database, round: Row, body: Record<string, u
   if (amount > maximum) badInput('expense_amount_limit_exceeded', `지출 금액은 ${formatMoney(maximum.toString(), currency)} 이하여야 해요`)
   const payerId = textInput(body.payerId === undefined ? previous?.payer_id : body.payerId, 128)
   const splitMode = body.splitMode === undefined ? previous?.split_mode : body.splitMode
-  if (splitMode !== 'ALL' && splitMode !== 'SELECTED') badInput('invalid_participants', '분배 방식을 선택해 주세요')
+  if (splitMode !== 'ALL' && splitMode !== 'SELECTED' && splitMode !== 'CUSTOM') badInput('invalid_participants', '분배 방식을 선택해 주세요')
+  if (splitMode !== 'CUSTOM' && body.customShares !== undefined) badInput('invalid_input', '개별 부담금은 개별 항목 분배에서만 입력해 주세요')
   const members = await membersFor(client, round.id), active = members.filter(m => m.excludedAt === null).map(m => m.userId)
   if (!active.includes(payerId) && payerId !== previous?.payer_id) badInput('invalid_participants', '결제자는 이번 회차 참여자여야 합니다')
   let participantIds: string[]
+  let assignedShares: { userId: string; assignedAmountMinor: string }[] = []
   if (splitMode === 'ALL') {
     if (body.participantIds !== undefined) badInput('invalid_participants', '전체 분배의 참여자는 서버에서 결정합니다')
     participantIds = active
+  } else if (splitMode === 'CUSTOM') {
+    if (body.participantIds !== undefined) badInput('invalid_input', '개별 항목 분배의 부담자는 부담금과 함께 선택해 주세요')
+    if (body.customShares === undefined && previous?.split_mode === 'CUSTOM') {
+      const { rows } = await client.query('SELECT user_id,assigned_amount_minor FROM expense_shares WHERE expense_id=$1 ORDER BY user_id', [previous.id])
+      assignedShares = rows.map(share => ({ userId: share.user_id, assignedAmountMinor: share.assigned_amount_minor }))
+    } else {
+      if (!Array.isArray(body.customShares) || !body.customShares.length || body.customShares.length > active.length) badInput('invalid_participants', '부담자와 부담금을 선택해 주세요')
+      assignedShares = body.customShares.map(share => {
+        if (!share || typeof share !== 'object' || Array.isArray(share)) badInput('invalid_participants', '부담자와 부담금을 선택해 주세요')
+        onlyKeys(share, ['userId', 'amount'])
+        let assignedAmount: bigint
+        try { assignedAmount = parseAmount(share.amount, currency) } catch { badInput('invalid_amount', '통화에 맞는 양의 부담금을 정확히 입력해 주세요') }
+        return { userId: share.userId, assignedAmountMinor: assignedAmount.toString() }
+      })
+    }
+    participantIds = idsInput(assignedShares.map(share => share.userId))
+    if (participantIds.some(id => !active.includes(id))) badInput('invalid_participants', '부담자는 제외되지 않은 회차 참여자여야 합니다')
+    checkCustomShares(amount, participantIds, assignedShares)
   } else {
     const previousShares = previous && body.participantIds === undefined ? await client.query('SELECT user_id FROM expense_shares WHERE expense_id=$1 ORDER BY user_id', [previous.id]) : null
     participantIds = idsInput(body.participantIds === undefined ? previousShares?.rows.map(s => s.user_id) : body.participantIds)
     if (participantIds.some(id => !active.includes(id))) badInput('invalid_participants', '부담자는 제외되지 않은 회차 참여자여야 합니다')
   }
   if (!participantIds.length) badInput('invalid_participants', '부담자가 필요합니다')
-  return { description, amount: amount.toString(), payerId, splitMode, participantIds }
+  return { description, amount: amount.toString(), payerId, splitMode, participantIds, assignedShares }
 }
 
-async function storeShares(client: Database, expenseId: string, roundId: string, ids: string[]) {
+function checkCustomShares(amount: bigint, participantIds: string[], shares: { userId: string; assignedAmountMinor: string | null }[]) {
+  try { validateCustomShares(amount, participantIds, shares) }
+  catch (error) {
+    const code = error instanceof Error ? error.message : 'invalid_amount'
+    badInput(code, code === 'custom_share_total_mismatch' ? '부담금 합계가 총 금액과 일치해야 해요' : '개별 부담자와 부담금을 다시 확인해 주세요')
+  }
+}
+
+async function storeShares(client: Database, expenseId: string, roundId: string, ids: string[], assignedShares: { userId: string; assignedAmountMinor: string }[]) {
   await client.query('DELETE FROM expense_shares WHERE expense_id=$1', [expenseId])
-  await client.query('INSERT INTO expense_shares(expense_id,round_id,user_id) SELECT $1,$2,unnest($3::text[])', [expenseId, roundId, ids])
+  const amounts = ids.map(id => assignedShares.find(share => share.userId === id)?.assignedAmountMinor ?? null)
+  await client.query('INSERT INTO expense_shares(expense_id,round_id,user_id,assigned_amount_minor) SELECT $1,$2,unnest($3::text[]),unnest($4::numeric[])', [expenseId, roundId, ids, amounts])
 }
 
 export async function saveExpense(access: Identity, key: string, roundId: string, body: Record<string, unknown>, expenseId?: string) {
@@ -214,7 +245,7 @@ export async function saveExpense(access: Identity, key: string, roundId: string
     } else {
       await client.query('INSERT INTO expenses(id,round_id,author_id,payer_id,description,amount_minor,split_mode,created_at,updated_at,updated_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$8,$3)', [id, roundId, userId, input.payerId, input.description, input.amount, input.splitMode, now])
     }
-    await storeShares(client, id, roundId, input.participantIds)
+    await storeShares(client, id, roundId, input.participantIds, input.assignedShares)
     return { ...await bump(client, roundId), id }
   })
 }
@@ -235,10 +266,10 @@ async function exclusions(client: Database, round: Row, targetId: string): Promi
   const member = members.find(m => m.userId === targetId)
   if (!member) throw missing()
   const { rows } = await client.query(`SELECT e.id,e.description,e.amount_minor,e.author_id,a.display_name_snapshot AS author_name,
-    CASE WHEN e.payer_id=$2 THEN 'payer_and_participant' ELSE 'selected_participant' END AS reason
+    CASE WHEN e.payer_id=$2 THEN 'payer_and_participant' WHEN e.split_mode='CUSTOM' THEN 'custom_participant' ELSE 'selected_participant' END AS reason
     FROM expenses e JOIN expense_shares s ON s.expense_id=e.id AND s.user_id=$2
     JOIN round_members a ON a.round_id=e.round_id AND a.user_id=e.author_id
-    WHERE e.round_id=$1 AND (e.payer_id=$2 OR e.split_mode='SELECTED') ORDER BY e.created_at,e.id`, [round.id, targetId])
+    WHERE e.round_id=$1 AND (e.payer_id=$2 OR e.split_mode IN ('SELECTED','CUSTOM')) ORDER BY e.created_at,e.id`, [round.id, targetId])
   const reason = round.creator_id === targetId ? 'round_creator_cannot_leave' : member.excludedAt !== null ? 'already_excluded' : !['RECORDING', 'CONFIRMED'].includes(round.status) ? 'invalid_round_state' : rows.length ? 'member_exclusion_blocked' : members.filter(m => m.excludedAt === null).length <= 2 ? 'minimum_participants' : null
   return { allowed: reason === null, reason, expenses: rows.map(e => ({ id: e.id, description: e.description, amountMinor: e.amount_minor, authorId: e.author_id, authorName: e.author_name, reason: e.reason })) }
 }
@@ -278,6 +309,7 @@ async function validatedExpenses(client: Database, roundId: string, currency: Cu
     }
     const amount = BigInt(expense.amountMinor)
     if (amount <= 0n) badInput('invalid_amount')
+    if (expense.splitMode === 'CUSTOM') checkCustomShares(amount, expense.participantIds, expense.shares)
     if (amount > minorLimit(MAX_EXPENSE_MAJOR, currency)) badInput('expense_amount_limit_exceeded', `지출 금액은 ${formatMoney(minorLimit(MAX_EXPENSE_MAJOR, currency).toString(), currency)} 이하여야 해요`)
     total += amount
   }
@@ -307,6 +339,7 @@ export async function roundCommand(access: Identity, key: string, roundId: strin
       state(round, 'RECORDING')
       const { items } = await validatedExpenses(client, roundId, round.currency as Currency)
       for (const expense of items) {
+        if (expense.splitMode === 'CUSTOM') continue
         const base = calculateBase(BigInt(expense.amountMinor), expense.participantIds.length)
         await client.query('UPDATE expenses SET base_share_minor=$2,remainder_units=$3 WHERE id=$1', [expense.id, base.base.toString(), base.remainder])
       }

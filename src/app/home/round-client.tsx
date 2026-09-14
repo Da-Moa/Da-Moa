@@ -7,7 +7,7 @@ import { ArrowRight, ChevronDown, ImagePlus, Pencil, Plus, Trash2, X } from 'luc
 import { AnimatedMoney } from '../animated-money'
 import { ApiError, apiRequest } from '../../lib/api-client'
 import type { ExclusionCheck, Expense, MutationResult, Receipt, RoundDetail } from '../../lib/domain-types'
-import { expenseInputMaximum, formatAmountInput, formatMoney } from '../../lib/money'
+import { expenseInputMaximum, formatAmountInput, formatMoney, parseAmount } from '../../lib/money'
 import { ErrorNotice, Loading, ParticipantAvatar, StatusBadge, useAccount, useAction, useResource } from './ui'
 
 const expenseDayFormatter = new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' })
@@ -21,22 +21,36 @@ function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: Rou
   const { account } = useAccount()
   const action = useAction()
   const expectedVersion = useRef(round.version)
-  const [mode, setMode] = useState<'ALL' | 'SELECTED'>(expense?.splitMode ?? 'ALL')
+  const [mode, setMode] = useState<Expense['splitMode']>(expense?.splitMode ?? 'ALL')
   const [participants, setParticipants] = useState(expense?.participantIds ?? [])
-  const minor = expense?.amountMinor ?? ''
-  const amount = minor && round.currency === 'USD' ? `${minor.padStart(3, '0').slice(0, -2)}.${minor.padStart(3, '0').slice(-2)}` : minor
   const maximumMinor = expenseInputMaximum(round.totalMinor, expense?.amountMinor, round.currency)
-  const [amountInput, setAmountInput] = useState(() => formatAmountInput(amount, round.currency, maximumMinor) ?? amount)
+  function minorToInput(minor: string) {
+    const amount = minor && round.currency === 'USD' ? `${minor.padStart(3, '0').slice(0, -2)}.${minor.padStart(3, '0').slice(-2)}` : minor
+    return formatAmountInput(amount, round.currency) ?? amount
+  }
+  const [amountInput, setAmountInput] = useState(() => minorToInput(expense?.amountMinor ?? ''))
+  const [customAmounts, setCustomAmounts] = useState<Record<string, string>>(() => Object.fromEntries((expense?.shares ?? []).flatMap(share => share.assignedAmountMinor == null ? [] : [[share.userId, minorToInput(share.assignedAmountMinor)]])))
   useEffect(() => setAmountInput(current => formatAmountInput(current, round.currency, maximumMinor) ?? current), [maximumMinor, round.currency])
   async function save(form: HTMLFormElement) {
     if (maximumMinor === 0n) return
     const values = new FormData(form)
     const body = {
       description: String(values.get('description') ?? ''), amount: String(values.get('amount') ?? '').replace(/,/g, ''), payerId: String(values.get('payerId') ?? ''), splitMode: mode,
-      ...(mode === 'SELECTED' ? { participantIds: values.getAll('participantIds').map(String) } : {}), expectedVersion: expectedVersion.current,
+      ...(mode === 'SELECTED' ? { participantIds: values.getAll('participantIds').map(String) } : {}),
+      ...(mode === 'CUSTOM' ? { customShares: values.getAll('participantIds').map(value => ({ userId: String(value), amount: String(values.get(`customAmount:${value}`) ?? '').replace(/,/g, '') })) } : {}),
+      expectedVersion: expectedVersion.current,
     }
     const path = `/api/rounds/${round.id}/expenses${expense ? `/${expense.id}` : ''}`, method = expense ? 'PATCH' : 'POST'
     const result = await action.run(async () => {
+      if (body.customShares) {
+        let amount: bigint
+        try { amount = parseAmount(body.amount, round.currency) }
+        catch { throw new Error('통화에 맞는 양의 금액을 정확히 입력해 주세요') }
+        let total = 0n
+        try { total = body.customShares.reduce((sum, share) => sum + parseAmount(share.amount, round.currency), 0n) }
+        catch { throw new Error('부담금은 0보다 큰 금액으로 입력해 주세요.') }
+        if (total !== amount) throw new Error('부담금 합계가 총 금액과 일치해야 해요')
+      }
       try { return await apiRequest<MutationResult>(path, { method, body }) }
       catch (error) {
         if (!(error instanceof ApiError) || error.code !== 'stale_round') throw error
@@ -49,12 +63,13 @@ function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: Rou
     })
     if (result) await onSaved()
   }
-  function changeAmount(input: HTMLInputElement) {
+  function changeAmount(input: HTMLInputElement, userId?: string) {
     const cursor = input.selectionStart ?? input.value.length
     const offset = input.value.slice(0, cursor).replace(/,/g, '').length
     const formatted = formatAmountInput(input.value, round.currency, maximumMinor)
     if (formatted === null) return
-    setAmountInput(formatted)
+    if (userId) setCustomAmounts(current => ({ ...current, [userId]: formatted }))
+    else setAmountInput(formatted)
     requestAnimationFrame(() => {
       let position = 0, remaining = offset
       while (position < formatted.length && remaining > 0) {
@@ -72,7 +87,12 @@ function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: Rou
     <fieldset className="member-picker"><legend>부담할 사람</legend>
       <label className="check-row"><input type="radio" name="splitMode" value="ALL" checked={mode === 'ALL'} onChange={() => setMode('ALL')} /><span>전체 참여자 균등 분배</span></label>
       <label className="check-row"><input type="radio" name="splitMode" value="SELECTED" checked={mode === 'SELECTED'} onChange={() => setMode('SELECTED')} /><span>특정 사용자 균등 분배</span></label>
-      {mode === 'SELECTED' && <div className="selected-members">{round.members.filter(member => !member.excludedAt).map(member => <label className="check-row" key={member.userId}><input checked={participants.includes(member.userId)} onChange={event => setParticipants(current => event.target.checked ? [...current, member.userId] : current.filter(id => id !== member.userId))} name="participantIds" type="checkbox" value={member.userId} /><span>{member.displayName}</span></label>)}</div>}
+      <label className="check-row"><input type="radio" name="splitMode" value="CUSTOM" checked={mode === 'CUSTOM'} onChange={() => setMode('CUSTOM')} /><span>개별 항목 분배</span></label>
+      {mode !== 'ALL' && <div className="selected-members">{round.members.filter(member => !member.excludedAt).map(member => <div className={mode === 'CUSTOM' ? 'custom-share-row' : undefined} key={member.userId}>
+        <label className="check-row"><input checked={participants.includes(member.userId)} onChange={event => setParticipants(current => event.target.checked ? [...current, member.userId] : current.filter(id => id !== member.userId))} name="participantIds" type="checkbox" value={member.userId} /><span>{member.displayName}</span></label>
+        {mode === 'CUSTOM' && participants.includes(member.userId) && <label className="field"><span>부담금 ({round.currency})</span><input aria-label={`${member.displayName} 부담금 (${round.currency})`} value={customAmounts[member.userId] ?? ''} onChange={event => changeAmount(event.currentTarget, member.userId)} name={`customAmount:${member.userId}`} inputMode={round.currency === 'USD' ? 'decimal' : 'numeric'} type="text" pattern={round.currency === 'USD' ? '[0-9]{1,3}(,[0-9]{3})*([.][0-9]{1,2})?' : '[0-9]{1,3}(,[0-9]{3})*'} placeholder={round.currency === 'USD' ? '0.00' : '0'} required /></label>}
+      </div>)}</div>}
+      {mode === 'CUSTOM' && <p className="help-text">부담할 사람을 선택하고 각자의 부담금을 입력해 주세요. 부담금 합계는 총 금액과 같아야 해요.</p>}
     </fieldset>
     {round.status !== 'RECORDING' && <p className="notice notice-warning">다른 변경으로 기록 단계가 끝났어요. 입력을 확인한 뒤 창을 닫고 최신 상태를 확인해 주세요.</p>}
     <ErrorNotice error={action.error} />
@@ -123,8 +143,8 @@ function ExpenseCard({ expense, round, canEdit, highlighted, edit, reload }: { e
     {highlighted && <p className="highlight-label">제외 전 수정 필요</p>}
     <div className="row-between expense-card-heading"><h3>{expense.description}</h3><strong className="money">{formatMoney(expense.amountMinor, round.currency)}</strong></div>
     <p className="help-text"><strong>결제자:</strong> {name(expense.payerId)}</p>
-    <div><span className="subtle-tag expense-split-tag">{expense.splitMode === 'ALL' ? '전체 균등 분배' : '특정 사용자 균등 분배'}</span><p className="burden-members"><strong>부담자:</strong> {expense.participantIds.map(name).join(', ')}</p></div>
-    {expense.shares.some(share => share.amountMinor !== null) && <details><summary>최종 부담액 보기</summary><ul className="member-list">{expense.shares.map(share => <li key={share.userId}><span>{name(share.userId)}{share.receivedRemainder && <small className="subtle-tag">나머지 부담</small>}</span><strong className="money">{formatMoney(share.amountMinor ?? '0', round.currency)}</strong></li>)}</ul></details>}
+    <div><span className="subtle-tag expense-split-tag">{expense.splitMode === 'ALL' ? '전체 균등 분배' : expense.splitMode === 'CUSTOM' ? '개별 항목 분배' : '특정 사용자 균등 분배'}</span><p className="burden-members"><strong>부담자:</strong> {expense.participantIds.map(name).join(', ')}</p></div>
+    {(expense.splitMode === 'CUSTOM' || expense.shares.some(share => share.amountMinor !== null)) && <details><summary>{round.finalizedAt !== null ? '최종 부담액 보기' : '개별 부담금 보기'}</summary><ul className="member-list">{expense.shares.map(share => <li key={share.userId}><span>{name(share.userId)}{share.receivedRemainder && <small className="subtle-tag">나머지 부담</small>}</span><strong className="money">{formatMoney(share.amountMinor ?? share.assignedAmountMinor ?? '0', round.currency)}</strong></li>)}</ul></details>}
     {canEdit && <div className="inline-actions expense-card-actions"><button className="text-button" disabled={action.busy} onClick={edit} type="button"><Pencil size={15} /> 수정</button><button aria-controls={`receipt-upload-${expense.id}`} aria-haspopup="dialog" className="text-button" disabled={action.busy} onClick={() => uploadDialog.current?.showModal()} type="button"><ImagePlus size={15} /> 영수증 추가</button><button className="text-button danger-text" disabled={action.busy} onClick={() => void remove()} type="button"><Trash2 size={15} /> 삭제</button></div>}
     {expense.receipts.map((receipt, index) => <ReceiptImage key={receipt.id} receipt={receipt} index={index} canEdit={canEdit} busy={action.busy} remove={() => void removeReceipt(receipt.id)} />)}
     {canEdit && <dialog aria-labelledby={`receipt-upload-heading-${expense.id}`} className="account-dialog" id={`receipt-upload-${expense.id}`} ref={uploadDialog} onCancel={event => { if (uploadAction.busy) event.preventDefault() }} onClick={event => { if (event.target === event.currentTarget && !uploadAction.busy) event.currentTarget.close() }} onClose={() => { setFile(null); uploadAction.setError(null); if (input.current) input.current.value = '' }}>
@@ -145,6 +165,7 @@ const exclusionReason: Record<string, string> = {
   minimum_participants: '회차는 회차 생성자를 포함해 최소 2명이 필요해요.',
   payer_and_participant: '이 사람이 결제자이면서 부담자예요. 해당 관계를 먼저 수정해 주세요.',
   selected_participant: '특정 사용자 분배의 부담자예요. 해당 기록을 먼저 수정해 주세요.',
+  custom_participant: '개별 항목 분배의 부담자예요. 해당 기록을 먼저 수정해 주세요.',
 }
 
 export default function RoundClient({ roundId }: { roundId: string }) {

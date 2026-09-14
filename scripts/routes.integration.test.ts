@@ -86,6 +86,22 @@ test('Route Handler contracts enforce cookies, origin, idempotency, normalized i
       assert.equal(current.expenses[0].amountMinor, '1025')
     }
     assert.equal((await (await request(`rounds/${roundId}`, a.accessToken)).json()).data.currency, 'KRW')
+    const customRound = (await (await request(`groups/${groupId}/rounds`, a.accessToken, 'POST', { name: '개별 부담 API', currency: 'USD', participantIds: [a.userId, b.userId] })).json()).data
+    const customBody = { description: '개별 지출', amount: '0.30', payerId: b.userId, splitMode: 'CUSTOM', customShares: [{ userId: a.userId, amount: '0.10' }, { userId: b.userId, amount: '0.20' }], expectedVersion: 1 }
+    const mismatch = await request(`rounds/${customRound.id}/expenses`, a.accessToken, 'POST', { ...customBody, amount: '0.31' })
+    assert.equal(mismatch.status, 400)
+    assert.deepEqual(await mismatch.json(), { error: 'custom_share_total_mismatch', message: '부담금 합계가 총 금액과 일치해야 해요' })
+    const customSave = await request(`rounds/${customRound.id}/expenses`, a.accessToken, 'POST', customBody)
+    assert.equal(customSave.status, 200, await customSave.clone().text())
+    const customExpense = (await customSave.json()).data
+    const customPatch = await request(`rounds/${customRound.id}/expenses/${customExpense.id}`, a.accessToken, 'PATCH', { amount: '0.40', expectedVersion: customExpense.version })
+    assert.equal(customPatch.status, 400)
+    assert.equal((await customPatch.json()).error, 'custom_share_total_mismatch')
+    const customDetail = (await (await request(`rounds/${customRound.id}`, a.accessToken)).json()).data
+    assert.equal(customDetail.version, customExpense.version)
+    assert.equal(customDetail.expenses[0].amountMinor, '30')
+    assert.deepEqual(Object.fromEntries(customDetail.expenses[0].shares.map((share: { userId: string; assignedAmountMinor: string }) => [share.userId, share.assignedAmountMinor])), { [a.userId]: '10', [b.userId]: '20' })
+    assert.ok(customDetail.expenses[0].shares.every((share: { amountMinor: string | null }) => share.amountMinor === null))
     const absent = await request(`rounds/${roundId}`, outsider.accessToken)
     assert.equal(absent.status, 404)
     assert.equal((await request(`rounds/${roundId}/confirm`, a.accessToken, 'POST', { expectedVersion: 1 })).status, 409)

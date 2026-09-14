@@ -4,17 +4,39 @@ export function calculateBase(total: bigint, count: number): { base: bigint; rem
   return { base: total / BigInt(count), remainder: Number(total % BigInt(count)) }
 }
 
-type SettlementExpense = { id: string; payerId: string; amountMinor: string; participantIds: string[] }
+type SettlementExpense = {
+  id: string; payerId: string; amountMinor: string; participantIds: string[];
+  splitMode?: 'ALL' | 'SELECTED' | 'CUSTOM';
+  shares?: { userId: string; assignedAmountMinor: string | null }[]
+}
 type FinalShare = { expenseId: string; userId: string; amountMinor: string; receivedRemainder: boolean }
 type FinalBalance = { userId: string; paidMinor: string; burdenMinor: string; balanceMinor: string }
 type FinalTransfer = { senderId: string; receiverId: string; amountMinor: string }
 type SettlementResult = { shares: FinalShare[]; balances: FinalBalance[]; transfers: FinalTransfer[] }
 
-function settlementAmount(value: string, allowZero = false) {
+function settlementAmount(value: unknown, allowZero = false) {
   if (typeof value !== 'string' || value !== value.trim() || !/^\d+$/.test(value)) throw new Error('invalid_amount')
   const amount = BigInt(value)
   if (amount < 0n || (!allowZero && amount === 0n)) throw new Error('invalid_amount')
   return amount
+}
+
+export function validateCustomShares(total: bigint, participantIds: string[], shares: SettlementExpense['shares']): Map<string, bigint> {
+  if (typeof total !== 'bigint' || total <= 0n) throw new Error('invalid_amount')
+  if (!Array.isArray(participantIds) || !participantIds.length || participantIds.some(id => typeof id !== 'string' || !id) ||
+      new Set(participantIds).size !== participantIds.length || !Array.isArray(shares) || shares.length !== participantIds.length) {
+    throw new Error('invalid_participants')
+  }
+  const assigned = new Map<string, bigint>()
+  let sum = 0n
+  for (const share of shares) {
+    if (!share || !participantIds.includes(share.userId) || assigned.has(share.userId)) throw new Error('invalid_participants')
+    const amount = settlementAmount(share.assignedAmountMinor)
+    assigned.set(share.userId, amount)
+    sum += amount
+  }
+  if (sum !== total) throw new Error('custom_share_total_mismatch')
+  return assigned
 }
 
 /**
@@ -41,11 +63,12 @@ function settle(
     expenseIds.add(expense.id)
     const payer = totals.get(expense.payerId)
     const participants = [...expense.participantIds].sort()
-    if (!payer || new Set(participants).size !== participants.length || participants.some(id => !totals.has(id))) {
+    if (!payer || !participants.length || new Set(participants).size !== participants.length || participants.some(id => !totals.has(id))) {
       throw new Error('invalid_participants')
     }
     const total = settlementAmount(expense.amountMinor, allowZero)
-    const { base, remainder } = total === 0n ? { base: 0n, remainder: 0 } : calculateBase(total, participants.length)
+    const assigned = expense.splitMode === 'CUSTOM' ? validateCustomShares(total, participants, expense.shares) : undefined
+    const { base, remainder } = assigned || total === 0n ? { base: 0n, remainder: 0 } : calculateBase(total, participants.length)
     if (remainder && !draw) throw new Error('remainder_draw_required')
     const candidates = [...participants]
     const winners = new Set<string>()
@@ -60,7 +83,7 @@ function settle(
     payer.paid += total
     for (const userId of participants) {
       const receivedRemainder = winners.has(userId)
-      const amount = base + (receivedRemainder ? 1n : 0n)
+      const amount = assigned?.get(userId) ?? base + (receivedRemainder ? 1n : 0n)
       totals.get(userId)!.burden += amount
       shares.push({ expenseId: expense.id, userId, amountMinor: amount.toString(), receivedRemainder })
     }
@@ -96,6 +119,7 @@ export function finalizeSettlement(expenses: SettlementExpense[], memberIds: str
 export function previewSettlement(expenses: SettlementExpense[], memberIds: string[]): SettlementResult & { pendingRemainderMinor: string } {
   let pending = 0n
   const allocated = expenses.map(expense => {
+    if (expense.splitMode === 'CUSTOM') return expense
     const total = settlementAmount(expense.amountMinor)
     const { base, remainder } = calculateBase(total, expense.participantIds.length)
     pending += BigInt(remainder)
