@@ -28,9 +28,11 @@ a:focus-visible, button:focus-visible, input:focus-visible, .expense-card:focus-
   max-width: 480px;
   min-height: 100dvh;
   padding: max(20px, env(safe-area-inset-top)) 20px calc(92px + env(safe-area-inset-bottom));
+  position: relative;
 }
 
 .app-shell .topbar { align-items: center; display: flex; justify-content: space-between; }
+.app-shell:has(.back-link) .topbar { min-height: 58px; }
 .app-shell .topbar-actions { display: flex; gap: 2px; }
 .brand { display: flex; mix-blend-mode: multiply; text-decoration: none; transition: transform .2s ease; }
 .brand:hover { transform: scale(1.08); }
@@ -242,10 +244,8 @@ h1 { color: #191f28; font-size: clamp(31px, 8.4vw, 39px); line-height: 1.2; marg
 html.landing-transition-locked { overscroll-behavior: none; }
 html.landing-transition-locked body { touch-action: none; }
 
-.auth-page { background: #fff; display: flex; flex-direction: column; margin: 0 auto; max-width: 480px; min-height: 100dvh; padding: max(20px, env(safe-area-inset-top)) 24px max(28px, env(safe-area-inset-bottom)); }
+.auth-page { background: #fff; display: flex; flex-direction: column; margin: 0 auto; max-width: 480px; min-height: 100dvh; padding: max(20px, env(safe-area-inset-top)) 20px max(28px, env(safe-area-inset-bottom)); }
 .auth-content { flex: 1; padding: 78px 4px 40px; }
-.auth-logo { align-items: center; background: #e8f8ff; border: 1px solid #cfeefc; border-radius: 24px; box-shadow: var(--box-shadow); display: flex; height: 103px; justify-content: center; margin-bottom: 36px; width: 103px; }
-.auth-logo img { display: block; mix-blend-mode: multiply; }
 .auth-eyebrow { color: #5dc4fc; font-size: 14px; font-weight: 800; margin-bottom: 10px; }
 .auth-content h1 { font-size: clamp(31px, 8.4vw, 39px); letter-spacing: -.04em; }
 .auth-description { color: #6b7684; font-size: 15px; line-height: 1.65; margin: 19px 0 0; text-wrap: pretty; }
@@ -327,7 +327,7 @@ select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3
 .expense-toggle { min-width: 38px; }
 .expense-toggle svg { stroke-width: 2.5; }
 .expense-toggle-open { transform: rotate(180deg); }
-.back-link { margin: 22px 0 12px; }
+.app-shell .back-link { left: 20px; position: absolute; top: max(20px, env(safe-area-inset-top)); }
 .field { display: grid; gap: 7px; min-width: 0; }
 .field > span { align-items: center; color: #465568; display: flex; font-size: 13px; font-weight: 700; gap: 5px; }
 .field input:not([type='checkbox']):not([type='radio']), .field select { background: #fff; border: 1px solid #ccd5df; border-radius: 10px; box-shadow: var(--control-shadow); color: #191f28; font-size: 16px; min-height: 45px; padding: 11px 12px; width: 100%; min-width: 0; }

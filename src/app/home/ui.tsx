@@ -258,7 +258,7 @@ export function AccountPanel() {
     })
   }
   return <div className="stack account-page">
-    <header className="account-page-heading"><Link aria-label="전체로 돌아가기" className="icon-button back-button" href="/home/all"><ChevronLeft aria-hidden="true" size={38} strokeWidth={2.5} /></Link><h1>내 정보</h1></header>
+    <header className="account-page-heading"><Link aria-label="전체로 돌아가기" className="icon-button back-button back-link" href="/home/all"><ChevronLeft aria-hidden="true" size={38} strokeWidth={2.5} /></Link><h1>내 정보</h1></header>
     <section className="domain-card account-profile" aria-labelledby="account-profile-heading">
       <span className="account-avatar">{account.profileImageUrl ? <img alt="" height={80} width={80} referrerPolicy="no-referrer" src={account.profileImageUrl} /> : <CircleUserRound size={40} />}</span>
       <h2 id="account-profile-heading">{account.displayName ?? '카카오 사용자'}님의 정보</h2>
@@ -286,12 +286,13 @@ export function AccountPanel() {
 
 export function AppShell({ children, realtimeEnabled }: { children: ReactNode; realtimeEnabled: boolean }) {
   const pathname = usePathname() ?? '/home'
+  const hasBackButton = pathname === '/home/account' || pathname.startsWith('/home/groups/') || pathname.startsWith('/home/rounds/') || pathname.startsWith('/settlements/')
   const me = useResource<Account>('/api/me')
   const account = me.data
   useEffect(() => {
     if (account && (account.purpose === 'onboarding' || !account.onboardingCompletedAt || account.deletedAt)) window.location.replace(`/onboarding?returnTo=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`)
   }, [account])
-  if (!account || account.purpose !== 'app' || !account.onboardingCompletedAt || account.deletedAt) return <main className="app-shell"><Link className="brand" href="/">다모아</Link><Loading text="로그인 상태를 확인하고 있어요…" /><ErrorNotice error={me.error} retry={() => void me.reload()} /></main>
+  if (!account || account.purpose !== 'app' || !account.onboardingCompletedAt || account.deletedAt) return <main className="app-shell">{!hasBackButton && <Link className="brand" href="/">다모아</Link>}<Loading text="로그인 상태를 확인하고 있어요…" /><ErrorNotice error={me.error} retry={() => void me.reload()} /></main>
   const links = [
     { href: '/home', label: '홈', icon: House, active: pathname === '/home' },
     { href: '/home/groups', label: '모임', icon: Users, active: pathname.startsWith('/home/groups') || pathname.startsWith('/home/rounds') },
@@ -299,7 +300,7 @@ export function AppShell({ children, realtimeEnabled }: { children: ReactNode; r
     { href: '/home/all', label: '전체', icon: Menu, active: pathname === '/home/all' || pathname === '/home/account' },
   ]
   return <RealtimeProvider accountId={account.id} enabled={realtimeEnabled} reloadAccount={me.reload}><AccountContext.Provider value={{ account, reloadAccount: me.reload }}><main className="app-shell">
-    <header className="topbar"><Link className="brand" href="/home" aria-label="다모아 홈"><img alt="다모아" height="38" src="/logo/da-moa-trans.png" width="46" /></Link></header>
+    <header className="topbar">{!hasBackButton && <Link className="brand" href="/home" aria-label="다모아 홈"><img alt="다모아" height="38" src="/logo/da-moa-trans.png" width="46" /></Link>}</header>
     {children}
     <nav aria-label="주 메뉴" className="bottom-nav">{links.map(({ href, label, icon: Icon, active }) => <Link key={href} href={href} aria-current={active ? 'page' : undefined}><Icon size={22} /><span>{label}</span></Link>)}</nav>
   </main></AccountContext.Provider></RealtimeProvider>

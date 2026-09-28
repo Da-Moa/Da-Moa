@@ -17,9 +17,6 @@ export default async function LoginPage({
       </Link>
 
       <section className="auth-content" aria-labelledby="auth-heading">
-        <div className="auth-logo" aria-hidden="true">
-          <img alt="" height="72" src="/logo/da-moa-trans.png" width="87" />
-        </div>
         <p className="auth-eyebrow">모임 정산을 더 간편하게</p>
         <h1 id="auth-heading">다모아와 함께<br />정산을 시작해요</h1>
         <p className="auth-description">카카오 계정으로 로그인하면 내 정산 내역과<br />친구들과의 모임을 안전하게 관리할 수 있어요</p>
