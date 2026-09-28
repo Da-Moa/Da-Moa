@@ -476,6 +476,8 @@ summary { color: #526a82; cursor: pointer; font-size: 13px; line-height: 1.6; pa
 .account-profile .account-avatar { height: 80px; margin: 8px auto 18px; width: 80px; }
 .account-profile h2 { margin: 0; }
 .account-profile .account-details { text-align: left; }
+.account-verification-note { margin-top: 8px; text-align: right; }
+.account-bank-toggle { margin-top: 18px; }
 .account-page .domain-card { scroll-margin-top: 20px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; }
