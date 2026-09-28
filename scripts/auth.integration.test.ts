@@ -15,7 +15,7 @@ import { createDatabaseClient, withReadTransaction, withWriteTransaction } from 
 import { AppError } from '../src/lib/errors.ts'
 import { acceptInvite, createGroup, createInvite, getGroup, getInvite, listGroups } from '../src/lib/group-store.ts'
 import { applyMigrations } from './migrations.mjs'
-import { completeTestOnboarding as completeOnboarding, updateTestBankAccount as updateBankAccount } from './openbanking-test-support.ts'
+import { completeTestOnboarding as completeOnboarding, updateTestBankAccount as updateBankAccount } from './bank-test-support.ts'
 
 const testUrl = process.env.TEST_DATABASE_URL
 if (!testUrl || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(testUrl).hostname) || !new URL(testUrl).pathname.toLowerCase().includes('test')) throw new Error('TEST_DATABASE_URL must name an isolated local test database; authentication tests never use DATABASE_URL implicitly')

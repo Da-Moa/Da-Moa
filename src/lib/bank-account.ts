@@ -1,6 +1,5 @@
 import { AppError } from './errors.ts'
 
-// KFTC 이용기관 API 명세서 v3.3.6 §3.3 (공개 자료실 게시글 129).
 export const BANKS: ReadonlyArray<{ code: string; name: string }> = [
   { code: '002', name: 'KDB산업은행' }, { code: '003', name: 'IBK기업은행' },
   { code: '004', name: 'KB국민은행' }, { code: '007', name: '수협은행' },
@@ -28,29 +27,13 @@ export const BANKS: ReadonlyArray<{ code: string; name: string }> = [
   { code: '287', name: '메리츠증권' },
 ]
 
-export const TEST_BANKS: ReadonlyArray<{ code: string; name: string }> = [
-  { code: '097', name: '오픈은행(테스트)' }, { code: '296', name: '오픈증권(테스트)' },
-]
-
-// Registered account details assist input; they do not establish real-name verification.
-export type RegisteredBankAccount = {
-  fintechUseNum: string
-  bankCode: string
-  bankName: string
-  accountHolder: string
-  accountNumber: string | null
-  accountNumberMasked: string
-}
-
 export type BankAccountInput = {
   bankCode: string
   bankName: string
   accountNumber: string
-  birthDate: string
   accountHolder: string
   expectedBankVersion: number
   confirmRejoin: boolean
-  verifyWithOpenBanking: boolean
 }
 
 function invalidField(field: string, message: string): never {
@@ -63,28 +46,16 @@ export function normalizeAccountHolder(value: string): string {
 
 export function normalizeBankAccountInput(
   input: Record<string, unknown>,
-  options: { onboarding?: boolean; allowTestBanks?: boolean; now?: Date } = {},
+  options: { onboarding?: boolean } = {},
 ): BankAccountInput {
-  const allowed = ['bankCode', 'accountNumber', 'birthDate', 'accountHolder', 'expectedBankVersion', 'verifyWithOpenBanking', ...(options.onboarding ? ['confirmRejoin'] : [])]
+  const allowed = ['bankCode', 'accountNumber', 'accountHolder', 'expectedBankVersion', 'verifyWithOpenBanking', ...(options.onboarding ? ['confirmRejoin'] : [])]
   if (Object.keys(input).some(key => !allowed.includes(key))) invalidField('form', '지원하지 않는 계좌 입력 항목이 있어요')
-  if (input.verifyWithOpenBanking !== undefined && typeof input.verifyWithOpenBanking !== 'boolean') invalidField('verifyWithOpenBanking', '계좌 확인 방법을 선택해 주세요')
-  const verifyWithOpenBanking = input.verifyWithOpenBanking !== false
-  const banks = options.allowTestBanks ? [...BANKS, ...TEST_BANKS] : BANKS
-  const bank = banks.find(item => item.code === input.bankCode)
+  if (input.verifyWithOpenBanking !== undefined && input.verifyWithOpenBanking !== false) invalidField('verifyWithOpenBanking', '계좌 자동 확인은 지원하지 않아요')
+  const bank = BANKS.find(item => item.code === input.bankCode)
   if (!bank) invalidField('bankCode', '지원하는 은행을 선택해 주세요')
   if (typeof input.accountNumber !== 'string' || input.accountNumber.length > 64) invalidField('accountNumber', '계좌번호를 확인해 주세요')
   const accountNumber = input.accountNumber.replace(/[ -]/g, '')
   if (!/^[0-9]{1,16}$/.test(accountNumber)) invalidField('accountNumber', '계좌번호는 숫자 16자리 이내로 입력해 주세요')
-  let birthDate = ''
-  if (verifyWithOpenBanking) {
-    if (typeof input.birthDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(input.birthDate)) invalidField('birthDate', '생년월일을 확인해 주세요')
-    const date = new Date(`${input.birthDate}T00:00:00.000Z`)
-    const today = new Date((options.now ?? new Date()).getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
-    if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== input.birthDate || input.birthDate < '1900-01-01' || input.birthDate > today) invalidField('birthDate', '실제 생년월일을 입력해 주세요')
-    birthDate = input.birthDate
-  } else if (Object.hasOwn(input, 'birthDate')) {
-    invalidField('birthDate', '금융결제원 확인 없이 저장할 때는 생년월일을 보내지 마세요')
-  }
   if (typeof input.accountHolder !== 'string' || input.accountHolder.length > 100) invalidField('accountHolder', '예금주명을 확인해 주세요')
   const accountHolder = normalizeAccountHolder(input.accountHolder)
   if (!accountHolder || accountHolder.length > 40 || /[\p{Cc}\p{Cf}]/u.test(accountHolder)) invalidField('accountHolder', '예금주명을 확인해 주세요')
@@ -92,5 +63,5 @@ export function normalizeBankAccountInput(
     invalidField('expectedBankVersion', '계좌정보를 다시 불러온 뒤 저장해 주세요')
   }
   if (input.confirmRejoin !== undefined && typeof input.confirmRejoin !== 'boolean') invalidField('confirmRejoin', '재가입 동의를 확인해 주세요')
-  return { bankCode: bank.code, bankName: bank.name, accountNumber, birthDate, accountHolder, expectedBankVersion: input.expectedBankVersion, confirmRejoin: input.confirmRejoin === true, verifyWithOpenBanking }
+  return { bankCode: bank.code, bankName: bank.name, accountNumber, accountHolder, expectedBankVersion: input.expectedBankVersion, confirmRejoin: input.confirmRejoin === true }
 }

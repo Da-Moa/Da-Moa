@@ -16,13 +16,13 @@ test('leaving the bank form discards sensitive retry input, including an already
   const requests: { key: string | null; body: string }[] = []
   globalThis.fetch = async (_input, init) => {
     requests.push({ key: new Headers(init?.headers).get('Idempotency-Key'), body: String(init?.body) })
-    return requests.length === 1 ? Response.json({ error: 'openbanking_unavailable' }, { status: 503 }) : Response.json({ data: { id: 'member', bankVersion: 1 } })
+    return requests.length === 1 ? Response.json({ error: 'storage_unavailable' }, { status: 503 }) : Response.json({ data: { id: 'member', bankVersion: 1 } })
   }
   const path = '/api/me/bank-account'
-  const original = { bankCode: '004', accountNumber: '0012345', birthDate: '1990-01-02', accountHolder: '테스트', expectedBankVersion: 0 }
+  const original = { bankCode: '004', accountNumber: '0012345', accountHolder: '테스트', expectedBankVersion: 0 }
   await assert.rejects(() => apiRequest(path, { method: 'PUT', body: original }))
   let recover: (() => Promise<unknown>) | undefined
-  await assert.rejects(() => apiRequest(path, { method: 'PUT', body: { ...original, birthDate: '1991-01-02' } }), error => {
+  await assert.rejects(() => apiRequest(path, { method: 'PUT', body: { ...original, accountNumber: '0098765' } }), error => {
     assert.ok(error instanceof ApiError)
     assert.equal(error.code, 'unresolved_request')
     recover = error.recover
@@ -32,48 +32,48 @@ test('leaving the bank form discards sensitive retry input, including an already
   assert.ok(recover)
   await assert.rejects(recover, error => error instanceof ApiError && error.code === 'request_discarded')
   assert.equal(requests.length, 1)
-  await apiRequest(path, { method: 'PUT', body: { ...original, birthDate: '1991-01-02' } })
+  await apiRequest(path, { method: 'PUT', body: { ...original, accountNumber: '0098765' } })
   assert.notEqual(requests[0].key, requests[1].key)
-  assert.equal(JSON.parse(requests[1].body).birthDate, '1991-01-02')
+  assert.equal(JSON.parse(requests[1].body).accountNumber, '0098765')
 })
 
-test('closing the form before request preparation completes cannot restore its discarded birth date', async () => {
+test('closing the form before request preparation completes cannot restore discarded account details', async () => {
   fakeWindow()
   let calls = 0
   globalThis.fetch = async () => { calls++; return Response.json({ data: { id: 'member' } }) }
   const controller = new AbortController()
-  const request = apiRequest('/api/me/onboarding', { method: 'POST', body: { birthDate: '1990-01-02' }, signal: controller.signal })
+  const request = apiRequest('/api/me/onboarding', { method: 'POST', body: { accountHolder: '테스트' }, signal: controller.signal })
   controller.abort()
   discardBankAccountRequests()
   await assert.rejects(() => request, error => error instanceof DOMException && error.name === 'AbortError')
   assert.equal(calls, 0)
-  await apiRequest('/api/me/onboarding', { method: 'POST', body: { birthDate: '1991-01-02' } })
+  await apiRequest('/api/me/onboarding', { method: 'POST', body: { accountNumber: '0098765' } })
   assert.equal(calls, 1)
 })
 
-test('missing simulator data allows corrected bank input with a fresh request key', async () => {
+test('corrected bank input uses a fresh request key', async () => {
   fakeWindow()
   const requests: { key: string | null; body: string }[] = []
   globalThis.fetch = async (_input, init) => {
     requests.push({ key: new Headers(init?.headers).get('Idempotency-Key'), body: String(init?.body) })
     return requests.length === 1
-      ? Response.json({ error: 'openbanking_test_data_missing' }, { status: 424 })
+      ? Response.json({ error: 'invalid_input' }, { status: 400 })
       : Response.json({ data: { id: 'member', bankVersion: 1 } })
   }
   const path = '/api/me/bank-account'
-  await assert.rejects(() => apiRequest(path, { method: 'PUT', body: { birthDate: '1990-01-02' } }), error => error instanceof ApiError && error.code === 'openbanking_test_data_missing')
-  await apiRequest(path, { method: 'PUT', body: { birthDate: '1991-01-02' } })
+  await assert.rejects(() => apiRequest(path, { method: 'PUT', body: { accountNumber: 'bad' } }), error => error instanceof ApiError && error.code === 'invalid_input')
+  await apiRequest(path, { method: 'PUT', body: { accountNumber: '123456' } })
   assert.notEqual(requests[0].key, requests[1].key)
-  assert.equal(JSON.parse(requests[1].body).birthDate, '1991-01-02')
+  assert.equal(JSON.parse(requests[1].body).accountNumber, '123456')
 })
 
 test('expired bank authentication discards the original personal data before login redirect', async () => {
   const redirects = fakeWindow('/home/all')
   globalThis.fetch = async () => Response.json({ error: 'unauthorized' }, { status: 401 })
-  await assert.rejects(() => apiRequest('/api/me/bank-account', { method: 'PUT', body: { birthDate: '1990-01-02' } }))
+  await assert.rejects(() => apiRequest('/api/me/bank-account', { method: 'PUT', body: { accountNumber: '123456' } }))
   assert.equal(redirects.length, 1)
   globalThis.fetch = async () => Response.json({ data: { id: 'member' } })
-  assert.deepEqual(await apiRequest('/api/me/bank-account', { method: 'PUT', body: { birthDate: '1991-01-02' } }), { id: 'member' })
+  assert.deepEqual(await apiRequest('/api/me/bank-account', { method: 'PUT', body: { accountNumber: '0098765' } }), { id: 'member' })
 })
 
 function fakeWindow(path = '/settlements/round-a', search = '') {

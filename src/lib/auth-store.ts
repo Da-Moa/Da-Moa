@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHmac, randomUUID } from 'node:crypto'
 import {
   ACCESS_TOKEN_MAX_AGE_SECONDS,
   ONBOARDING_MAX_AGE_SECONDS,
@@ -16,8 +16,6 @@ import { AppError } from './errors'
 import { objectBody, replayMutation, saveMutation } from './mutations'
 import { testAccountForKey } from './test-accounts'
 import { normalizeBankAccountInput, type BankAccountInput } from './bank-account'
-import { bankAccountRequestFingerprint, inquireRealName, OpenBankingError } from './openbanking'
-import { allocateBankTranId, assertBankVerification, getOpenBankingStatus, getServiceToken, invalidateServiceToken, prepareBankVerification, requestDisconnect } from './openbanking-store'
 
 export type UserAccount = Pick<Account, 'displayName' | 'email' | 'profileImageUrl'>
 export type AuthSession = {
@@ -40,22 +38,6 @@ type RefreshSessionRotationInput = RefreshSessionInput & {
   now: number
   previousSessionId: string
   previousTokenHash: string
-}
-
-async function verifyBankAccount(bank: BankAccountInput) {
-  let token = await getServiceToken()
-  try { return await inquireRealName(bank, token, await allocateBankTranId()) }
-  catch (error) {
-    if (!(error instanceof OpenBankingError) || !error.reauth) throw error
-    // This is the institution token; a rejected token must not restart the user's OAuth.
-    await invalidateServiceToken(token)
-    token = await getServiceToken()
-    try { return await inquireRealName(bank, token, await allocateBankTranId()) }
-    catch (retryError) {
-      if (retryError instanceof OpenBankingError && retryError.reauth) throw new OpenBankingError('configuration', retryError.providerCode)
-      throw retryError
-    }
-  }
 }
 
 async function issueSession(client: Database, userId: string, purpose: 'app' | 'onboarding', now: number): Promise<AuthSession> {
@@ -114,34 +96,24 @@ function assertBankVersion(account: Account, expectedVersion: number) {
   if (account.bankVersion !== expectedVersion) throw new AppError(409, 'bank_account_conflict', '계좌가 변경됐어요. 최신 계좌를 확인하고 다시 입력해 주세요')
 }
 
-async function assertOnboarding(client: Database, account: Account, bank: BankAccountInput) {
+function assertOnboarding(account: Account, bank: BankAccountInput) {
   if (account.purpose !== 'onboarding') throw new AppError(409, 'already_onboarded', '이미 가입을 완료했습니다')
   if (account.deletedAt !== null && !bank.confirmRejoin) throw new AppError(400, 'rejoin_confirmation_required', '이전 기록을 유지하여 재가입하는 데 동의해 주세요')
-  if ((await getOpenBankingStatus(client, account.id)).status === 'DISCONNECT_PENDING') {
-    throw new AppError(409, 'openbanking_disconnect_pending', '이전 계좌 연결을 정리하고 있어요. 정리가 끝나면 다시 가입해 주세요')
-  }
   assertBankVersion(account, bank.expectedBankVersion)
 }
 
 export async function completeOnboarding(access: AccessToken | null, input: unknown) {
-  const bank = normalizeBankAccountInput(objectBody(input), { onboarding: true, allowTestBanks: process.env.OPENBANKING_ENV === 'test' })
-  await withWriteTransaction(async client => {
-    const account = await requireAccount(client, access, true)
-    await assertOnboarding(client, account, bank)
-  })
-  const capture = bank.verifyWithOpenBanking ? await prepareBankVerification(access, bank.expectedBankVersion, true) : null
-  const verified = bank.verifyWithOpenBanking ? await verifyBankAccount(bank) : null
-  const saved = verified ?? bank
+  const bank = normalizeBankAccountInput(objectBody(input), { onboarding: true })
   return withWriteTransaction(async (client) => {
-    const account = capture ? await assertBankVerification(client, access, capture, bank.expectedBankVersion, true) : await requireAccount(client, access, true)
-    await assertOnboarding(client, account, bank)
+    const account = await requireAccount(client, access, true)
+    assertOnboarding(account, bank)
     const now = currentTimestamp()
     await client.query(`
       UPDATE users SET bank_name = $2, account_number = $3, account_holder = $4,
         bank_updated_at = $5, deleted_at = NULL, onboarding_completed_at = $5, updated_at = $5,
-        bank_code = $6, bank_verified_at = $7, bank_verification_tran_id = $8, bank_version = bank_version + 1
+        bank_code = $6, bank_verified_at = NULL, bank_verification_tran_id = NULL, bank_version = bank_version + 1
       WHERE id = $1
-    `, [account.id, saved.bankName, saved.accountNumber, saved.accountHolder, now, saved.bankCode, verified?.verifiedAt ?? null, verified?.verificationTranId ?? null])
+    `, [account.id, bank.bankName, bank.accountNumber, bank.accountHolder, now, bank.bankCode])
     await client.query('UPDATE refresh_sessions SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL', [account.id, now])
     // Memberships deliberately stay inactive after rejoining.
     return issueSession(client, account.id, 'app', now)
@@ -149,34 +121,33 @@ export async function completeOnboarding(access: AccessToken | null, input: unkn
 }
 
 export async function updateBankAccount(access: AccessToken | null, requestKey: string, input: unknown) {
-  const bank = normalizeBankAccountInput(objectBody(input), { allowTestBanks: process.env.OPENBANKING_ENV === 'test' })
+  const bank = normalizeBankAccountInput(objectBody(input))
   const operation = 'bank-account.update'
   const initial = await withWriteTransaction(async client => {
     const account = await requireAccount(client, access)
-    const fingerprint = bankAccountRequestFingerprint(account.id, bank)
+    const secret = process.env.AUTH_JWT_SECRET
+    if (!secret || Buffer.byteLength(secret) < 32) throw new Error('AUTH_JWT_SECRET must be at least 32 bytes')
+    const fingerprint = createHmac('sha256', secret).update(JSON.stringify(['PUT /api/me/bank-account', account.id,
+      bank.bankCode, bank.accountNumber, '', bank.accountHolder, bank.expectedBankVersion, false])).digest('hex')
     const prior = await replayMutation<{ id: string; bankVersion: number }>(client, account.id, operation, requestKey, fingerprint)
     return { ...prior, fingerprint }
   })
   if (initial.result) return initial.result
-  const capture = bank.verifyWithOpenBanking ? await prepareBankVerification(access, bank.expectedBankVersion) : null
-  const verified = bank.verifyWithOpenBanking ? await verifyBankAccount(bank) : null
-  const saved = verified ?? bank
   return withWriteTransaction(async client => {
     // Replay precedes the version assertion: a concurrent copy may already have committed this exact request.
     const current = await requireAccount(client, access)
     const prior = await replayMutation<{ id: string; bankVersion: number }>(client, current.id, operation, requestKey, initial.fingerprint)
     if (prior.result) return prior.result
-    const account = capture ? await assertBankVerification(client, access, capture, bank.expectedBankVersion) : current
-    assertBankVersion(account, bank.expectedBankVersion)
+    assertBankVersion(current, bank.expectedBankVersion)
     const now = currentTimestamp()
     await client.query(`UPDATE users SET bank_name = $2, account_number = $3, account_holder = $4,
       bank_updated_at = $5, updated_at = $5, bank_code = $6,
-      bank_verified_at = CASE WHEN $7::bigint IS NOT NULL THEN $7 WHEN bank_code=$6 AND account_number=$3 AND account_holder=$4 THEN bank_verified_at ELSE NULL END,
-      bank_verification_tran_id = CASE WHEN $7::bigint IS NOT NULL THEN $8 WHEN bank_code=$6 AND account_number=$3 AND account_holder=$4 THEN bank_verification_tran_id ELSE NULL END,
+      bank_verified_at = CASE WHEN bank_code=$6 AND account_number=$3 AND account_holder=$4 THEN bank_verified_at ELSE NULL END,
+      bank_verification_tran_id = CASE WHEN bank_code=$6 AND account_number=$3 AND account_holder=$4 THEN bank_verification_tran_id ELSE NULL END,
       bank_version = bank_version + 1 WHERE id = $1`,
-    [account.id, saved.bankName, saved.accountNumber, saved.accountHolder, now, saved.bankCode, verified?.verifiedAt ?? null, verified?.verificationTranId ?? null])
-    const result = { id: account.id, bankVersion: bank.expectedBankVersion + 1 }
-    await saveMutation(client, account.id, operation, requestKey, prior.digest, account.id, result)
+    [current.id, bank.bankName, bank.accountNumber, bank.accountHolder, now, bank.bankCode])
+    const result = { id: current.id, bankVersion: bank.expectedBankVersion + 1 }
+    await saveMutation(client, current.id, operation, requestKey, prior.digest, current.id, result)
     return result
   })
 }
@@ -196,8 +167,7 @@ export function withdrawAccount(access: AccessToken | null) {
     await client.query('UPDATE users SET deleted_at = $2, updated_at = $2 WHERE id = $1', [account.id, now])
     await client.query('UPDATE refresh_sessions SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL', [account.id, now])
     await client.query('UPDATE group_members SET left_at = $2 WHERE user_id = $1 AND left_at IS NULL', [account.id, now])
-    const openBankingDisconnect = await requestDisconnect(client, account.id)
-    return { ok: true, userId: account.id, openBankingDisconnect, groupIds: memberships.map(row => String(row.group_id)) }
+    return { ok: true, userId: account.id, groupIds: memberships.map(row => String(row.group_id)) }
   })
 }
 
