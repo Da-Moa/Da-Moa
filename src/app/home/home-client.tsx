@@ -74,7 +74,7 @@ function GroupsList() {
     {groups.data?.items.length === 0 && <p className="empty-card">{search.trim() ? '검색 결과가 없어요.' : '모임을 만들거나 초대 링크를 받아 참여해 주세요.'}</p>}
     {groups.data?.items.map(group => <Link className="domain-card group-link" key={group.id} href={`/home/groups/${group.id}`}>
       <span aria-hidden="true" className="group-avatar-stack">{group.memberPreview.slice(0, 3).map(member => <ParticipantAvatar key={member.userId} profileImageUrl={member.profileImageUrl} />)}</span>
-      <div><h2>{group.name}</h2><p className="help-text">{group.memberPreview.map(member => member.displayName).join(', ')}{group.memberCount > 5 ? ` 외 ${group.memberCount - 5}명` : ''}</p></div>
+      <div><h2>{group.name}</h2><p className="help-text">{group.memberPreview.slice(0, 3).map(member => member.displayName).join(', ')}{group.memberCount > 3 ? ` 외 ${group.memberCount - 3}명` : ''}</p></div>
       <ChevronRight size={20} />
     </Link>)}
     <ErrorNotice error={more.error} retry={() => void loadMore()} />
