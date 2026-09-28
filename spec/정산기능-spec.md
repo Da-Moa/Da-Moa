@@ -19,7 +19,7 @@
 
 - 카카오 로그인, 가입 시 계좌 등록·수정, 회원 소프트 삭제, 동일 카카오 계정 재가입.
 - 지속되는 모임, 초대 링크 수락, 일반 참여자의 조건부 나가기, 미종료 회차가 없는 모임의 모임 생성자 닫기, 모든 활성 모임 참여자의 회차 생성, 회차별 참여자 구성, 여러 회차 동시 진행.
-- 수동 지출 입력, 결제자 한 명, 전체 또는 선택한 부담자끼리 균등 분배, 선택적 영수증 이미지 저장.
+- 수동 지출 입력, 결제자 한 명, 전체 또는 선택한 부담자끼리 균등 분배, 부담자별 금액을 지정하는 개별 항목 분배, 선택적 영수증 이미지 저장.
 - 회차 생성자의 정산 확정·재오픈·전송 잠금·나머지 1회 추첨·모든 수취 건 확인 후 정산 종료·강제 종료·회차 취소.
 - 조건부 회차 사용자 제외, 별도 모임 이탈 후 과거 회차 조회, 개인별 지급 안내와 링크 복사.
 - 최종 금액 저장 후 수취인의 송금자별 입금 확인·본인 수취 건 전체 확인과 수취인별 진행률.
@@ -166,8 +166,8 @@ stateDiagram-v2
 | `group_invites` | `id`, `group_id`, `created_by`, `token_hash UNIQUE`, `created_at`, `expires_at`, `revoked_at`. 만료는 생성 이후. 모임 닫기 시 모든 활성 초대에 `revoked_at` 설정 |
 | `rounds` | `id`, `group_id`, `creator_id`, `name`, `currency`, `status`, `version`, `created_at`, `confirmed_at`, `locked_at`, `finalized_at`, `completed_at`. `(id, creator_id) → round_members(round_id, user_id)` 지연 복합 FK, `currency`는 `USD/KRW/JPY` CHECK |
 | `round_members` | `(round_id, user_id)` PK, `display_name_snapshot`, `joined_at`, `excluded_at`. 제외해도 행 삭제 금지. `excluded_at` 변경은 `group_members.left_at`에 전파하지 않음 |
-| `expenses` | `id`, `round_id`, `author_id`, `payer_id`, `description`, `amount_minor`, `split_mode`(`ALL/SELECTED`), `base_share_minor` nullable, `remainder_units` nullable, `created_at`, `updated_at`, `updated_by` |
-| `expense_shares` | `(expense_id, user_id)` PK, `round_id`, `final_amount_minor` nullable, `received_remainder` nullable. 행 자체가 실제 부담자 목록 |
+| `expenses` | `id`, `round_id`, `author_id`, `payer_id`, `description`, `amount_minor`, `split_mode`(`ALL/SELECTED/CUSTOM`), `base_share_minor` nullable, `remainder_units` nullable, `created_at`, `updated_at`, `updated_by` |
+| `expense_shares` | `(expense_id, user_id)` PK, `round_id`, `assigned_amount_minor` nullable, `final_amount_minor` nullable, `received_remainder` nullable. 행 자체가 실제 부담자 목록이며 CUSTOM의 양의 원본 부담금은 assigned_amount_minor에 보존 |
 | `expense_receipts` | `id`, `expense_id`, `uploaded_by`, `mime_type`, `byte_size`, `sha256`, `content BYTEA`, `created_at`. 신규 AVIF와 기존 JPEG·PNG·WebP 조회 호환 MIME, 양의 바이트 크기 CHECK |
 | `settlement_balances` | `(round_id, user_id)` PK, `paid_minor`, `burden_minor`, `balance_minor`. `balance_minor = burden_minor - paid_minor` CHECK |
 | `settlement_transfers` | `(round_id, sender_id, receiver_id)` PK, `amount_minor > 0`, `received_at` nullable. `sender_id <> receiver_id` CHECK. 수취인만 자신의 송금 행 확인 여부를 변경 |
@@ -216,6 +216,10 @@ API 입력은 쉼표·지수 표기·기호가 없는 십진 문자열이다. KR
 지출 금액을 `T`, 부담자 수를 `N`이라 하면 기본 부담액 `q = T / N`, 나머지 `r = T % N`이다. 기록 중에는 화면용으로 계산하고, 확정 시 서버가 다시 계산해 저장한다. `T < N`이면 기본 부담액이 0인 사람이 생길 수 있으며 유효하다.
 
 결제자도 부담자이면 자신의 부담액을 그대로 적용한다. 결제자가 부담자가 아니면 부담액은 0이고 결제액만 반영한다. 결제자를 부담자에서 자동 제거하거나 강제로 포함하지 않는다.
+
+`CUSTOM`(개별 항목 분배)은 제외되지 않은 회차 참여자 중 중복 없는 1명 이상의 부담자와 각자의 양의 부담금을 지정한다. 화면에서 부담자를 선택한 뒤 회차 통화로 각 부담금을 입력하고 저장 시 이 지출 한 건의 총 금액과 비교한다. 생성·수정 저장 시 각 금액을 BigInt 최소 단위로 변환해 합계가 총 금액과 정확히 일치하는지 검증한다. 불일치하면 `400 custom_share_total_mismatch`와 ‘부담금 합계가 총 금액과 일치해야 해요’를 반환하며 지출·부담금·버전을 변경하지 않는다.
+
+CUSTOM 입력은 `participantIds` 대신 `customShares: [{ userId, amount }]`를 사용한다. ALL·SELECTED에서는 customShares를 받지 않는다. 기존 CUSTOM 수정에서 customShares를 생략하면 이전 부담금을 유지하되 변경 총 금액과 다시 비교한다. CUSTOM으로 전환할 때는 부담금을 반드시 지정하며, 균등 분배로 전환하면 지정 부담금을 제거한다. 응답의 `shares[].assignedAmountMinor`는 원본 지정 부담금이며 균등 분배에서는 null이다. 최종 `shares[].amountMinor`는 CUSTOM도 최종화 전에는 null이다. 기록 중 예상 송금 관계는 지정 부담금을 반영하고 확정·재오픈·최종화에서도 원본 부담금을 유지한다. CUSTOM의 나머지는 0이며 추첨 대상이 아니다.
 
 ### 6.3 잠금 후 한 번의 추첨
 
@@ -309,9 +313,9 @@ A 화면에서는 B·C·D 각각 `-5000`, 총잔액 `-15000`으로 해석한다.
 1. 회차 생성자 권한, 대상자의 참여 이력·제외 여부, 회차 상태를 검사한다.
 2. 대상자가 해당 회차 생성자 본인이면 제외할 수 없다. 모임 생성자는 다른 회차 참여자와 같은 조건으로 검사한다.
 3. 대상자가 한 지출에서 결제자이면서 부담자이기도 하면 제외를 차단한다. 결제와 부담 관계를 유지한다.
-4. 대상자가 `SELECTED` 부담자이면 제외를 차단한다. 모든 관련 지출 ID·설명·금액·작성자·차단 이유를 반환한다.
+4. 대상자가 `SELECTED` 또는 `CUSTOM` 부담자이면 제외를 차단한다. 모든 관련 지출 ID·설명·금액·작성자·차단 이유를 반환한다.
 5. 화면은 ‘해당 사용자와 연관된 정산이 있습니다.’와 함께 관련 내역을 모두 하이라이트하고 ‘제외 전 수정 필요’를 붙인다. 색상 외 텍스트로도 구분한다.
-6. 작성자 또는 회차 생성자가 사실에 맞게 관련 기록을 수정한 후 다시 제외한다. 서버가 선택 분배의 부담자를 자동 제거하지 않는다.
+6. 작성자 또는 회차 생성자가 사실에 맞게 관련 기록을 수정한 후 다시 제외한다. 서버가 선택 균등 분배·개별 항목 분배의 부담자를 자동 제거하지 않는다.
 7. 제외 후 활성 회차 참여자가 2명 미만이면 거부한다. 허용되면 대상자의 `round_members.excluded_at`을 설정하고 해당 회차의 `ALL` 분배에서만 제거한다. `group_members.left_at`은 변경하지 않는다.
 8. 대상자가 부담자에 포함되지 않은 결제자라면 원본 결제액과 최종 수취 관계를 남긴다. 참여 이력·작성자 관계·증빙을 삭제하지 않는다.
 9. 남은 부담자로 재계산하고 재확정을 요구한다. 검증 실패 시 멤버십·일부 지출만 바뀐 상태를 남기지 않는다.
@@ -441,8 +445,8 @@ JWT만 유효한 탈퇴·로그아웃 세션을 승인하지 않는다. 재가�
 | `GET /api/invites/[token]` / `POST /api/invites/[token]/accept` | 인증 후 안전한 모임 미리보기 / 명시적 참여 수락. 생성자 포함 활성 멤버가 10명이면 기존 멤버의 중복 수락 외에는 409로 거부 |
 | `POST /api/groups/[groupId]/rounds` | 모든 활성 모임 참여자가 `{ name, currency, participantIds }`로 생성. 모든 필드 필수이며 요청자 자신을 포함한 최소 2명, `currency`는 USD·KRW·JPY 중 선택. 요청자를 회차 생성자로 저장 |
 | `GET /api/rounds` | 본인 참여 회차 목록. 선택적 `q` 모임명·회차명 부분 검색과 상태 필터를 함께 적용해 진행·과거 화면 구성 |
-| `GET /api/rounds/[roundId]` | 회차·참여자·지출·기본 분배·상태·version. `creatorId`는 회차 생성자, `groupCreatorId`는 모임 생성자이며 `isCreator`는 조회자가 회차 생성자인지를 뜻한다. 추첨 전에는 기본 몫을 상계한 예상 송금 관계·미배분 나머지 금액, 최종화 후에는 저장된 관계를 포함한다. 송금 관계는 조회자 본인이 보내거나 받는 행만 반환하며 계좌정보는 없음 |
-| `POST /api/rounds/[roundId]/expenses` | `{ description, amount, payerId, splitMode, participantIds?, expectedVersion }` |
+| `GET /api/rounds/[roundId]` | 회차·참여자·지출·기본 분배·상태·version. `creatorId`는 회차 생성자, `groupCreatorId`는 모임 생성자이며 `isCreator`는 조회자가 회차 생성자인지를 뜻한다. 추첨 전에는 균등 기본 몫과 개별 지정 부담금을 상계한 예상 송금 관계·미배분 나머지 금액, 최종화 후에는 저장된 관계를 포함한다. 송금 관계는 조회자 본인이 보내거나 받는 행만 반환하며 계좌정보는 없음 |
+| `POST /api/rounds/[roundId]/expenses` | `{ description, amount, payerId, splitMode, participantIds?, customShares?, expectedVersion }`. CUSTOM은 customShares의 부담자·금액 합계를 검증 |
 | `PATCH /api/rounds/[roundId]/expenses/[expenseId]` | 편집 가능한 지출 필드와 expectedVersion. 작성자·회차·통화 변경 필드는 없음 |
 | `DELETE /api/rounds/[roundId]/expenses/[expenseId]` | expectedVersion. 지출·부담자·증빙 삭제 |
 | `POST /api/rounds/[roundId]/expenses/[expenseId]/receipts` | multipart 파일 1개와 expectedVersion |
@@ -509,6 +513,7 @@ USD·JPY 응답은 `account` 필드를 포함하지 않는다. 계좌 일부가 
 | 상태 | 코드 예 | 화면 처리 |
 |---|---|---|
 | 400 | `invalid_amount`, `invalid_participants`, `unsupported_currency` | 해당 입력과 이유 표시 |
+| 400 | `custom_share_total_mismatch` | ‘부담금 합계가 총 금액과 일치해야 해요’ |
 | 401 | `unauthorized` | 세션 갱신 또는 안전한 목적지를 보존해 로그인 |
 | 403 | `forbidden`, `onboarding_required` | 권한 부족 또는 가입 등록 안내 |
 | 404 | `not_found` | 존재하지 않거나 조회 권한 없는 회차·증빙·초대. 존재 여부를 구분해 노출하지 않음 |
@@ -603,6 +608,8 @@ Server Component도 같은 인증·권한 함수를 거쳐 최소 데이터만 �
 | AC-08 | 0·음수·과도한 소수·NaN·Infinity·지수표기·비지원 통화·회차 생성의 통화 누락 | 서버 거부. 유효한 다른 값으로 자동 변환해 저장하지 않음 |
 | AC-09 | 모든 개인 잔액 0 | 송금 행 없음, ‘송금할 금액 없음’. 자동 종료하지 않음 |
 | AC-10 | 같은 모임에서 KRW·USD·JPY 회차 생성 | 각 회차가 선택한 통화를 유지. 생성 후 통화 변경을 거부하고 과거 회차의 통화·금액을 보존하며 회차 간 합산·상계하지 않음 |
+
+개별 항목 분배는 KRW·JPY 정수와 USD 소수 2자리의 정확한 합계, 불일치 생성·수정의 전체 롤백, 기존 금액을 보존하는 부분 수정, 분배 방식 전환, 확정·재오픈 후 원본 유지, 균등 분배와 혼합한 예상·최종 정산, 부담자 제외 차단을 검증한다.
 
 추첨 테스트는 특정 사용자가 항상 당첨된다고 가정하지 않는다. 고정된 난수 입력으로 알고리즘 경계값을 확인하고 실제 결과에서는 서로 다른 당첨자 수·배분 합계·중복 요청 결과의 동일성을 확인한다.
 

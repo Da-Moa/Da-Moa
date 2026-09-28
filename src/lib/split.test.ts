@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { calculateBase, finalizeSettlement, previewSettlement } from './split.ts'
+import { calculateBase, finalizeSettlement, previewSettlement, validateCustomShares } from './split.ts'
 
 const expense = (payerId: string, amountMinor: string, participantIds: string[], id = 'expense') => ({ id, payerId, amountMinor, participantIds })
 
@@ -73,6 +73,83 @@ test('preview nets base shares and leaves every remainder unassigned', () => {
   assert.equal(tiny.pendingRemainderMinor, '1')
   assert.deepEqual(tiny.transfers, [])
   assert.equal(tiny.balances.reduce((sum, row) => sum + BigInt(row.balanceMinor), 0n), 0n)
+})
+
+test('custom shares preserve assigned amounts in preview and final settlement without a draw', () => {
+  const custom = {
+    ...expense('B', '10', ['C', 'A', 'B']), splitMode: 'CUSTOM' as const,
+    shares: [{ userId: 'C', assignedAmountMinor: '6' }, { userId: 'A', assignedAmountMinor: '1' }, { userId: 'B', assignedAmountMinor: '3' }],
+  }
+  const result = finalizeSettlement([custom], ['A', 'B', 'C'])
+  assert.deepEqual(result.balances, [
+    { userId: 'A', paidMinor: '0', burdenMinor: '1', balanceMinor: '1' },
+    { userId: 'B', paidMinor: '10', burdenMinor: '3', balanceMinor: '-7' },
+    { userId: 'C', paidMinor: '0', burdenMinor: '6', balanceMinor: '6' },
+  ])
+  assert.deepEqual(result.transfers, [
+    { senderId: 'A', receiverId: 'B', amountMinor: '1' },
+    { senderId: 'C', receiverId: 'B', amountMinor: '6' },
+  ])
+  assert.ok(result.shares.every(share => !share.receivedRemainder))
+  assert.deepEqual(previewSettlement([custom], ['A', 'B', 'C']), { ...result, pendingRemainderMinor: '0' })
+  assert.deepEqual(finalizeSettlement([custom], ['C', 'B', 'A'], () => assert.fail('custom shares must not draw')), result)
+
+  const separate = finalizeSettlement([{
+    ...expense('B', '9007199254740993', ['A', 'C']), splitMode: 'CUSTOM',
+    shares: [{ userId: 'A', assignedAmountMinor: '9007199254740992' }, { userId: 'C', assignedAmountMinor: '1' }],
+  }], ['A', 'B', 'C'])
+  assert.deepEqual(separate.balances.map(row => row.balanceMinor), ['9007199254740992', '-9007199254740993', '1'])
+})
+
+test('mixed equal and custom shares conserve money and defer only the equal remainder', () => {
+  const expenses = [
+    { ...expense('A', '10', ['A', 'B', 'C'], 'equal'), splitMode: 'ALL' as const },
+    { ...expense('B', '11', ['A', 'C'], 'custom'), splitMode: 'CUSTOM' as const,
+      shares: [{ userId: 'A', assignedAmountMinor: '2' }, { userId: 'C', assignedAmountMinor: '9' }] },
+  ]
+  const preview = previewSettlement(expenses, ['A', 'B', 'C'])
+  assert.equal(preview.pendingRemainderMinor, '1')
+  assert.deepEqual(preview.balances.map(row => row.balanceMinor), ['-4', '-8', '12'])
+  assert.throws(() => finalizeSettlement(expenses, ['A', 'B', 'C']), /remainder_draw_required/)
+  let draws = 0
+  const final = finalizeSettlement(expenses, ['A', 'B', 'C'], max => { draws++; return max - 1 })
+  assert.equal(draws, 1)
+  assert.deepEqual(final.balances.map(row => row.balanceMinor), ['-5', '-8', '13'])
+  assert.deepEqual(final.shares.filter(share => share.expenseId === 'custom'), preview.shares.filter(share => share.expenseId === 'custom'))
+  assert.equal(final.shares.reduce((sum, share) => sum + BigInt(share.amountMinor), 0n), 21n)
+  for (const result of [preview, final]) {
+    assert.equal(result.balances.reduce((sum, row) => sum + BigInt(row.balanceMinor), 0n), 0n)
+    assert.equal(result.shares.reduce((sum, share) => sum + BigInt(share.amountMinor), 0n), result.balances.reduce((sum, row) => sum + BigInt(row.paidMinor), 0n))
+    for (const balance of result.balances) {
+      const outgoing = result.transfers.filter(row => row.senderId === balance.userId).reduce((sum, row) => sum + BigInt(row.amountMinor), 0n)
+      const incoming = result.transfers.filter(row => row.receiverId === balance.userId).reduce((sum, row) => sum + BigInt(row.amountMinor), 0n)
+      assert.equal(outgoing - incoming, BigInt(balance.balanceMinor))
+    }
+  }
+})
+
+test('custom shares reject missing, duplicate, malformed or mismatched assignments', () => {
+  const shares = [{ userId: 'A', assignedAmountMinor: '1' }, { userId: 'B', assignedAmountMinor: '2' }]
+  assert.deepEqual(validateCustomShares(3n, ['B', 'A'], shares), new Map([['A', 1n], ['B', 2n]]))
+  for (const invalid of [undefined, null, {}, [], [shares[0]], [shares[0], shares[0]], [shares[0], { ...shares[1], userId: 'outsider' }], [shares[0], null]]) {
+    assert.throws(() => validateCustomShares(3n, ['A', 'B'], invalid as typeof shares), /invalid_participants/)
+  }
+  for (const participants of [[], ['A', 'A'], ['A', ''], ['A', 1], undefined]) {
+    assert.throws(() => validateCustomShares(3n, participants as string[], shares), /invalid_participants/)
+  }
+  for (const amount of [undefined, null, '', '0', '-1', '1.5', '1e3', ' 1', '1 ', '1,000', 'NaN', 'Infinity', 1]) {
+    const custom = { ...expense('B', '3', ['A', 'B']), splitMode: 'CUSTOM' as const,
+      shares: [{ userId: 'A', assignedAmountMinor: amount as string }, shares[1]] }
+    assert.throws(() => validateCustomShares(3n, custom.participantIds, custom.shares), /invalid_amount/)
+    assert.throws(() => previewSettlement([custom], ['A', 'B']), /invalid_amount/)
+    assert.throws(() => finalizeSettlement([custom], ['A', 'B']), /invalid_amount/)
+  }
+  for (const total of [0n, -1n]) assert.throws(() => validateCustomShares(total, ['A', 'B'], shares), /invalid_amount/)
+  for (const total of ['2', '4']) {
+    const custom = { ...expense('B', total, ['A', 'B']), splitMode: 'CUSTOM' as const, shares }
+    assert.throws(() => previewSettlement([custom], ['A', 'B']), /custom_share_total_mismatch/)
+    assert.throws(() => finalizeSettlement([custom], ['A', 'B']), /custom_share_total_mismatch/)
+  }
 })
 
 test('invalid inputs cannot create incomplete or duplicate ledgers', () => {

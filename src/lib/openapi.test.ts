@@ -35,6 +35,7 @@ type DocumentedSchema = {
   nullable?: boolean
   additionalProperties?: boolean
   maxItems?: number
+  items?: DocumentedSchema
   description?: string
 }
 const paths = openApiDocument.paths as unknown as Record<string, Record<string, DocumentedOperation> & {
@@ -140,4 +141,21 @@ test('round lists document group and round name search', () => {
     const search = paths[path].get.parameters?.find(parameter => parameter.name === 'q') as { schema?: { minLength?: number; maxLength?: number } } | undefined
     assert.deepEqual(search?.schema, { type: 'string', minLength: 1, maxLength: 100 })
   }
+})
+
+test('custom expense allocation documents exact original shares and total validation', () => {
+  for (const [path, method] of [['/api/rounds/{roundId}/expenses', 'post'], ['/api/rounds/{roundId}/expenses/{expenseId}', 'patch']]) {
+    const input = paths[path][method].requestBody!.content['application/json'].schema as DocumentedSchema
+    assert.deepEqual(input.properties!.splitMode.enum, ['ALL', 'SELECTED', 'CUSTOM'])
+    assert.deepEqual(input.properties!.customShares.items!.required, ['userId', 'amount'])
+    assert.match(input.properties!.customShares.description!, /합계는 총 amount와 같아야/)
+    assert.match(input.properties!.participantIds.description!, /CUSTOM에서는 보내지/)
+  }
+  assert.match(paths['/api/rounds/{roundId}/expenses'].post.description, /400 custom_share_total_mismatch/)
+  assert.match(paths['/api/rounds/{roundId}/expenses/{expenseId}'].patch.description, /customShares를 생략하면 원본 부담금을 유지/)
+  const share = (openApiDocument.components.schemas.Expense as DocumentedSchema).properties!.shares.items!
+  assert.ok(share.required!.includes('assignedAmountMinor'))
+  assert.equal(share.properties!.assignedAmountMinor.nullable, true)
+  assert.equal(share.properties!.amountMinor.nullable, true)
+  assert.match(share.properties!.amountMinor.description!, /최종화 전에는 CUSTOM도 null/)
 })

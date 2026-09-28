@@ -346,6 +346,103 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       assert.equal((await client.query('SELECT count(*)::int AS n FROM expense_receipts WHERE id=$1', [keep.id])).rows[0].n, 0)
     })
 
+    await t.test('custom shares validate exact totals atomically and survive partial edits and mode changes', async () => {
+      for (const currency of ['KRW', 'JPY', 'USD']) {
+        const r = await createRound(a, key(), g.id, { name: '개별 부담금 검증', currency, participantIds: [a.userId, b.userId] })
+        const unit = (value: number) => currency === 'USD' ? `0.${value}` : String(value)
+        const customShares = [{ userId: a.userId, amount: unit(10) }, { userId: b.userId, amount: unit(20) }]
+        const body = { description: '개별 지출', amount: unit(30), payerId: b.userId, splitMode: 'CUSTOM', customShares, expectedVersion: 1 }
+        const empty = await get(r.id)
+        const failedKey = key()
+        await assert.rejects(saveExpense(a, failedKey, r.id, { ...body, amount: unit(40) }), code('custom_share_total_mismatch'))
+        for (const amount of [0, '', '0', '-1', '1e1', currency === 'USD' ? '0.101' : '10.1']) {
+          await assert.rejects(saveExpense(a, key(), r.id, { ...body, customShares: [{ userId: a.userId, amount }] }), code('invalid_amount'))
+        }
+        for (const shares of [[], [customShares[0], customShares[0]], [{ userId: outsider.userId, amount: unit(30) }]]) {
+          await assert.rejects(saveExpense(a, key(), r.id, { ...body, customShares: shares }), code('invalid_participants'))
+        }
+        await assert.rejects(saveExpense(a, key(), r.id, { ...body, participantIds: [a.userId] }), code('invalid_input'))
+        for (const splitMode of ['ALL', 'SELECTED']) {
+          await assert.rejects(saveExpense(a, key(), r.id, { ...body, splitMode, participantIds: [a.userId] }), code('invalid_input'))
+        }
+        assert.deepEqual(await get(r.id), empty)
+        assert.equal((await client.query('SELECT count(*)::int AS n FROM mutation_requests WHERE request_key=$1', [failedKey])).rows[0].n, 0)
+        const saved = await saveExpense(a, failedKey, r.id, body)
+        assert.equal((await saveExpense(a, failedKey, r.id, body)).id, saved.id)
+        const original = await get(r.id)
+        const expected = { [a.userId]: '10', [b.userId]: '20' }
+        assert.deepEqual(Object.fromEntries(original.expenses[0].shares.map(share => [share.userId, share.assignedAmountMinor])), expected)
+        assert.ok(original.expenses[0].shares.every(share => share.amountMinor === null))
+        assert.equal(original.expenses[0].remainderUnits, 0)
+        assert.deepEqual(original.transfers, [{ senderId: a.userId, receiverId: b.userId, amountMinor: '10' }])
+
+        for (const change of [{ amount: unit(40) }, { customShares: [{ userId: a.userId, amount: unit(10) }] }]) {
+          await assert.rejects(saveExpense(a, key(), r.id, { ...change, expectedVersion: original.version }, saved.id), code('custom_share_total_mismatch'))
+          assert.deepEqual(await get(r.id), original)
+        }
+        await saveExpense(a, key(), r.id, { description: '이름만 수정', expectedVersion: original.version }, saved.id)
+        assert.deepEqual((await get(r.id)).expenses[0].shares, original.expenses[0].shares)
+        await saveExpense(a, key(), r.id, { amount: unit(40), customShares: [{ userId: a.userId, amount: unit(15) }, { userId: b.userId, amount: unit(25) }], expectedVersion: (await get(r.id)).version }, saved.id)
+        assert.equal((await get(r.id)).expenses[0].amountMinor, '40')
+
+        for (const splitMode of ['SELECTED', 'ALL']) {
+          await saveExpense(a, key(), r.id, { splitMode, ...(splitMode === 'SELECTED' ? { participantIds: [a.userId] } : {}), expectedVersion: (await get(r.id)).version }, saved.id)
+          const equal = await get(r.id)
+          assert.equal(equal.expenses[0].splitMode, splitMode)
+          assert.ok(equal.expenses[0].shares.every(share => share.assignedAmountMinor === null))
+          await assert.rejects(saveExpense(a, key(), r.id, { splitMode: 'CUSTOM', expectedVersion: equal.version }, saved.id), code('invalid_participants'))
+          await saveExpense(a, key(), r.id, { splitMode: 'CUSTOM', amount: unit(30), customShares, expectedVersion: equal.version }, saved.id)
+        }
+        await command(r.id, 'confirm'); await command(r.id, 'send')
+        assert.equal((await getSettlement(a, r.id)).finalized, true, 'custom allocation needs no remainder draw')
+        assert.deepEqual(Object.fromEntries((await get(r.id)).expenses[0].shares.map(share => [share.userId, share.amountMinor])), expected)
+        await command(r.id, 'force-complete')
+      }
+    })
+
+    await t.test('custom and equal allocations share previews and finalization without redrawing original burdens', async () => {
+      const r = await round([a, b, c, d])
+      const customShares = [{ userId: a.userId, amount: '1' }, { userId: c.userId, amount: '4' }]
+      const saved = await saveExpense(a, key(), r.id, { description: '개별 부담', amount: '5', payerId: b.userId, splitMode: 'CUSTOM', customShares, expectedVersion: 1 })
+      await expense(r.id, a, b.userId, '6', [a.userId, c.userId])
+      const equal = await expense(r.id, a, b.userId, '10')
+      const before = await get(r.id)
+      const custom = before.expenses.find(item => item.id === saved.id)!
+      const blocked = await checkExclusion(a, r.id, c.userId)
+      assert.equal(blocked.allowed, false)
+      assert.equal(blocked.expenses.find(item => item.id === saved.id)?.reason, 'custom_participant')
+      await assert.rejects(excludeMember(a, key(), r.id, c.userId, { expectedVersion: before.version }), code('member_exclusion_blocked'))
+      assert.deepEqual(await get(r.id), before)
+      await excludeMember(a, key(), r.id, d.userId, { expectedVersion: before.version })
+      const excluded = await get(r.id)
+      assert.deepEqual(excluded.expenses.find(item => item.id === saved.id), custom)
+      await assert.rejects(saveExpense(a, key(), r.id, { customShares: [{ userId: d.userId, amount: '5' }], expectedVersion: excluded.version }, saved.id), code('invalid_participants'))
+      const first = await getRound(a, r.id, new URLSearchParams('limit=1'))
+      const second = await getRound(a, r.id, new URLSearchParams({ limit: '1', cursor: first.expensesNextCursor! }))
+      assert.equal(first.totalMinor, '21')
+      assert.equal(first.pendingRemainderMinor, '1')
+      assert.deepEqual(first.transfers, [{ senderId: a.userId, receiverId: b.userId, amountMinor: '7' }])
+      assert.deepEqual(second.transfers, first.transfers, 'preview must include expenses outside the displayed page')
+      await command(r.id, 'confirm')
+      assert.deepEqual((await get(r.id)).expenses.find(item => item.id === saved.id)?.shares, custom.shares)
+      await command(r.id, 'reopen')
+      assert.deepEqual((await get(r.id)).expenses.find(item => item.id === saved.id)?.shares, custom.shares)
+      await command(r.id, 'confirm'); await command(r.id, 'send')
+      assert.equal((await getSettlement(a, r.id)).finalized, false)
+      assert.ok((await get(r.id)).expenses.every(item => item.shares.every(share => share.amountMinor === null)))
+      await command(r.id, 'draw')
+      const final = await get(r.id)
+      const finalCustom = final.expenses.find(item => item.id === saved.id)!
+      assert.ok(finalCustom.shares.every(share => share.amountMinor === share.assignedAmountMinor && share.receivedRemainder === false))
+      assert.equal(final.expenses.find(item => item.id === equal.id)!.shares.filter(share => share.receivedRemainder).length, 1)
+      assert.equal(final.expenses.flatMap(item => item.shares).reduce((sum, share) => sum + BigInt(share.amountMinor!), 0n), 21n)
+      const myBurden = final.expenses.flatMap(item => item.shares).filter(share => share.userId === a.userId).reduce((sum, share) => sum + BigInt(share.amountMinor!), 0n)
+      assert.equal((await getSettlement(a, r.id)).balanceMinor, myBurden.toString())
+      await command(r.id, 'draw')
+      assert.deepEqual(await get(r.id), final)
+      await command(r.id, 'force-complete')
+    })
+
     await t.test('one random draw, deferred finalization, idempotency and rollback after share writes', async () => {
       const r = await round()
       const submission = key(), body = { description: '나머지', amount: '10000', payerId: b.userId, splitMode: 'ALL', expectedVersion: 1 }
