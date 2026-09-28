@@ -16,6 +16,7 @@ async function send(publications: Publication[]) {
     const keys = byUser.get(userId) ?? new Set<ResourceKey>()
     publication.keys.forEach(key => keys.add(key)); byUser.set(userId, keys)
   }
+  if (!byUser.size) return
   const response = await fetch(`http://127.0.0.1:${process.env.REALTIME_INTERNAL_PORT}/internal/realtime`, {
     method: 'POST',
     headers: { authorization: `Bearer ${process.env.REALTIME_INTERNAL_SECRET}`, 'content-type': 'application/json' },

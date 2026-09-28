@@ -171,6 +171,7 @@ function RealtimeProvider({ accountId, reloadAccount, children }: { accountId: s
     let disposed = false
     const pending = new Set<ResourceKey>()
     const queue = (keys: ResourceKey[]) => {
+      if (disposed) return
       keys.forEach(key => pending.add(key))
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => {
@@ -181,9 +182,9 @@ function RealtimeProvider({ accountId, reloadAccount, children }: { accountId: s
         pending.clear()
       }, 120)
     }
-    const retry = () => {
+    const retry = (event?: CloseEvent) => {
       if (disposed) return
-      reconnect = setTimeout(() => { void connect() }, Math.min(30000, 1000 * 2 ** Math.min(attempts++, 5)))
+      reconnect = setTimeout(() => { void connect() }, event?.code === 4001 ? 0 : Math.min(30000, 1000 * 2 ** Math.min(attempts++, 5)))
     }
     const connect = async () => {
       try {
@@ -198,7 +199,12 @@ function RealtimeProvider({ accountId, reloadAccount, children }: { accountId: s
       } catch { retry() }
     }
     void connect()
-    return () => { disposed = true; if (timer) clearTimeout(timer); if (reconnect) clearTimeout(reconnect); socket?.close() }
+    return () => {
+      disposed = true
+      if (timer) clearTimeout(timer)
+      if (reconnect) clearTimeout(reconnect)
+      if (socket) { socket.onopen = socket.onmessage = socket.onclose = socket.onerror = null; socket.close() }
+    }
   }, [accountId])
   return <RealtimeContext.Provider value={subscribe}>{children}</RealtimeContext.Provider>
 }

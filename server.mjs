@@ -43,13 +43,15 @@ const handle = app.getRequestHandler()
 const websocket = new WebSocketServer({ noServer: true, clientTracking: false })
 
 async function authenticatedUser(cookie) {
-  if (!cookie) return null
+  if (!cookie) return { status: 401 }
   const response = await fetch(`http://127.0.0.1:${port}/api/me`, {
     headers: { cookie }, redirect: 'manual', signal: AbortSignal.timeout(10000),
   })
-  if (!response.ok) return null
+  if (response.status === 401 || response.status === 403) return { status: response.status }
+  if (!response.ok) throw new Error(`Realtime authentication failed (${response.status})`)
   const account = (await response.json()).data
-  return account?.purpose === 'app' && account.onboardingCompletedAt && !account.deletedAt ? account.id : null
+  return account?.purpose === 'app' && account.onboardingCompletedAt && !account.deletedAt
+    ? { status: 200, id: account.id } : { status: 403 }
 }
 
 server.on('upgrade', (request, socket, head) => {
@@ -57,29 +59,48 @@ server.on('upgrade', (request, socket, head) => {
   const origin = request.headers.origin
   const host = request.headers.host
   let allowed = false
-  try { allowed = Boolean(origin && host && ['http:', 'https:'].includes(new URL(origin).protocol) && new URL(origin).host === host) } catch { /* Invalid Origin. */ }
+  try {
+    const source = new URL(origin)
+    const target = new URL(`${source.protocol}//${host}`)
+    const publicOrigin = process.env.NODE_ENV === 'production' ? new URL(process.env.KAKAO_REDIRECT_URI).origin : null
+    allowed = ['http:', 'https:'].includes(source.protocol) && source.origin === target.origin
+      && !source.username && !source.password && source.pathname === '/' && !source.search && !source.hash
+      && !target.username && !target.password && target.pathname === '/' && !target.search && !target.hash
+      && (!publicOrigin || source.origin === publicOrigin)
+  } catch { /* Invalid Origin or Host. */ }
   if (!allowed) { socket.destroy(); return }
   const cookie = request.headers.cookie
-  void authenticatedUser(cookie).then(userId => {
-    if (!userId || socket.destroyed) { socket.destroy(); return }
+  void authenticatedUser(cookie).then(auth => {
+    if (!auth.id || socket.destroyed) { socket.destroy(); return }
+    const userId = auth.id
     websocket.handleUpgrade(request, socket, head, connection => {
       const connections = sockets.get(userId) ?? new Set()
       connections.add(connection); sockets.set(userId, connections)
-      connection.on('close', () => { connections.delete(connection); if (!connections.size) sockets.delete(userId) })
+      let authTimer
+      const revalidate = async () => {
+        try {
+          const current = await authenticatedUser(cookie)
+          if (connection.readyState !== connection.OPEN) return
+          // A short-lived access cookie must refresh through the browser before reconnecting.
+          if (current.status === 401) connection.close(4001)
+          else if (current.id !== userId) connection.close(1008)
+          else authTimer = setTimeout(revalidate, 60000)
+        } catch { if (connection.readyState === connection.OPEN) connection.close(1011) }
+      }
+      authTimer = setTimeout(revalidate, Math.random() * 60000)
+      connection.on('close', () => { clearTimeout(authTimer); connections.delete(connection); if (!connections.size) sockets.delete(userId) })
       connection.on('message', () => connection.close(1008))
       connection.on('pong', () => { connection.alive = true })
-      connection.cookie = cookie
       connection.alive = true
     })
   }).catch(() => socket.destroy())
 })
 
 setInterval(() => {
-  for (const [userId, connections] of sockets) for (const socket of connections) {
+  for (const connections of sockets.values()) for (const socket of connections) {
     if (!socket.alive) { socket.terminate(); continue }
     socket.alive = false
     socket.ping()
-    void authenticatedUser(socket.cookie).then(current => { if (current !== userId) socket.close(1008) }).catch(() => socket.close(1011))
   }
 }, 60000)
 

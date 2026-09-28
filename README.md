@@ -118,7 +118,7 @@ npm run db:seed:test-accounts
 
 ## 배포
 
-오라클 Compute 인스턴스에서 Node 22.18 이상으로 실행합니다. 기존 Neon `DATABASE_URL`을 그대로 사용할 수 있고, 개발·운영 DB는 분리합니다. `DATABASE_URL`, `AUTH_JWT_SECRET`, 카카오 인증 변수를 설정한 뒤 `npm ci --include=dev`, `npm run db:migrate`, `npm run build`, `npm start` 순서로 실행합니다. 운영 서버는 기본적으로 `127.0.0.1:3000`에만 바인딩됩니다. `PORT`와 `HOST`로 변경할 수 있습니다. 같은 도메인을 유지하면 기존 세션을 유지할 수 있도록 `AUTH_JWT_SECRET`도 유지하고, 도메인이 바뀌면 카카오 콘솔의 Redirect URI와 `KAKAO_REDIRECT_URI`를 함께 변경합니다. 마이그레이션은 기존 사용자 ID와 카카오 식별자를 보존하고 완료한 이행을 반복하지 않습니다.
+오라클 Compute 인스턴스에서 Node 22.18 이상으로 실행합니다. 기존 Neon `DATABASE_URL`을 그대로 사용할 수 있고, 개발·운영 DB는 분리합니다. `DATABASE_URL`, `AUTH_JWT_SECRET`, 카카오 인증 변수를 설정한 뒤 `npm ci --include=dev`, `npm run db:migrate`, `npm run build`, `npm start` 순서로 실행합니다. 운영 서버는 기본적으로 `127.0.0.1:3000`에만 바인딩됩니다. `PORT`와 `HOST`로 변경할 수 있습니다. 운영 API의 변경 요청과 WebSocket 연결은 `KAKAO_REDIRECT_URI`의 공개 도메인에서 온 요청만 허용합니다. 같은 도메인을 유지하면 기존 세션을 유지할 수 있도록 `AUTH_JWT_SECRET`도 유지하고, 도메인이 바뀌면 카카오 콘솔의 Redirect URI와 `KAKAO_REDIRECT_URI`를 함께 변경합니다. 마이그레이션은 기존 사용자 ID와 카카오 식별자를 보존하고 완료한 이행을 반복하지 않습니다.
 
 지속 실행에는 systemd를 사용합니다. `/etc/da-moa.env`에 위 서버 환경 변수를 설정하고 소유자만 읽게 한 뒤, 실제 Node 경로와 배포 디렉터리에 맞춰 다음 서비스를 등록합니다.
 

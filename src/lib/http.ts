@@ -7,7 +7,9 @@ export function requestOrigin(request: Request): URL | null {
   if (!host || !['http', 'https'].includes(protocol)) return null
   try {
     const origin = new URL(`${protocol}://${host}`)
-    return origin.host === host && origin.pathname === '/' ? origin : null
+    if (origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash) return null
+    if (process.env.NODE_ENV === 'production' && origin.origin !== new URL(process.env.KAKAO_REDIRECT_URI ?? '').origin) return null
+    return origin
   } catch { return null }
 }
 
