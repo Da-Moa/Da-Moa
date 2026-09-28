@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect } from 'react'
+import { ChevronLeft } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { AnimatedMoney } from '../animated-money'
@@ -41,7 +42,7 @@ export default function SettlementClient({ roundId }: { roundId: string }) {
     if (result) await reload()
   }
   return <>
-    <Link className="back-link" href={`/home/rounds/${roundId}`}>← 지출 내역 보기</Link>
+    <Link aria-label="지출 내역으로 돌아가기" className="icon-button back-button back-link" href={`/home/rounds/${roundId}`}><ChevronLeft aria-hidden="true" size={38} strokeWidth={2.5} /></Link>
     <ErrorNotice error={settlement.error} retry={() => void reload()} />
     {!data ? settlement.loading && <Loading /> : <div className="stack">
       <section className="tab-heading compact"><p>{data.groupName}</p><h1>{data.name}</h1><div className="heading-status"><StatusBadge status={data.status} /><button className="text-button" disabled={settlement.loading} onClick={() => void reload()} type="button">{settlement.loading ? '확인 중…' : '최신 정보 새로고침'}</button></div></section>

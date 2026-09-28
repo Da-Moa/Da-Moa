@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, MessageCircle } from 'lucide-react'
+import { Check, ChevronLeft, MessageCircle } from 'lucide-react'
 import Link from 'next/link'
 import { getLoginMessage } from '../../lib/login-message'
 import { safeReturnTo } from '../../lib/auth'
@@ -12,8 +12,8 @@ export default async function LoginPage({
 
   return (
     <main className="auth-page">
-      <Link className="auth-back" href="/" aria-label="홈으로 돌아가기">
-        <ArrowLeft size={22} />
+      <Link className="icon-button back-button" href="/" aria-label="홈으로 돌아가기">
+        <ChevronLeft aria-hidden="true" size={38} strokeWidth={2.5} />
       </Link>
 
       <section className="auth-content" aria-labelledby="auth-heading">

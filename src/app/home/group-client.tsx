@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { Search, X } from 'lucide-react'
+import { ChevronLeft, Search, X } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { apiRequest } from '../../lib/api-client'
@@ -53,7 +53,7 @@ export default function GroupClient({ groupId }: { groupId: string }) {
     if (result) router.replace('/home/groups')
   }
   return <>
-    <Link className="back-link" href="/home/groups">← 내 모임</Link>
+    <Link aria-label="내 모임으로 돌아가기" className="icon-button back-button back-link" href="/home/groups"><ChevronLeft aria-hidden="true" size={38} strokeWidth={2.5} /></Link>
     <ErrorNotice error={group.error} retry={() => void group.reload()} />
     {!data ? group.loading && <Loading /> : <div className="stack">
       <section className="tab-heading compact"><h1>{data.name}</h1></section>

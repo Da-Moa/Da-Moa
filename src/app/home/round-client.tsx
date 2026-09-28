@@ -3,7 +3,7 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { ArrowRight, ChevronDown, ImagePlus, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { ArrowRight, ChevronDown, ChevronLeft, ImagePlus, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { AnimatedMoney } from '../animated-money'
 import { ApiError, apiRequest } from '../../lib/api-client'
 import type { ExclusionCheck, Expense, MutationResult, Receipt, RoundDetail } from '../../lib/domain-types'
@@ -256,7 +256,7 @@ export default function RoundClient({ roundId }: { roundId: string }) {
   const hasExpenses = Boolean(data && data.totalMinor !== '0')
   const orderedExpenses = data?.expenses.slice().reverse() ?? []
   return <>
-    <Link className="back-link" href={data ? `/home/groups/${data.groupId}` : '/home/groups'}>← 모임으로 돌아가기</Link>
+    <Link aria-label="모임으로 돌아가기" className="icon-button back-button back-link" href={data ? `/home/groups/${data.groupId}` : '/home/groups'}><ChevronLeft aria-hidden="true" size={38} strokeWidth={2.5} /></Link>
     <ErrorNotice error={resource.error} retry={() => void refresh()} />
     {!data ? resource.loading && <Loading /> : <div className="stack">
       <section className="tab-heading compact"><p>{data.groupName}</p><h1>{data.name}</h1><div className="heading-status round-heading-status"><StatusBadge status={data.status} /><button className="text-button" disabled={resource.loading} onClick={() => void refresh()} type="button">새로고침</button></div></section>

@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { ArrowLeft, CircleUserRound, History, House, Menu, Users } from 'lucide-react'
+import { ChevronLeft, CircleUserRound, History, House, Menu, Users } from 'lucide-react'
 import { ApiError, apiRequest, discardBankAccountRequests, discardPendingRequest } from '../../lib/api-client'
 import { BANKS } from '../../lib/bank-account'
 import type { RoundStatus } from '../../lib/domain-types'
@@ -258,7 +258,7 @@ export function AccountPanel() {
     })
   }
   return <div className="stack account-page">
-    <header className="account-page-heading"><Link aria-label="전체로 돌아가기" className="icon-button" href="/home/all"><ArrowLeft size={24} /></Link><h1>내 정보</h1></header>
+    <header className="account-page-heading"><Link aria-label="전체로 돌아가기" className="icon-button back-button" href="/home/all"><ChevronLeft aria-hidden="true" size={38} strokeWidth={2.5} /></Link><h1>내 정보</h1></header>
     <section className="domain-card account-profile" aria-labelledby="account-profile-heading">
       <span className="account-avatar">{account.profileImageUrl ? <img alt="" height={80} width={80} referrerPolicy="no-referrer" src={account.profileImageUrl} /> : <CircleUserRound size={40} />}</span>
       <h2 id="account-profile-heading">{account.displayName ?? '카카오 사용자'}님의 정보</h2>
