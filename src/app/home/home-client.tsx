@@ -3,12 +3,12 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { ChevronRight, Plus, Search, Users } from 'lucide-react'
+import { ChevronRight, CircleUserRound, History, Plus, Search, Users } from 'lucide-react'
 import { apiRequest } from '../../lib/api-client'
 import { formatMoney } from '../../lib/money'
 import type { GroupSummary, MutationResult, Page, RoundSummary } from '../../lib/domain-types'
 import type { HomeTab } from './authenticated-home'
-import { AccountPanel, ErrorNotice, Loading, StatusBadge, useAccount, useAction, useResource } from './ui'
+import { ErrorNotice, Loading, StatusBadge, useAccount, useAction, useResource } from './ui'
 
 export function RoundList({ endpoint, empty = '아직 정산 회차가 없어요.', onMore }: { endpoint: string; empty?: string; onMore?: () => void }) {
   const resource = useResource<Page<RoundSummary>>(endpoint)
@@ -72,16 +72,24 @@ export default function HomeClient({ tab }: { tab: HomeTab }) {
   const { account } = useAccount()
   const [historyStatus, setHistoryStatus] = useState('')
   const [historySearch, setHistorySearch] = useState('')
-  const heading = { home: '함께 쓴 돈, 함께 정리해요', groups: '내 모임', history: '정산 기록', all: '내 계정과 설정' }[tab]
+  const heading = { home: '함께 쓴 돈, 함께 정리해요', groups: '내 모임', history: '정산 기록', all: '전체' }[tab]
   const historyQuery = new URLSearchParams()
   if (historyStatus) historyQuery.set('status', historyStatus)
   if (historySearch.trim()) historyQuery.set('q', historySearch.trim())
   const historyEndpoint = `/api/rounds${historyQuery.size ? `?${historyQuery}` : ''}`
   return <>
-    <section className="tab-heading"><p>{tab === 'home' ? `${account.displayName ?? '카카오 사용자'}님, 안녕하세요` : '다모아'}</p><h1>{heading}</h1></section>
+    <section className="tab-heading">{tab !== 'all' && <p>{tab === 'home' ? `${account.displayName ?? '카카오 사용자'}님, 안녕하세요` : '다모아'}</p>}<h1>{heading}</h1></section>
     {tab === 'home' && <div className="stack"><div className="quick-actions"><Link className="primary-button" href="/home/groups">모임으로 가기</Link><Link className="secondary-button" href="/home/history">지난 내역</Link></div><h2 className="section-heading">진행 중인 회차</h2><RoundList endpoint="/api/rounds?status=active" empty="진행 중인 회차가 없어요." /><p className="help-text">회차별 금액을 따로 안내해요. 실제 송금·입금 여부는 확인하지 않아요.</p></div>}
     {tab === 'groups' && <GroupsList />}
     {tab === 'history' && <div className="stack"><p className="help-text">참여했던 모든 회차예요. 모임에서 나간 뒤에도 내역을 볼 수 있어요.</p><div className="round-search-bar"><Search aria-hidden="true" size={21} /><input aria-label="정산 기록 검색어" autoComplete="off" maxLength={100} onChange={event => setHistorySearch(event.target.value)} placeholder="모임명 또는 회차명 검색" type="search" value={historySearch} /></div><div aria-label="회차 상태" className="round-status-filters" role="group"><button aria-pressed={historyStatus === ''} className="round-status-filter" onClick={() => setHistoryStatus('')} type="button">전체</button><button aria-pressed={historyStatus === 'active'} className="round-status-filter" onClick={() => setHistoryStatus('active')} type="button">진행 중</button><button aria-pressed={historyStatus === 'COMPLETED'} className="round-status-filter" onClick={() => setHistoryStatus('COMPLETED')} type="button">정산 종료</button></div><RoundList key={historyEndpoint} endpoint={historyEndpoint} empty={historySearch.trim() ? '검색 결과가 없어요.' : undefined} /></div>}
-    {tab === 'all' && <section className="domain-card"><AccountPanel /></section>}
+    {tab === 'all' && <div className="stack">
+      <section className="all-menu-section" aria-labelledby="all-settlement-heading"><h2 className="section-heading" id="all-settlement-heading">정산</h2><div className="all-functions">
+        <Link className="all-function-row" href="/home/groups"><span className="all-function-icon"><Users size={23} /></span><span className="all-function-copy"><strong>내 모임</strong><small>모임과 회차 보기</small></span><ChevronRight size={20} /></Link>
+        <Link className="all-function-row" href="/home/history"><span className="all-function-icon"><History size={23} /></span><span className="all-function-copy"><strong>정산 기록</strong><small>지난 회차 보기</small></span><ChevronRight size={20} /></Link>
+      </div></section>
+      <section className="all-menu-section" aria-labelledby="all-account-heading"><h2 className="section-heading" id="all-account-heading">내 정보</h2><div className="all-functions">
+        <Link className="all-function-row" href="/home/account"><span className="all-function-icon"><CircleUserRound size={23} /></span><span className="all-function-copy"><strong>계좌 설정</strong><small>프로필 · 정산용 계좌</small></span><ChevronRight size={20} /></Link>
+      </div></section>
+    </div>}
   </>
 }
