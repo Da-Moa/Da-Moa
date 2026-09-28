@@ -9,6 +9,7 @@ import {
   refreshCookieOptions,
 } from '../../../../lib/auth'
 import { deleteRefreshSession } from '../../../../lib/auth-store'
+import { sameOrigin } from '../../../../lib/http'
 
 export const runtime = 'nodejs'
 
@@ -19,8 +20,7 @@ function clearAuthCookies(response: NextResponse) {
 }
 
 export async function POST(request: NextRequest) {
-  const origin = request.headers.get('origin')
-  if (origin !== request.nextUrl.origin) {
+  if (!sameOrigin(request)) {
     const response = NextResponse.json({ error: 'forbidden' }, { status: 403 })
     response.headers.set('Cache-Control', 'private, no-store')
     return response

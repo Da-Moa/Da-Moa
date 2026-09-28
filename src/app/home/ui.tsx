@@ -7,7 +7,7 @@ import { ChevronLeft, CircleUserRound, History, House, Menu, Users } from 'lucid
 import { ApiError, apiRequest, discardBankAccountRequests, discardPendingRequest } from '../../lib/api-client'
 import { BANKS } from '../../lib/bank-account'
 import type { RoundStatus } from '../../lib/domain-types'
-import { parseInvalidateEvent, realtimeUserChannel, resourceKeysForPath, type ResourceKey } from '../../lib/realtime'
+import { parseInvalidateEvent, resourceKeysForPath, type ResourceKey } from '../../lib/realtime'
 
 type RealtimeSubscribe = (key: ResourceKey, listener: () => void) => () => void
 const RealtimeContext = createContext<RealtimeSubscribe | null>(null)
@@ -154,7 +154,7 @@ export function useBankForm(path: '/api/me/bank-account' | '/api/me/onboarding')
   return { form, clear, signal }
 }
 
-function RealtimeProvider({ accountId, enabled, reloadAccount, children }: { accountId: string; enabled: boolean; reloadAccount: () => Promise<Account | null>; children: ReactNode }) {
+function RealtimeProvider({ accountId, reloadAccount, children }: { accountId: string; reloadAccount: () => Promise<Account | null>; children: ReactNode }) {
   const listeners = useRef(new Map<ResourceKey, Set<() => void>>())
   const accountReload = useRef(reloadAccount)
   accountReload.current = reloadAccount
@@ -164,13 +164,14 @@ function RealtimeProvider({ accountId, enabled, reloadAccount, children }: { acc
     return () => { current.delete(listener); if (!current.size) listeners.current.delete(key) }
   }, [])
   useEffect(() => {
-    if (!enabled) return
-    let client: import('ably/modular').BaseRealtime | null = null
-    let channel: import('ably').RealtimeChannel | null = null
+    let socket: WebSocket | null = null
     let timer: ReturnType<typeof setTimeout> | null = null
+    let reconnect: ReturnType<typeof setTimeout> | null = null
+    let attempts = 0
     let disposed = false
     const pending = new Set<ResourceKey>()
     const queue = (keys: ResourceKey[]) => {
+      if (disposed) return
       keys.forEach(key => pending.add(key))
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => {
@@ -181,21 +182,30 @@ function RealtimeProvider({ accountId, enabled, reloadAccount, children }: { acc
         pending.clear()
       }, 120)
     }
-    void import('ably/modular').then(async ({ BaseRealtime, FetchRequest, WebSocketTransport }) => {
+    const retry = (event?: CloseEvent) => {
       if (disposed) return
-      client = new BaseRealtime({
-        authCallback: (_params, callback) => { void apiRequest<import('ably').TokenRequest>('/api/realtime/auth').then(token => callback(null, token)).catch(error => callback(error instanceof Error ? error.message : '실시간 인증에 실패했습니다', null)) },
-        echoMessages: false, plugins: { FetchRequest, WebSocketTransport },
-      })
-      channel = client.channels.get(realtimeUserChannel(accountId))
-      const onAttached = () => queue(['me', ...listeners.current.keys()])
-      const onMessage = (message: import('ably').InboundMessage) => { const event = parseInvalidateEvent(message.data); if (event) queue(event.keys) }
-      channel.on('attached', onAttached)
-      try { await channel.subscribe('invalidate', onMessage) } catch { if (!disposed) console.error('Realtime subscription failed') }
-      if (disposed) { channel.unsubscribe('invalidate', onMessage); channel.off('attached', onAttached); client.close() }
-    }).catch(() => { if (!disposed) console.error('Realtime client failed to load') })
-    return () => { disposed = true; if (timer) clearTimeout(timer); channel?.unsubscribe(); channel?.off(); client?.close() }
-  }, [accountId, enabled])
+      reconnect = setTimeout(() => { void connect() }, event?.code === 4001 ? 0 : Math.min(30000, 1000 * 2 ** Math.min(attempts++, 5)))
+    }
+    const connect = async () => {
+      try {
+        const account = await apiRequest<Account>('/api/me')
+        if (disposed) return
+        if (account.id !== accountId) { window.location.reload(); return }
+        socket = new WebSocket(`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/realtime`)
+        socket.onopen = () => { attempts = 0; queue(['me', ...listeners.current.keys()]) }
+        socket.onmessage = message => { const event = parseInvalidateEvent(message.data); if (event) queue(event.keys) }
+        socket.onclose = retry
+        socket.onerror = () => socket?.close()
+      } catch { retry() }
+    }
+    void connect()
+    return () => {
+      disposed = true
+      if (timer) clearTimeout(timer)
+      if (reconnect) clearTimeout(reconnect)
+      if (socket) { socket.onopen = socket.onmessage = socket.onclose = socket.onerror = null; socket.close() }
+    }
+  }, [accountId])
   return <RealtimeContext.Provider value={subscribe}>{children}</RealtimeContext.Provider>
 }
 
@@ -287,7 +297,7 @@ export function AccountPanel() {
   </div>
 }
 
-export function AppShell({ children, realtimeEnabled }: { children: ReactNode; realtimeEnabled: boolean }) {
+export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() ?? '/home'
   const hasBackButton = pathname === '/home/account' || pathname.startsWith('/home/groups/') || pathname.startsWith('/home/rounds/') || pathname.startsWith('/settlements/')
   const tabTitle = pathname === '/home/groups' ? '내 모임' : pathname === '/home/history' ? '정산 기록' : pathname === '/home/all' ? '전체' : null
@@ -304,7 +314,7 @@ export function AppShell({ children, realtimeEnabled }: { children: ReactNode; r
     { href: '/home/history', label: '정산 기록', icon: History, active: pathname === '/home/history' },
     { href: '/home/all', label: '전체', icon: Menu, active: pathname === '/home/all' || pathname === '/home/account' },
   ]
-  return <RealtimeProvider accountId={account.id} enabled={realtimeEnabled} reloadAccount={me.reload}><AccountContext.Provider value={{ account, reloadAccount: me.reload }}><main className="app-shell">
+  return <RealtimeProvider accountId={account.id} reloadAccount={me.reload}><AccountContext.Provider value={{ account, reloadAccount: me.reload }}><main className="app-shell">
     <header className="topbar">{topbarContent}</header>
     {children}
     <nav aria-label="주 메뉴" className="bottom-nav">{links.map(({ href, label, icon: Icon, active }) => <Link key={href} href={href} aria-current={active ? 'page' : undefined}><Icon size={22} /><span>{label}</span></Link>)}</nav>

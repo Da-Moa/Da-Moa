@@ -14,6 +14,7 @@ import {
   refreshCookieOptions,
 } from '../../../../lib/auth'
 import { rotateRefreshSession } from '../../../../lib/auth-store'
+import { sameOrigin } from '../../../../lib/http'
 
 export const runtime = 'nodejs'
 
@@ -36,8 +37,7 @@ function unavailableResponse() {
 }
 
 export async function POST(request: NextRequest) {
-  const origin = request.headers.get('origin')
-  if (origin !== request.nextUrl.origin) {
+  if (!sameOrigin(request)) {
     return NextResponse.json({ error: 'forbidden', message: '허용되지 않은 요청입니다' }, {
       status: 403, headers: { 'Cache-Control': 'private, no-store' },
     })

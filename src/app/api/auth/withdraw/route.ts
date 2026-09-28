@@ -10,13 +10,14 @@ import {
 } from '../../../../lib/auth'
 import { withdrawAccount } from '../../../../lib/auth-store'
 import { AppError, errorResponse } from '../../../../lib/errors'
+import { sameOrigin } from '../../../../lib/http'
 import { publishDepartureInvalidation } from '../../../../lib/realtime-server'
 
 export const runtime = 'nodejs'
 
 export async function POST(request: NextRequest) {
   try {
-    if (request.headers.get('origin') !== request.nextUrl.origin) throw new AppError(403, 'forbidden', '허용되지 않은 요청입니다')
+    if (!sameOrigin(request)) throw new AppError(403, 'forbidden', '허용되지 않은 요청입니다')
     const access = readAccessToken(request.cookies.get(ACCESS_TOKEN_COOKIE_NAME)?.value)
     const result = await withdrawAccount(access)
     after(() => publishDepartureInvalidation(result.groupIds))

@@ -39,8 +39,8 @@ Pull labels, enum values, limits, bank names, and validation terminology from th
 | `src/app/api/[...path]/route.ts`, `src/lib/openapi.ts` | Domain Route Handler and API contract; documentation is exposed at `/api/docs` and `/api/openapi.json`. Auth and account routes live separately under `src/app/api/auth/` and `src/app/api/me/`. |
 | `src/lib/auth.ts`, `auth-store.ts`, `authorization.ts`, `bank-account.ts`, `openbanking.ts`, `openbanking-store.ts` | Kakao/session security, account lifecycle, bank input/catalog, and optional 금융결제원 verification and disconnect handling. These files are under `src/lib/`. |
 | `src/lib/db.ts`, `src/lib/mutations.ts`, `src/lib/api-client.ts` | Transactions, idempotency, session refresh, and recovery of requests whose responses were lost. |
-| `src/lib/realtime.ts`, `src/lib/realtime-server.ts`, `scripts/migrations/` | Ably invalidation keys and authorized audiences; ordered SQL schema migrations. Browser subscriptions use `home/ui.tsx`. |
-| `package.json`, `.env.example`, `compose.yaml`, `vercel.json`, `.github/workflows/ci.yml`, `scripts/browser-check.mjs` | Commands, environment names, local PostgreSQL, deployment migrations, CI, and mobile browser verification. |
+| `server.mjs`, `src/lib/realtime.ts`, `src/lib/realtime-server.ts`, `scripts/migrations/` | Authenticated WebSocket connections, invalidation keys and authorized audiences; ordered SQL schema migrations. Browser subscriptions use `home/ui.tsx`. |
+| `package.json`, `.env.example`, `compose.yaml`, `.github/workflows/ci.yml`, `scripts/browser-check.mjs` | Commands, environment names, local PostgreSQL, deployment migrations, CI, and mobile browser verification. |
 
 ## Existing visual identity
 
@@ -59,7 +59,7 @@ Use the existing plain CSS and shared components. `src/app/globals.css` is the s
 - Round flow is `RECORDING → CONFIRMED → LOCKED → COMPLETED`; reopening is allowed before locking. `전송` locks the original records, and `랜덤 돌리기` allocates any remainder once after locking. Persist final shares, balances, and common sender-to-receiver transfers atomically; never redraw saved results. Normal completion requires recipients to manually confirm all incoming transfers; the round creator can force completion after a warning. Completed rounds are read-only.
 - `링크 복사` shares guidance. The app does not execute bank transfers, automatically verify deposits, send Kakao messages, perform OCR, or exchange currencies. JPEG/PNG/WebP receipts are supporting images uploaded after saving an expense and converted to AVIF; existing image formats remain readable.
 - Manual bank entry is supported without 금융결제원 consent or a birth date. Verification is optional. Show exactly `확인되지 않은 계좌입니다.` when a displayed account lacks `verifiedAt`; OAuth success alone does not establish verification. Personal KRW guidance exposes only the viewer's actual recipients' latest accounts; USD/JPY guidance omits account details.
-- Preserve idempotency keys and version checks through existing mutation helpers. Ably publishes only invalidation keys after commit; authenticated APIs remain the data source. Keep account details, amounts, receipts, and invite tokens out of realtime messages. Preserve past records during membership changes and soft deletion, and keep credentials server-side.
+- Preserve idempotency keys and version checks through existing mutation helpers. The Node WebSocket server publishes only invalidation keys after commit; authenticated APIs remain the data source. Keep account details, amounts, receipts, and invite tokens out of realtime messages. Preserve past records during membership changes and soft deletion, and keep credentials server-side.
 
 ## Development and verification
 

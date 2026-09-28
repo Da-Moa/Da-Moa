@@ -1,30 +1,13 @@
-import { Rest, type TokenRequest } from 'ably'
 import type { AccessToken } from './auth'
-import { getAccount, requireAccount } from './authorization'
+import { requireAccount } from './authorization'
 import { withReadTransaction } from './db'
-import { AppError } from './errors'
-import { realtimeUserChannel, type ResourceKey } from './realtime'
+import type { ResourceKey } from './realtime'
 
 export type RoundAudience = { groupId: string; userIds: string[]; groupUserIds?: string[] }
 type RoundRecipients = RoundAudience & { groupUserIds: string[] }
 type Publication = { userIds: string[]; keys: ResourceKey[] }
 
-let rest: Rest | null = null
-let restKey = ''
-
-export function realtimeEnabled() { return Boolean(process.env.ABLY_API_KEY?.trim()) }
-
-function ably() {
-  const key = process.env.ABLY_API_KEY?.trim()
-  if (!key) throw new AppError(503, 'realtime_unavailable', '실시간 연결을 사용할 수 없습니다')
-  if (!rest || key !== restKey) { rest = new Rest(key); restKey = key }
-  return rest
-}
-
-export async function createRealtimeToken(access: AccessToken | null): Promise<TokenRequest> {
-  const account = await getAccount(access)
-  return ably().auth.createTokenRequest({ clientId: account.id, ttl: 60 * 60 * 1000, capability: { [realtimeUserChannel(account.id)]: ['subscribe'] } })
-}
+export function realtimeEnabled() { return Boolean(process.env.REALTIME_INTERNAL_SECRET && process.env.REALTIME_INTERNAL_PORT) }
 
 async function send(publications: Publication[]) {
   if (!realtimeEnabled()) return
@@ -33,10 +16,14 @@ async function send(publications: Publication[]) {
     const keys = byUser.get(userId) ?? new Set<ResourceKey>()
     publication.keys.forEach(key => keys.add(key)); byUser.set(userId, keys)
   }
-  const results = await Promise.allSettled([...byUser].map(([userId, keys]) =>
-    ably().channels.get(realtimeUserChannel(userId)).publish('invalidate', { type: 'invalidate', keys: [...keys] })))
-  const failed = results.filter(result => result.status === 'rejected').length
-  if (failed) console.error(`Realtime invalidation failed for ${failed} recipient(s)`)
+  if (!byUser.size) return
+  const response = await fetch(`http://127.0.0.1:${process.env.REALTIME_INTERNAL_PORT}/internal/realtime`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${process.env.REALTIME_INTERNAL_SECRET}`, 'content-type': 'application/json' },
+    body: JSON.stringify([...byUser].map(([userId, keys]) => ({ userId, keys: [...keys] }))),
+    signal: AbortSignal.timeout(5000),
+  })
+  if (!response.ok) console.error(`Realtime invalidation failed (${response.status})`)
 }
 
 async function roundAudience(roundId: string, includeGroupMembers: boolean): Promise<RoundRecipients | null> {
