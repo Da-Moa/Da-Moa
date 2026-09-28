@@ -6,6 +6,7 @@ export type Page<T> = { items: T[]; nextCursor: string | null }
 export type Member = { userId: string; displayName: string; excludedAt: number | null }
 export type RoundMember = Member & { profileImageUrl: string | null }
 export type GroupSummary = { id: string; name: string; creatorId: string; createdAt: number }
+export type GroupListItem = GroupSummary & { memberCount: number; memberPreview: { userId: string; displayName: string; profileImageUrl: string | null }[] }
 export type GroupDetail = GroupSummary & { members: Member[]; isCreator: boolean; invites: { id: string; expiresAt: number }[] }
 export type RoundSummary = {
   id: string; groupId: string; groupName: string; name: string; currency: Currency; status: RoundStatus;

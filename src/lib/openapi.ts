@@ -38,6 +38,7 @@ const pageParameters = [
   { name: 'cursor', in: 'query', schema: string, description: '(created_at, id)에 기반한 서버 발급 커서' },
 ]
 const roundSearchParameter = { name: 'q', in: 'query', schema: { type: 'string', minLength: 1, maxLength: 100 }, description: '모임명 또는 회차명의 대소문자를 구분하지 않는 부분 검색어' }
+const groupSearchParameter = { name: 'q', in: 'query', schema: { type: 'string', minLength: 1, maxLength: 100 }, description: '모임명의 대소문자를 구분하지 않는 부분 검색어' }
 const mutationParameters = [
   { name: 'Origin', in: 'header', required: true, schema: { type: 'string', format: 'uri' }, description: '현재 서비스 origin과 정확히 일치해야 합니다.' },
   { name: 'Idempotency-Key', in: 'header', required: true, schema: id, description: '한 제출당 한 UUID. 네트워크·세션 갱신 후 재시도에도 같은 키와 본문을 사용합니다.' },
@@ -67,6 +68,7 @@ const domainSchemas = {
   CurrentBankAccount: object({ bankName: { type: 'string', nullable: true }, accountNumber: { type: 'string', nullable: true }, accountHolder: { type: 'string', nullable: true }, verifiedAt: { ...nullableTimestamp, description: 'null이면 계좌번호와 함께 “확인되지 않은 계좌입니다.”를 표시합니다.' } }, ['bankName', 'accountNumber', 'accountHolder', 'verifiedAt']),
   Me: object({ id, displayName: { type: 'string', nullable: true }, email: { type: 'string', nullable: true }, profileImageUrl: profileImage, purpose: { type: 'string', enum: ['app', 'onboarding'] }, deletedAt: nullableTimestamp, onboardingCompletedAt: nullableTimestamp, bankVersion, bankAccount: { type: 'object', nullable: true, properties: { ...bankFields, bankCode: { type: 'string', nullable: true }, verifiedAt: nullableTimestamp }, description: '본인의 현재 대표 계좌. verifiedAt=null이면 “확인되지 않은 계좌입니다.”를 표시합니다. 계좌는 직접 입력하며 자동 확인을 제공하지 않습니다.' } }, ['id', 'displayName', 'email', 'profileImageUrl', 'purpose', 'deletedAt', 'onboardingCompletedAt', 'bankAccount', 'bankVersion']),
   Group: object(groupFields, Object.keys(groupFields)),
+  GroupListItem: object({ ...groupFields, memberCount: { type: 'integer', minimum: 1, maximum: MAX_GROUP_MEMBERS }, memberPreview: { ...array(object({ userId: id, displayName: string, profileImageUrl: profileImage }, ['userId', 'displayName', 'profileImageUrl'])), maxItems: 5 } }, [...Object.keys(groupFields), 'memberCount', 'memberPreview']),
   GroupMember: object({ userId: id, displayName: string, excludedAt: nullableTimestamp }, ['userId', 'displayName', 'excludedAt']),
   GroupDetail: object({ ...groupFields, members: { ...array(ref('GroupMember')), maxItems: MAX_GROUP_MEMBERS, description: '생성자를 포함해 최대 10명이며 생성자가 첫 번째입니다.' }, isCreator: { type: 'boolean', description: '조회 사용자가 현재 활성 모임 생성자인지 여부' }, invites: array(object({ id, expiresAt: timestamp }, ['id', 'expiresAt'])) }, [...Object.keys(groupFields), 'members', 'isCreator', 'invites']),
   Round: object(roundFields, Object.keys(roundFields)),
@@ -81,7 +83,7 @@ const domainSchemas = {
   IncomingTransfer: object({ senderId: id, displayName: string, profileImageUrl: profileImage, amountMinor: minor, receivedAt: nullableTimestamp }, ['senderId', 'displayName', 'profileImageUrl', 'amountMinor', 'receivedAt']),
   SettlementConfirmation: object({ userId: id, displayName: string, profileImageUrl: profileImage, checkedAt: nullableTimestamp }, ['userId', 'displayName', 'profileImageUrl', 'checkedAt']),
   Settlement: object({ roundId: id, name: string, groupName: string, status, version: integer, isCreator: { type: 'boolean', description: '조회 사용자가 이 회차의 생성자인지 여부' }, finalized: { type: 'boolean' }, currency, balanceMinor: { type: 'string', pattern: '^-?\\d+$', nullable: true, description: '부담액 − 결제액. 양수는 보낼 돈, 음수는 받을 돈. 최종 저장 전에는 null.' }, checkedAt: nullableTimestamp, checkRequired: { type: 'boolean', description: '조회 사용자가 한 건 이상 수취하는지 여부' }, checkedCount: { type: 'integer', minimum: 0, description: '모든 수취 건을 확인한 수취인 수' }, requiredCount: { type: 'integer', minimum: 0, description: '한 건 이상 수취하는 사용자 수' }, allChecked: { type: 'boolean', description: '모든 송금 건의 수취 확인 여부. 송금 건이 없으면 true.' }, confirmations: { ...array(ref('SettlementConfirmation')), description: '수취인별 이름 스냅샷, 활성 카카오 프로필, 전체 수취 완료 시각. 한 건이라도 미확인이면 checkedAt은 null입니다.' }, outgoing: { ...array(ref('OutgoingTransfer')), description: '조회 사용자가 아직 보내야 하는 미확인 송금. 수취 확인 시 제외되고 확인 해제 시 복원됩니다.' }, incoming: array(ref('IncomingTransfer')), sharePath: { type: 'string', nullable: true, example: '/settlements/00000000-0000-4000-8000-000000000001', description: '최종 저장 후 제공하며 이전에는 null. 로그인한 본인의 안내를 조회하는 경로이며 초대 링크가 아님.' } }, ['roundId', 'name', 'groupName', 'status', 'version', 'isCreator', 'finalized', 'currency', 'balanceMinor', 'checkedAt', 'checkRequired', 'checkedCount', 'requiredCount', 'allChecked', 'confirmations', 'outgoing', 'incoming', 'sharePath']),
-  GroupPage: object({ items: array(ref('Group')), nextCursor: { type: 'string', nullable: true } }, ['items', 'nextCursor']),
+  GroupPage: object({ items: array(ref('GroupListItem')), nextCursor: { type: 'string', nullable: true } }, ['items', 'nextCursor']),
   RoundPage: object({ items: array(ref('Round')), nextCursor: { type: 'string', nullable: true } }, ['items', 'nextCursor']),
 }
 
@@ -112,7 +114,7 @@ const domainPaths = {
   '/api/me/onboarding': { post: operation('계정', '계좌 저장 후 가입·명시적 재가입 완료', { response: object({ id, returnTo: string }, ['id', 'returnTo']), request: { ...object({ ...bankInputFields, confirmRejoin: { type: 'boolean', description: '탈퇴 계정의 명시적 재가입 동의' } }, bankInputRequired), additionalProperties: false }, parameters: [mutationParameters[0]], description: '은행·계좌번호·예금주를 직접 입력해 가입을 완료합니다. 계좌·가입·새 app 세션을 원자적으로 저장하며 기존 모임·관리 권한은 복구하지 않습니다. 쿠키 응답 유실은 카카오 재로그인으로 복구합니다.' }) },
   '/api/me/bank-account': { put: operation('계정', '대표 계좌 저장', { mutation: true, request: ref('BankAccount'), response: object({ id, bankVersion }, ['id', 'bankVersion']), description: '직접 입력한 계좌를 저장합니다. 계좌가 바뀌면 기존 확인 이력을 초기화하고, 진행 중 정산도 계좌 교체를 막지 않습니다. 같은 성공 멱등 키는 저장 결과를 반환합니다.' }) },
   '/api/groups': {
-    get: operation('모임', '활성 모임 목록', { response: ref('GroupPage'), parameters: pageParameters }),
+    get: operation('모임', '활성 모임 목록', { response: ref('GroupPage'), parameters: [...pageParameters, groupSearchParameter] }),
     post: operation('모임', '모임 생성', { mutation: true, request: { ...object({ name: string }, ['name']), additionalProperties: false } }),
   },
   '/api/groups/{groupId}': {

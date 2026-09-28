@@ -1,14 +1,14 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { ChevronRight, CircleUserRound, History, Plus, Search, Users } from 'lucide-react'
 import { apiRequest } from '../../lib/api-client'
 import { formatMoney } from '../../lib/money'
-import type { GroupSummary, MutationResult, Page, RoundSummary } from '../../lib/domain-types'
+import type { GroupListItem, MutationResult, Page, RoundSummary } from '../../lib/domain-types'
 import type { HomeTab } from './authenticated-home'
-import { ErrorNotice, Loading, StatusBadge, useAccount, useAction, useResource } from './ui'
+import { ErrorNotice, Loading, ParticipantAvatar, StatusBadge, useAccount, useAction, useResource } from './ui'
 
 export function RoundList({ endpoint, empty = '아직 정산 회차가 없어요.', onMore }: { endpoint: string; empty?: string; onMore?: () => void }) {
   const resource = useResource<Page<RoundSummary>>(endpoint)
@@ -39,7 +39,13 @@ export function RoundList({ endpoint, empty = '아직 정산 회차가 없어요
 
 function GroupsList() {
   const router = useRouter()
-  const groups = useResource<Page<GroupSummary>>('/api/groups')
+  const [search, setSearch] = useState('')
+  const query = new URLSearchParams()
+  if (search.trim()) query.set('q', search.trim())
+  const endpoint = `/api/groups${query.size ? `?${query}` : ''}`
+  const currentEndpoint = useRef(endpoint)
+  currentEndpoint.current = endpoint
+  const groups = useResource<Page<GroupListItem>>(endpoint)
   const action = useAction()
   const more = useAction()
   async function create(form: HTMLFormElement) {
@@ -49,22 +55,30 @@ function GroupsList() {
   }
   async function loadMore() {
     if (!groups.data?.nextCursor) return
-    const page = await more.run(() => apiRequest<Page<GroupSummary>>(`/api/groups?cursor=${encodeURIComponent(groups.data!.nextCursor!)}`))
-    if (page) groups.setData(current => current ? { items: [...current.items, ...page.items], nextCursor: page.nextCursor } : page)
+    const url = new URL(endpoint, window.location.origin)
+    url.searchParams.set('cursor', groups.data.nextCursor)
+    const page = await more.run(() => apiRequest<Page<GroupListItem>>(`${url.pathname}${url.search}`))
+    if (page && currentEndpoint.current === endpoint) groups.setData(current => current ? { items: [...current.items, ...page.items.filter(item => !current.items.some(existing => existing.id === item.id))], nextCursor: page.nextCursor } : page)
   }
   return <div className="stack">
-    <ErrorNotice error={groups.error} retry={() => void groups.reload()} />
-    {groups.loading && !groups.data && <Loading />}
-    {groups.data?.items.length === 0 && <p className="empty-card">모임을 만들거나 초대 링크를 받아 참여해 주세요.</p>}
-    {groups.data?.items.map(group => <Link className="domain-card group-link" key={group.id} href={`/home/groups/${group.id}`}><Users size={23} /><div><h2>{group.name}</h2></div><ChevronRight size={20} /></Link>)}
-    <ErrorNotice error={more.error} retry={() => void loadMore()} />
-    {groups.data?.nextCursor && <button className="secondary-button" disabled={more.busy} type="button" onClick={() => void loadMore()}>모임 더 보기</button>}
     <form className="domain-card stack" onSubmit={event => { event.preventDefault(); void create(event.currentTarget) }}>
       <h2>새 모임 만들기</h2>
       <label className="field"><span>모임 이름</span><input autoComplete="off" maxLength={100} name="name" placeholder="예: 주말 친구 모임" required /></label>
       <ErrorNotice error={action.error} />
       <button className="primary-button" disabled={action.busy} type="submit"><Plus size={18} />{action.busy ? '만드는 중…' : '모임 만들기'}</button>
     </form>
+    <hr className="group-section-divider" />
+    <div className="round-search-bar"><Search aria-hidden="true" size={21} /><input aria-label="모임 검색어" autoComplete="off" maxLength={100} onChange={event => setSearch(event.target.value)} placeholder="모임명 검색" type="search" value={search} /></div>
+    <ErrorNotice error={groups.error} retry={() => void groups.reload()} />
+    {groups.loading && !groups.data && <Loading />}
+    {groups.data?.items.length === 0 && <p className="empty-card">{search.trim() ? '검색 결과가 없어요.' : '모임을 만들거나 초대 링크를 받아 참여해 주세요.'}</p>}
+    {groups.data?.items.map(group => <Link className="domain-card group-link" key={group.id} href={`/home/groups/${group.id}`}>
+      <span aria-hidden="true" className="group-avatar-stack">{group.memberPreview.slice(0, 3).map(member => <ParticipantAvatar key={member.userId} profileImageUrl={member.profileImageUrl} />)}</span>
+      <div><h2>{group.name}</h2><p className="help-text">{group.memberPreview.map(member => member.displayName).join(', ')}{group.memberCount > 5 ? ` 외 ${group.memberCount - 5}명` : ''}</p></div>
+      <ChevronRight size={20} />
+    </Link>)}
+    <ErrorNotice error={more.error} retry={() => void loadMore()} />
+    {groups.data?.nextCursor && <button className="secondary-button" disabled={more.busy} type="button" onClick={() => void loadMore()}>모임 더 보기</button>}
   </div>
 }
 

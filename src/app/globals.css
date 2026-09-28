@@ -417,6 +417,10 @@ button.participant-card:not(:disabled):hover { background: #f8fbff; border-color
 .group-link > div { flex: 1; min-width: 0; }
 .group-link > svg { color: #146db0; flex: 0 0 auto; }
 .group-link .help-text { margin-top: 4px; }
+.group-section-divider { border: 0; border-top: 1px solid var(--box-border-color); margin: 4px 0; width: 100%; }
+.group-avatar-stack { display: flex; flex: 0 0 auto; }
+.group-avatar-stack .participant-avatar { border: 2px solid #fff; height: 34px; margin-left: -10px; width: 34px; }
+.group-avatar-stack .participant-avatar:first-child { margin-left: 0; }
 .status-badge { color: #176397; }
 .state-confirmed { background: #fff2cf; color: #785500; }
 .state-locked { background: #eee6ff; color: #623ba4; }
