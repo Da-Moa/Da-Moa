@@ -17,11 +17,10 @@ process.env.AUTH_JWT_SECRET = 'isolated-test-login-secret-at-least-32-bytes'
 
 before(async () => {
   const client = createDatabaseClient(testUrl)
-  const account = TEST_ACCOUNTS[0]
   try {
     await client.connect()
     await applyMigrations(client)
-    await client.query(`
+    for (const account of TEST_ACCOUNTS) await client.query(`
       INSERT INTO users(id,provider,provider_subject,display_name,email,created_at,updated_at,onboarding_completed_at,bank_name,account_number,account_holder,bank_updated_at)
       VALUES($1,'test',$2,$3,$4,1,1,1,$5,$6,$7,1)
       ON CONFLICT (provider,provider_subject) DO UPDATE SET deleted_at=NULL,onboarding_completed_at=1,
@@ -38,18 +37,20 @@ function loginRequest(key: string, origin = 'http://localhost', extra = '') {
 }
 
 test('local development test login issues an authenticated cookie pair and rejects untrusted input', async () => {
-  const response = await POST(loginRequest(TEST_ACCOUNTS[0].key))
-  assert.equal(response.status, 303)
-  assert.equal(response.headers.get('location'), 'http://localhost/home/history')
-  const cookies = response.headers.getSetCookie()
-  const accessCookie = cookies.find(cookie => cookie.startsWith(`${ACCESS_TOKEN_COOKIE_NAME}=`))
-  const refreshCookie = cookies.find(cookie => cookie.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`))
-  assert.match(accessCookie ?? '', /HttpOnly/)
-  assert.match(refreshCookie ?? '', /HttpOnly/)
-  assert.match(refreshCookie ?? '', /Path=\/api\/auth/)
-  const access = readAccessToken(accessCookie?.slice(ACCESS_TOKEN_COOKIE_NAME.length + 1).split(';')[0])
-  assert.ok(access)
-  assert.equal((await getAccount(access)).id, TEST_ACCOUNTS[0].id)
+  for (const account of TEST_ACCOUNTS) {
+    const response = await POST(loginRequest(account.key))
+    assert.equal(response.status, 303, account.key)
+    assert.equal(response.headers.get('location'), 'http://localhost/home/history')
+    const cookies = response.headers.getSetCookie()
+    const accessCookie = cookies.find(cookie => cookie.startsWith(`${ACCESS_TOKEN_COOKIE_NAME}=`))
+    const refreshCookie = cookies.find(cookie => cookie.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`))
+    assert.match(accessCookie ?? '', /HttpOnly/)
+    assert.match(refreshCookie ?? '', /HttpOnly/)
+    assert.match(refreshCookie ?? '', /Path=\/api\/auth/)
+    const access = readAccessToken(accessCookie?.slice(ACCESS_TOKEN_COOKIE_NAME.length + 1).split(';')[0])
+    assert.ok(access)
+    assert.equal((await getAccount(access)).id, account.id)
+  }
 
   assert.equal((await POST(loginRequest('unknown'))).status, 404)
   assert.equal((await POST(loginRequest(TEST_ACCOUNTS[0].key, 'https://evil.test'))).status, 403)
