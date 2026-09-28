@@ -17,6 +17,7 @@ import {
   verifyKakaoIdToken,
 } from '../../../../lib/auth'
 import { signInKakao } from '../../../../lib/auth-store'
+import { requestOrigin } from '../../../../lib/http'
 
 export const runtime = 'nodejs'
 
@@ -26,7 +27,7 @@ function clearOidcCookies(response: NextResponse) {
 }
 
 function loginRedirect(request: NextRequest, error: string) {
-  const url = new URL('/login', request.url)
+  const url = new URL('/login', requestOrigin(request) ?? request.url)
   url.searchParams.set('error', error)
   url.searchParams.set('returnTo', readReturnToCookie(request.cookies.get(RETURN_TO_COOKIE_NAME)?.value, request.cookies.get(OIDC_COOKIE_NAMES.state)?.value))
   const response = NextResponse.redirect(url)
@@ -73,7 +74,7 @@ export async function GET(request: NextRequest) {
     const session = await signInKakao(subject, profile)
     const returnTo = readReturnToCookie(request.cookies.get(RETURN_TO_COOKIE_NAME)?.value, state)
     const destination = session.purpose === 'onboarding' ? `/onboarding?returnTo=${encodeURIComponent(returnTo)}` : returnTo
-    const response = NextResponse.redirect(new URL(destination, request.url))
+    const response = NextResponse.redirect(new URL(destination, requestOrigin(request) ?? request.url))
     response.cookies.set(
       ACCESS_TOKEN_COOKIE_NAME,
       session.accessToken,

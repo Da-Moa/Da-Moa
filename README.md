@@ -4,7 +4,7 @@
 
 ## 실행
 
-Node.js **22.18 이상**과 Docker가 필요합니다. 로컬 개발은 Docker PostgreSQL을, Vercel Preview·Production은 각 환경의 Neon `DATABASE_URL`을 사용합니다. 화면 실시간 반영은 Ably WebSocket을 사용합니다.
+Node.js **22.18 이상**과 Docker가 필요합니다. 로컬 개발은 Docker PostgreSQL을 사용합니다. 앱과 실시간 연결은 같은 Node 서버에서 실행하며, 운영 DB에는 별도의 PostgreSQL 또는 Neon `DATABASE_URL`을 사용합니다.
 
 ```bash
 npm install
@@ -19,8 +19,7 @@ cp .env.example .env.local
 | `KAKAO_REDIRECT_URI` | 로컬에서는 `http://localhost:3000/auth/v1/kakao`. 카카오 콘솔에 같은 URI 등록 |
 | `KAKAO_CLIENT_SECRET` | 카카오 콘솔에서 Client Secret을 사용하는 경우만 설정 |
 | `AUTH_JWT_SECRET` | 32바이트 이상의 임의 비밀 문자열 |
-| `DATABASE_URL` | 로컬은 `postgresql://da_moa:da_moa_local@127.0.0.1:55432/da_moa_dev`, Vercel은 환경별 Neon 연결 문자열 |
-| `ABLY_API_KEY` | 서버 전용 Ably API 키. `da-moa:user:*` 채널의 publish·subscribe 권한이 필요하며 개발·Preview·Production은 별도 앱/키 사용 권장 |
+| `DATABASE_URL` | 로컬은 `postgresql://da_moa:da_moa_local@127.0.0.1:55432/da_moa_dev`, 배포 환경은 해당 PostgreSQL 또는 Neon 연결 문자열 |
 | `NEXT_DEV_ALLOWED_ORIGINS` | 개발 서버 접근 허용 호스트를 쉼표로 구분. 미설정 시 기존 `192.168.219.141`, 빈 값이면 추가 허용 없음. 변경 후 개발 서버 재시작 |
 
 ```bash
@@ -30,7 +29,7 @@ npm run db:seed:test-accounts
 npm run dev
 ```
 
-`npm run db:local:down`은 컨테이너만 중지하고 DB 데이터는 Docker volume에 유지합니다. `da_moa_dev_test`를 담던 기존 `postgres-data` 볼륨은 보존하고 개발 DB는 별도 `postgres-dev-data` 볼륨에 생성합니다. `.env.local`은 Git·Vercel 배포에 포함되지 않습니다.
+`npm run db:local:down`은 컨테이너만 중지하고 DB 데이터는 Docker volume에 유지합니다. `da_moa_dev_test`를 담던 기존 `postgres-data` 볼륨은 보존하고 개발 DB는 별도 `postgres-dev-data` 볼륨에 생성합니다. `.env.local`은 Git 배포에 포함되지 않습니다.
 
 [http://localhost:3000](http://localhost:3000)에서 시작합니다. API 문서는 `/api/docs`, OpenAPI JSON은 `/api/openapi.json`에서 확인할 수 있습니다. [정산기능-intent.md](intent/정산기능-intent.md)는 정책 결정 기록, [정산기능-spec.md](spec/정산기능-spec.md)는 요구사항·상태·권한·인수 기준입니다. 금액 부호는 최신 명세를 따라 **부담액 − 결제액**, 양수는 보낼 돈·음수는 받을 돈입니다.
 
@@ -64,7 +63,7 @@ npm run dev
 
 초기 쓰기는 공통 PostgreSQL advisory transaction lock으로 직렬화합니다. 읽기는 별도 스냅샷을 사용합니다. 이 방식과 PostgreSQL의 증빙 저장은 초기 구현 선택이며, 실제 쓰기 대기나 이미지 저장 비용 또는 배포 인프라의 파일 전달 한계가 문제가 될 때 잠금 세분화·비공개 객체 저장소 직접 업로드 이행을 검토합니다.
 
-모임·회차·지출·정산·계좌 변경은 DB 커밋 후 참여자의 개인 Ably 채널로 재조회 키만 발행합니다. 브라우저는 WebSocket 이벤트를 받으면 기존 인증 API를 다시 읽습니다. 금액·계좌·영수증·초대 토큰은 메시지에 넣지 않으며, 연결이 끊기면 재연결 시 현재 화면을 다시 조회합니다. Ably가 비활성화되거나 일시 실패해도 저장 결과는 유지되고 수동 새로고침을 사용할 수 있습니다.
+모임·회차·지출·정산·계좌 변경은 DB 커밋 후 이 Node 서버의 인증된 사용자별 WebSocket 연결로 재조회 키만 발행합니다. 브라우저는 이벤트를 받으면 기존 인증 API를 다시 읽습니다. 금액·계좌·영수증·초대 토큰은 메시지에 넣지 않으며, 연결이 끊기면 재연결 시 현재 화면을 다시 조회합니다. 실시간 연결이 일시 실패해도 저장 결과는 유지되고 수동 새로고침을 사용할 수 있습니다.
 
 ## 검증
 
@@ -119,9 +118,52 @@ npm run db:seed:test-accounts
 
 ## 배포
 
-배포 런타임도 Node 22.18 이상으로 맞추고 개발·Preview·Production DB와 Ably 앱을 분리합니다. Vercel Project Settings의 Preview와 Production에 각각 해당 Neon `DATABASE_URL`과 서버 전용 `ABLY_API_KEY`를 등록합니다. `vercel.json`이 빌드 전 `npm run db:migrate`를 실행하며, 마이그레이션은 기존 사용자 ID와 카카오 식별자를 보존하고 완료한 이행을 반복하지 않습니다.
+오라클 Compute 인스턴스에서 Node 22.18 이상으로 실행합니다. 기존 Neon `DATABASE_URL`을 그대로 사용할 수 있고, 개발·운영 DB는 분리합니다. `DATABASE_URL`, `AUTH_JWT_SECRET`, 카카오 인증 변수를 설정한 뒤 `npm ci --include=dev`, `npm run db:migrate`, `npm run build`, `npm start` 순서로 실행합니다. 운영 서버는 기본적으로 `127.0.0.1:3000`에만 바인딩됩니다. `PORT`와 `HOST`로 변경할 수 있습니다. 같은 도메인을 유지하면 기존 세션을 유지할 수 있도록 `AUTH_JWT_SECRET`도 유지하고, 도메인이 바뀌면 카카오 콘솔의 Redirect URI와 `KAKAO_REDIRECT_URI`를 함께 변경합니다. 마이그레이션은 기존 사용자 ID와 카카오 식별자를 보존하고 완료한 이행을 반복하지 않습니다.
 
-기존 회원은 계좌 정보가 없으므로 첫 이행에서 기존 세션을 폐기하고 **한 번 재로그인·계좌 등록**을 요구합니다. 스키마를 먼저 이행하고 새 가입·소프트 삭제·도메인 코드를 배포합니다. 구버전의 회원 물리 삭제 코드로 되돌리거나 스키마 롤백으로 과거 자료를 삭제하지 않습니다. Vercel Function은 요청과 응답에 각각 4.5 MB의 플랫폼 상한이 있으므로, 앱 자체 크기 제한을 두지 않아도 multipart 부가 데이터가 포함된 업로드와 AVIF 조회는 이 범위 안에서만 동작합니다. 이를 넘는 파일이 필요하면 비공개 객체 저장소의 직접 업로드·조회 구조가 필요합니다.
+지속 실행에는 systemd를 사용합니다. `/etc/da-moa.env`에 위 서버 환경 변수를 설정하고 소유자만 읽게 한 뒤, 실제 Node 경로와 배포 디렉터리에 맞춰 다음 서비스를 등록합니다.
+
+```ini
+# /etc/systemd/system/da-moa.service
+[Unit]
+Description=Da Moa web app
+After=network-online.target
+
+[Service]
+Type=simple
+User=da-moa
+WorkingDirectory=/srv/da-moa
+Environment=NODE_ENV=production
+EnvironmentFile=/etc/da-moa.env
+ExecStart=/usr/bin/node /srv/da-moa/server.mjs
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+```
+
+TLS가 적용된 Nginx `server` 블록 안에서 앱과 WebSocket을 같은 포트로 프록시합니다. 아래 위치 설정은 기존 도메인과 인증서 설정에 추가합니다.
+
+```nginx
+location = /realtime {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_read_timeout 75s;
+}
+location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+Oracle 방화벽에서는 HTTPS만 공개하고 앱 포트 3000은 공개하지 않습니다. 실시간 알림은 현재 단일 서버 인스턴스 안에서 전달하므로 앱을 한 인스턴스로 실행합니다. 여러 인스턴스로 확장할 때는 인스턴스 간 발행 경로를 추가해야 합니다.
+
+기존 회원은 계좌 정보가 없으므로 첫 이행에서 기존 세션을 폐기하고 **한 번 재로그인·계좌 등록**을 요구합니다. 스키마를 먼저 이행하고 새 가입·소프트 삭제·도메인 코드를 배포합니다. 구버전의 회원 물리 삭제 코드로 되돌리거나 스키마 롤백으로 과거 자료를 삭제하지 않습니다. 큰 증빙 이미지 업로드·조회는 배포 프록시의 요청·응답 크기 상한을 확인해야 합니다.
 
 회차별 통화 선택 전환은 `004` 추가 마이그레이션으로 적용합니다. 기존 `001~003` 파일과 과거 회차의 통화·금액·정산 결과를 유지하며 인증 이행·기존 세션 폐기를 반복하지 않습니다.
 회차 생성자 분리는 `005`, 신규 증빙의 AVIF 변환 저장과 앱의 바이트 상한 제거는 `006` 추가 마이그레이션으로 적용합니다.

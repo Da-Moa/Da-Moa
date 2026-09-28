@@ -1,6 +1,21 @@
 import { AppError } from './errors'
 import { objectBody } from './mutations'
 
+export function requestOrigin(request: Request): URL | null {
+  const host = request.headers.get('host') ?? new URL(request.url).host
+  const protocol = request.headers.get('x-forwarded-proto')?.split(',')[0].trim() || new URL(request.url).protocol.slice(0, -1)
+  if (!host || !['http', 'https'].includes(protocol)) return null
+  try {
+    const origin = new URL(`${protocol}://${host}`)
+    return origin.host === host && origin.pathname === '/' ? origin : null
+  } catch { return null }
+}
+
+export function sameOrigin(request: Request): boolean {
+  const expected = requestOrigin(request)
+  return Boolean(expected && request.headers.get('origin') === expected.origin)
+}
+
 export async function readBytes(request: Request, limit: number, code = 'request_too_large') {
   const tooLarge = () => new AppError(413, code, '요청 크기가 너무 커요')
   if (Number(request.headers.get('content-length')) > limit) throw tooLarge()

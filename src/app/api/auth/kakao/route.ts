@@ -9,11 +9,12 @@ import {
   RETURN_TO_COOKIE_NAME,
   safeReturnTo,
 } from '../../../../lib/auth'
+import { requestOrigin } from '../../../../lib/http'
 
 export const runtime = 'nodejs'
 
 function loginRedirect(request: NextRequest, error: string) {
-  const url = new URL('/login', request.url)
+  const url = new URL('/login', requestOrigin(request) ?? request.url)
   url.searchParams.set('error', error)
   url.searchParams.set('returnTo', safeReturnTo(request.nextUrl.searchParams.get('returnTo')))
   const response = NextResponse.redirect(url)

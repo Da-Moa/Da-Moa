@@ -2,8 +2,8 @@ import { after, NextRequest } from 'next/server'
 import { ACCESS_TOKEN_COOKIE_NAME, readAccessToken } from '../../../lib/auth'
 import { AppError, errorResponse } from '../../../lib/errors'
 import { acceptInvite, createGroup, createInvite, getGroup, getInvite, leaveGroup, listGroups, revokeInvite } from '../../../lib/group-store'
-import { readJsonBody as jsonBody } from '../../../lib/http'
-import { captureGroupAudience, captureRoundAudience, createRealtimeToken, publishGroupInvalidation, publishRoundInvalidation, realtimeEnabled, type RoundAudience } from '../../../lib/realtime-server'
+import { readJsonBody as jsonBody, sameOrigin } from '../../../lib/http'
+import { captureGroupAudience, captureRoundAudience, publishGroupInvalidation, publishRoundInvalidation, realtimeEnabled, type RoundAudience } from '../../../lib/realtime-server'
 import { addReceipt, checkExclusion, createRound, deleteExpense, excludeMember, getReceipt, getRound, getSettlement, listRounds, removeReceipt, roundCommand, saveExpense, setSettlementCheck } from '../../../lib/round-store'
 
 export const runtime = 'nodejs'
@@ -12,12 +12,7 @@ async function handle(request: NextRequest, context: { params: Promise<{ path: s
   try {
     const method = request.method, { path } = await context.params
     const access = readAccessToken(request.cookies.get(ACCESS_TOKEN_COOKIE_NAME)?.value)
-    if (path[0] === 'realtime' && path[1] === 'auth' && path.length === 2 && method === 'GET') {
-      const origin = request.headers.get('origin')
-      if (origin && origin !== request.nextUrl.origin) throw new AppError(403, 'forbidden', '허용되지 않은 요청입니다')
-      return Response.json({ data: await createRealtimeToken(access) }, { headers: { 'Cache-Control': 'private, no-store', Vary: 'Cookie' } })
-    }
-    if (method !== 'GET' && request.headers.get('origin') !== request.nextUrl.origin) throw new AppError(403, 'forbidden', '허용되지 않은 요청입니다')
+    if (method !== 'GET' && !sameOrigin(request)) throw new AppError(403, 'forbidden', '허용되지 않은 요청입니다')
     const key = request.headers.get('idempotency-key') ?? ''
     const query = request.nextUrl.searchParams
     let data: unknown

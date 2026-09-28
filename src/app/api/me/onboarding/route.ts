@@ -5,14 +5,14 @@ import {
 } from '../../../../lib/auth'
 import { completeOnboarding } from '../../../../lib/auth-store'
 import { AppError, errorResponse } from '../../../../lib/errors'
-import { readJsonBody } from '../../../../lib/http'
+import { readJsonBody, sameOrigin } from '../../../../lib/http'
 import { publishBankInvalidation } from '../../../../lib/realtime-server'
 
 export const runtime = 'nodejs'
 
 export async function POST(request: NextRequest) {
   try {
-    if (request.headers.get('origin') !== request.nextUrl.origin) throw new AppError(403, 'forbidden', '허용되지 않은 요청입니다')
+    if (!sameOrigin(request)) throw new AppError(403, 'forbidden', '허용되지 않은 요청입니다')
     const input = await readJsonBody(request, 16384)
     const access = readAccessToken(request.cookies.get(ACCESS_TOKEN_COOKIE_NAME)?.value)
     const returnTo = readReturnToCookie(request.cookies.get(RETURN_TO_COOKIE_NAME)?.value)

@@ -31,5 +31,3 @@ export function resourceKeysForPath(path: string): ResourceKey[] {
   if (parts[1] === 'rounds' && parts[2]) return [`round:${parts[2]}`]
   return []
 }
-
-export const realtimeUserChannel = (userId: string) => `da-moa:user:${userId}`
