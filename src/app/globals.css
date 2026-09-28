@@ -1,10 +1,20 @@
+@font-face { font-family: 'Presentation'; src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/2404@1.0/Freesentation-1Thin.woff2') format('woff2'); font-weight: 100; font-display: swap; }
+@font-face { font-family: 'Presentation'; src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/2404@1.0/Freesentation-2ExtraLight.woff2') format('woff2'); font-weight: 200; font-display: swap; }
+@font-face { font-family: 'Presentation'; src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/2404@1.0/Freesentation-3Light.woff2') format('woff2'); font-weight: 300; font-display: swap; }
+@font-face { font-family: 'Presentation'; src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/2404@1.0/Freesentation-4Regular.woff2') format('woff2'); font-weight: 400; font-display: swap; }
+@font-face { font-family: 'Presentation'; src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/2404@1.0/Freesentation-5Medium.woff2') format('woff2'); font-weight: 500; font-display: swap; }
+@font-face { font-family: 'Presentation'; src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/2404@1.0/Freesentation-6SemiBold.woff2') format('woff2'); font-weight: 600; font-display: swap; }
+@font-face { font-family: 'Presentation'; src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/2404@1.0/Freesentation-7Bold.woff2') format('woff2'); font-weight: 700; font-display: swap; }
+@font-face { font-family: 'Presentation'; src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/2404@1.0/Freesentation-8ExtraBold.woff2') format('woff2'); font-weight: 800; font-display: swap; }
+@font-face { font-family: 'Presentation'; src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/2404@1.0/Freesentation-9Black.woff2') format('woff2'); font-weight: 900; font-display: swap; }
+
 :root {
   --box-shadow: 0 8px 20px rgba(25, 31, 40, .1);
   --box-border-color: #d8dee6;
   --control-shadow: 0 2px 7px rgba(25, 31, 40, .08);
   background: #f2f4f6;
   color: #191f28;
-  font-family: Arial, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
+  font-family: 'Presentation', Arial, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -15,7 +25,7 @@
 html { background: #f2f4f6; }
 body { margin: 0; min-width: 320px; }
 html:has(dialog[open]), body:has(dialog[open]) { overflow: hidden; overscroll-behavior: none; }
-button, input { font: inherit; }
+button, input, select, textarea { font: inherit; }
 button { cursor: pointer; transition: background-color .15s ease; }
 button:disabled { cursor: not-allowed; }
 button:not(:disabled):hover { background-color: #e8edf2; }
@@ -33,6 +43,9 @@ a:focus-visible, button:focus-visible, input:focus-visible, .expense-card:focus-
 
 .app-shell .topbar { align-items: center; display: flex; justify-content: space-between; }
 .app-shell:has(.back-link) .topbar { min-height: 58px; }
+.app-shell .topbar:has(.topbar-title) { margin-bottom: 24px; min-height: 46px; }
+.topbar-title { font-size: 24px; font-weight: 800; line-height: 1.2; margin: 0; }
+.app-shell:has(.topbar-title) .tab-heading { padding-top: 13px; }
 .app-shell .topbar-actions { display: flex; gap: 2px; }
 .brand { display: flex; mix-blend-mode: multiply; text-decoration: none; transition: transform .2s ease; }
 .brand:hover { transform: scale(1.08); }

@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import Link from 'next/link'
 import { ApiError, apiRequest, discardBankAccountRequests } from '../../lib/api-client'
 import { BankFields, bankValues, ErrorNotice, Loading, type Account, useAction, useBankForm, useResource } from '../home/ui'
 
@@ -11,7 +10,7 @@ export default function OnboardingClient() {
   useEffect(() => {
     if (account?.purpose === 'app' && account.onboardingCompletedAt && !account.deletedAt) window.location.replace('/home')
   }, [account])
-  return <main className="app-shell onboarding-page"><Link className="brand" href="/" aria-label="다모아 홈"><img alt="다모아" height="38" src="/logo/da-moa-trans.png" width="46" /></Link>
+  return <main className="app-shell onboarding-page"><header className="topbar"><span className="topbar-title">계좌 등록</span></header>
     <section className="tab-heading"><p>{account?.displayName ?? '다모아에 오신 것을 환영해요'}</p><h1>{account?.deletedAt ? '다시 만나 반가워요' : '정산받을 계좌를 등록해요'}</h1></section>
     <ErrorNotice error={me.error} retry={() => void me.reload()} />
     {!account ? me.loading && <Loading /> : <OnboardingForm account={account} reload={me.reload} />}
