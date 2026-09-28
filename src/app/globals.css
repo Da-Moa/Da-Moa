@@ -160,7 +160,7 @@ h1 { color: #191f28; font-size: clamp(31px, 8.4vw, 39px); line-height: 1.2; marg
 .all-menu-section .section-heading { margin-top: 0; }
 .all-function-row { align-items: center; background: #fff; border: 1px solid var(--box-border-color); border-radius: 17px; box-shadow: var(--box-shadow); color: #191f28; display: flex; gap: 13px; min-height: 78px; padding: 13px; text-align: left; text-decoration: none; transition: transform .2s ease; width: 100%; }
 .all-function-row:hover { transform: scale(1.02); }
-.all-function-icon { align-items: center; background: #e8f8ff; border-radius: 13px; color: #5dc4fc; display: flex; flex: 0 0 46px; height: 46px; justify-content: center; }
+.all-function-icon { align-items: center; background: #e8f8ff; border: 1px solid #a8d9f1; border-radius: 13px; color: #5dc4fc; display: flex; flex: 0 0 46px; height: 46px; justify-content: center; }
 .all-function-copy { display: grid; flex: 1; gap: 4px; min-width: 0; }
 .all-function-copy strong { font-size: 15px; }
 .all-function-copy small { color: #8b95a1; font-size: 12px; }
