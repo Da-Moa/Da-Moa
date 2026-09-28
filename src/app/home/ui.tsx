@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { CircleUserRound, History, House, Menu, Users, X } from 'lucide-react'
+import { ArrowLeft, CircleUserRound, History, House, Menu, Users } from 'lucide-react'
 import { ApiError, apiRequest, discardBankAccountRequests, discardPendingRequest } from '../../lib/api-client'
 import { BANKS } from '../../lib/bank-account'
 import type { RoundStatus } from '../../lib/domain-types'
@@ -257,10 +257,17 @@ export function AccountPanel() {
       }
     })
   }
-  return <div className="stack">
-    <div className="account-provider"><span className="account-avatar">{account.profileImageUrl ? <img alt="" height={56} width={56} referrerPolicy="no-referrer" src={account.profileImageUrl} /> : <CircleUserRound size={28} />}</span><div><strong>{account.displayName ?? '카카오 사용자'}</strong><p className="help-text">{account.email}</p></div></div>
-    <h3>내 계좌</h3>
-    {account.bankAccount && <div className="notice"><p>{account.bankAccount.bankName} · {account.bankAccount.accountNumber} · {account.bankAccount.accountHolder}</p>{!account.bankAccount.verifiedAt && <p className="help-text">확인되지 않은 계좌입니다.</p>}<p className="help-text">송금 전 계좌번호와 예금주를 직접 확인해 주세요.</p></div>}
+  return <div className="stack account-page">
+    <header className="account-page-heading"><Link aria-label="전체로 돌아가기" className="icon-button" href="/home/all"><ArrowLeft size={24} /></Link><h1>내 정보</h1></header>
+    <section className="domain-card account-profile" aria-labelledby="account-profile-heading">
+      <span className="account-avatar">{account.profileImageUrl ? <img alt="" height={80} width={80} referrerPolicy="no-referrer" src={account.profileImageUrl} /> : <CircleUserRound size={40} />}</span>
+      <h2 id="account-profile-heading">{account.displayName ?? '카카오 사용자'}님의 정보</h2>
+      <dl className="account-details"><div><dt>이름</dt><dd>{account.displayName ?? '카카오 사용자'}</dd></div>{account.email && <div><dt>이메일</dt><dd>{account.email}</dd></div>}</dl>
+    </section>
+    <section className="domain-card stack" id="bank-settings" aria-labelledby="bank-settings-heading"><h2 id="bank-settings-heading">계좌 설정</h2>
+    <h3>현재 계좌</h3>
+    {account.bankAccount ? <div className="notice"><p>{account.bankAccount.bankName} · {account.bankAccount.accountNumber} · {account.bankAccount.accountHolder}</p>{!account.bankAccount.verifiedAt && <p className="help-text">확인되지 않은 계좌입니다.</p>}<p className="help-text">송금 전 계좌번호와 예금주를 직접 확인해 주세요.</p></div> : <p className="help-text">등록된 계좌가 없어요.</p>}
+    <h3>계좌 정보 변경</h3>
     <form aria-busy={action.busy} autoComplete="off" className="stack" ref={bankForm.form} onSubmit={event => { event.preventDefault(); void save(event.currentTarget) }}>
       <BankFields key={formKey} disabled={action.busy || !ready} error={action.error} account={account.bankAccount} />
       <p className="help-text">입력한 은행·계좌번호·예금주를 저장해요. 받을 돈이 있는 정산에는 최신 계좌가 표시돼요.</p>
@@ -268,44 +275,31 @@ export function AccountPanel() {
       <button className="text-button" disabled={action.busy} onClick={() => void reloadLatest()} type="button">입력 취소하고 저장된 계좌 보기</button>
       {saved && <p className="notice" role="status">계좌를 저장했어요.</p>}
     </form><ErrorNotice error={action.error} retry={!ready || action.error instanceof ApiError && action.error.code === 'bank_account_conflict' ? () => void reloadLatest() : undefined} />
+    </section>
+    <section className="domain-card stack" aria-labelledby="account-management-heading"><h2 id="account-management-heading">계정 관리</h2>
     {blockedRounds.length > 0 && <div className="notice"><strong>먼저 종료해야 하는 회차</strong><ul>{blockedRounds.map(round => <li key={round.id}><Link href={`/home/rounds/${round.id}`}>{round.groupName ? `${round.groupName} · ` : ''}{round.name}</Link></li>)}</ul></div>}
     <button className="secondary-button" disabled={action.busy} onClick={() => void logout()} type="button">로그아웃</button>
     <button className="secondary-button danger-outline-button" disabled={action.busy} onClick={() => void withdraw()} type="button">회원 탈퇴</button>
+    </section>
   </div>
 }
 
 export function AppShell({ children, realtimeEnabled }: { children: ReactNode; realtimeEnabled: boolean }) {
   const pathname = usePathname() ?? '/home'
   const me = useResource<Account>('/api/me')
-  const dialog = useRef<HTMLDialogElement>(null)
-  const [accountOpen, setAccountOpen] = useState(false)
   const account = me.data
   useEffect(() => {
     if (account && (account.purpose === 'onboarding' || !account.onboardingCompletedAt || account.deletedAt)) window.location.replace(`/onboarding?returnTo=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`)
   }, [account])
-  useEffect(() => {
-    dialog.current?.close()
-    setAccountOpen(false)
-  }, [pathname])
-  useEffect(() => {
-    if (!account || account.purpose !== 'app' || !account.onboardingCompletedAt || account.deletedAt) return
-    const url = new URL(window.location.href)
-    if (url.searchParams.get('account') !== '1') return
-    setAccountOpen(true)
-    url.searchParams.delete('account')
-    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`)
-  }, [account])
-  useEffect(() => { if (accountOpen) dialog.current?.showModal() }, [accountOpen])
   if (!account || account.purpose !== 'app' || !account.onboardingCompletedAt || account.deletedAt) return <main className="app-shell"><Link className="brand" href="/">다모아</Link><Loading text="로그인 상태를 확인하고 있어요…" /><ErrorNotice error={me.error} retry={() => void me.reload()} /></main>
   const links = [
     { href: '/home', label: '홈', icon: House, active: pathname === '/home' },
     { href: '/home/groups', label: '모임', icon: Users, active: pathname.startsWith('/home/groups') || pathname.startsWith('/home/rounds') },
     { href: '/home/history', label: '정산 기록', icon: History, active: pathname === '/home/history' },
-    { href: '/home/all', label: '전체', icon: Menu, active: pathname === '/home/all' },
+    { href: '/home/all', label: '전체', icon: Menu, active: pathname === '/home/all' || pathname === '/home/account' },
   ]
   return <RealtimeProvider accountId={account.id} enabled={realtimeEnabled} reloadAccount={me.reload}><AccountContext.Provider value={{ account, reloadAccount: me.reload }}><main className="app-shell">
-    <header className="topbar"><Link className="brand" href="/home" aria-label="다모아 홈"><img alt="다모아" height="38" src="/logo/da-moa-trans.png" width="46" /></Link><button aria-label="내 계좌와 계정" aria-haspopup="dialog" className="icon-button" onClick={() => setAccountOpen(true)} type="button"><CircleUserRound size={24} /></button></header>
-    <dialog className="account-dialog" aria-labelledby="account-dialog-heading" ref={dialog} onClose={() => setAccountOpen(false)} onClick={event => { if (event.target === event.currentTarget) event.currentTarget.close() }}><div className="account-dialog-content"><div className="account-dialog-header"><h2 id="account-dialog-heading">내 계정</h2><button className="icon-button" aria-label="계정 창 닫기" type="button" onClick={() => dialog.current?.close()}><X size={20} /></button></div>{accountOpen && <AccountPanel />}</div></dialog>
+    <header className="topbar"><Link className="brand" href="/home" aria-label="다모아 홈"><img alt="다모아" height="38" src="/logo/da-moa-trans.png" width="46" /></Link></header>
     {children}
     <nav aria-label="주 메뉴" className="bottom-nav">{links.map(({ href, label, icon: Icon, active }) => <Link key={href} href={href} aria-current={active ? 'page' : undefined}><Icon size={22} /><span>{label}</span></Link>)}</nav>
   </main></AccountContext.Provider></RealtimeProvider>
