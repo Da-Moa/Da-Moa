@@ -83,6 +83,33 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       for (const round of rounds) await command(round.id, 'cancel')
     })
 
+    await t.test('group search keeps its filter across cursor pages', async () => {
+      const created = await Promise.all(['Alpha 모임 검색', 'Beta 모임 검색', 'Gamma 모임 검색'].map(name => createGroup(a, key(), { name })))
+      const first = await listGroups(a, new URLSearchParams({ q: ' 모임 검색 ', limit: '2' }))
+      const second = await listGroups(a, new URLSearchParams({ q: '모임 검색', limit: '2', cursor: first.nextCursor! }))
+      assert.equal(first.items.length, 2)
+      assert.equal(second.items.length, 1)
+      assert.deepEqual(new Set([...first.items, ...second.items].map(item => item.id)), new Set(created.map(group => group.id)))
+      assert.equal(second.nextCursor, null)
+      assert.deepEqual((await listGroups(a, new URLSearchParams({ q: ' alpha ' }))).items.map(group => group.id), [created[0].id])
+      await assert.rejects(listGroups(a, new URLSearchParams({ q: '   ' })), code('invalid_input'))
+    })
+
+    await t.test('group list previews at most five active members', async () => {
+      const group = await createGroup(a, key(), { name: '참여 인원 미리보기 검증' })
+      const invite = await createInvite(a, key(), group.id, {})
+      const extras = [await member('목록 회원 1'), await member('목록 회원 2')]
+      for (const person of [b, c, d, ...extras]) await acceptInvite(person, key(), invite.sharePath!.split('/').at(-1)!)
+      const listed = (await listGroups(a, new URLSearchParams({ q: '참여 인원 미리보기 검증' }))).items[0]
+      assert.equal(listed.memberCount, 6)
+      assert.equal(listed.memberPreview.length, 5)
+      assert.deepEqual(listed.memberPreview.map(person => person.userId), (await getGroup(a, group.id)).members.slice(0, 5).map(person => person.userId))
+      await leaveGroup(extras[0], key(), group.id)
+      const remaining = (await listGroups(a, new URLSearchParams({ q: '참여 인원 미리보기 검증' }))).items[0]
+      assert.equal(remaining.memberCount, 5)
+      assert.equal(remaining.memberPreview.some(person => person.userId === extras[0].userId), false)
+    })
+
     await t.test('any active member starts and manages a round they create', async () => {
       const withoutGroupOwner = await createRound(b, key(), g.id, { name: '모임 생성자 없는 회차', currency: 'KRW', participantIds: [b.userId, c.userId] })
       await assert.rejects(get(withoutGroupOwner.id, a), code('not_found'))
@@ -601,10 +628,12 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       await command(r.id, 'confirm'); await command(r.id, 'send'); await command(r.id, 'force-complete')
 
       assert.equal((await get(r.id)).members.find(member => member.userId === departed.userId)?.profileImageUrl, profileImageUrl)
+      assert.equal((await listGroups(a, new URLSearchParams({ q: '프로필 표시 검증' }))).items[0].memberPreview.find(member => member.userId === departed.userId)?.profileImageUrl, profileImageUrl)
       const activeSettlement = await getSettlement(a, r.id)
       assert.equal(activeSettlement.outgoing[0].profileImageUrl, profileImageUrl)
       assert.equal(activeSettlement.confirmations.find(member => member.userId === departed.userId)?.profileImageUrl, profileImageUrl)
       await withdrawAccount(departed)
+      assert.equal((await listGroups(a, new URLSearchParams({ q: '프로필 표시 검증' }))).items[0].memberCount, 1)
       assert.equal((await get(r.id)).members.find(member => member.userId === departed.userId)?.profileImageUrl, null)
       const deletedSettlement = await getSettlement(a, r.id)
       assert.equal(deletedSettlement.outgoing[0].profileImageUrl, null)

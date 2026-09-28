@@ -143,6 +143,17 @@ test('round lists document group and round name search', () => {
   }
 })
 
+test('group list documents name search with cursor pagination', () => {
+  const parameters = paths['/api/groups'].get.parameters ?? []
+  const search = parameters.find(parameter => parameter.name === 'q') as { schema?: { minLength?: number; maxLength?: number } } | undefined
+  assert.deepEqual(search?.schema, { type: 'string', minLength: 1, maxLength: 100 })
+  assert.ok(parameters.some(parameter => parameter.name === 'cursor'))
+  const listItem = openApiDocument.components.schemas.GroupListItem as DocumentedSchema
+  assert.ok(listItem.required?.includes('memberCount'))
+  assert.equal(listItem.properties?.memberPreview.maxItems, 5)
+  assert.ok(listItem.properties?.memberPreview.items?.properties?.profileImageUrl)
+})
+
 test('custom expense allocation documents exact original shares and total validation', () => {
   for (const [path, method] of [['/api/rounds/{roundId}/expenses', 'post'], ['/api/rounds/{roundId}/expenses/{expenseId}', 'patch']]) {
     const input = paths[path][method].requestBody!.content['application/json'].schema as DocumentedSchema

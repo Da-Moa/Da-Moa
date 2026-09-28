@@ -4,7 +4,7 @@ import { requireAccount } from './authorization'
 import { withReadTransaction, withWriteTransaction, type Database } from './db'
 import { AppError, badInput } from './errors'
 import { replayMutation, saveMutation } from './mutations'
-import { MAX_GROUP_MEMBERS, type GroupDetail, type GroupSummary, type MutationResult, type Page } from './domain-types'
+import { MAX_GROUP_MEMBERS, type GroupDetail, type GroupListItem, type GroupSummary, type MutationResult, type Page } from './domain-types'
 
 export type Identity = AccessToken | null
 export const nowSeconds = () => Math.floor(Date.now() / 1000)
@@ -72,13 +72,24 @@ function groupDTO(row: Record<string, any>): GroupSummary {
   return { id: row.id, name: row.name, creatorId: row.creator_id, createdAt: Number(row.created_at) }
 }
 
-export async function listGroups(access: Identity, query: URLSearchParams): Promise<Page<GroupSummary>> {
+export async function listGroups(access: Identity, query: URLSearchParams): Promise<Page<GroupListItem>> {
   const { limit, cursor } = pagination(query)
+  const search = query.has('q') ? textInput(query.get('q'), 100) : null
   return withReadTransaction(async client => {
     const account = await requireAccount(client, access)
     const { rows } = await client.query(`SELECT g.* FROM groups g JOIN group_members m ON m.group_id=g.id AND m.user_id=$1 AND m.left_at IS NULL
-      WHERE ($2::bigint IS NULL OR (g.created_at,g.id)<($2::bigint,$3::text)) ORDER BY g.created_at DESC,g.id DESC LIMIT $4`, [account.id, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1])
-    return pageOf(rows.map(groupDTO), limit, row => row)
+      WHERE ($2::text IS NULL OR strpos(lower(g.name),lower($2))>0)
+      AND ($3::bigint IS NULL OR (g.created_at,g.id)<($3::bigint,$4::text)) ORDER BY g.created_at DESC,g.id DESC LIMIT $5`, [account.id, search, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1])
+    const page = pageOf(rows.map(groupDTO), limit, row => row)
+    if (!page.items.length) return { ...page, items: [] }
+    const { rows: members } = await client.query(`SELECT m.group_id,u.id AS "userId",COALESCE(u.display_name,'카카오 사용자') AS "displayName",u.profile_image_url AS "profileImageUrl"
+      FROM group_members m JOIN groups g ON g.id=m.group_id JOIN users u ON u.id=m.user_id
+      WHERE m.group_id=ANY($1::text[]) AND m.left_at IS NULL AND u.deleted_at IS NULL AND u.onboarding_completed_at IS NOT NULL
+      ORDER BY m.group_id,CASE WHEN u.id=g.creator_id THEN 0 ELSE 1 END,u.id`, [page.items.map(group => group.id)])
+    return { ...page, items: page.items.map(group => {
+      const active = members.filter(member => member.group_id === group.id)
+      return { ...group, memberCount: active.length, memberPreview: active.slice(0, 5).map(member => ({ userId: member.userId, displayName: member.displayName, profileImageUrl: member.profileImageUrl })) }
+    }) }
   })
 }
 
