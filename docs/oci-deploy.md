@@ -54,7 +54,7 @@ sudo install -T -o da-moa -g da-moa -m 600 /tmp/da-moa-minio.license /srv/da-moa
 test -f /srv/da-moa/shared/minio.license
 ```
 
-서버에서 `sudoedit /srv/da-moa/shared/.minio.env`를 열고 MinIO 관리자 계정만 넣습니다.
+첫 저장소 실행을 위해 서버에서 `sudoedit /srv/da-moa/shared/.minio.env`를 열고 MinIO 관리자 계정만 넣습니다. 첫 앱 배포 전에 같은 내용을 GitHub `production` Environment Secret `OCI_MINIO_ENV`에도 등록합니다. 이후 배포는 Secret에서 파일을 다시 만들고 종료 시 삭제합니다.
 
 ```dotenv
 MINIO_ROOT_USER=고유한_관리자_아이디
@@ -254,10 +254,11 @@ systemctl list-timers | grep -i certbot
 | Secret | `OCI_SSH_PRIVATE_KEY` | 배포 전용 개인키 전체 내용 |
 | Secret | `OCI_SSH_KNOWN_HOSTS` | 인스턴스 SSH 호스트 키의 `known_hosts` 한 줄 |
 | Secret | `OCI_PRODUCTION_ENV` | `.env.production` 전체 내용(여러 줄 그대로 입력) |
+| Secret | `OCI_MINIO_ENV` | `.minio.env` 전체 내용(여러 줄 그대로 입력) |
 
 `OCI_SSH_KNOWN_HOSTS`는 로컬에서 `ssh-keyscan -t ed25519 인스턴스_IP`로 얻을 수 있습니다. 등록 전에 이미 신뢰하는 SSH 접속에서 확인한 호스트 키 지문과 `ssh-keygen -lf` 결과를 대조합니다. 개인키를 Git이나 서버의 웹 루트에 복사하지 않습니다. `OCI_HOST`에는 `known_hosts`에 사용한 것과 같은 호스트를 넣습니다.
 
-`OCI_PRODUCTION_ENV`에는 위의 `POSTGRES_PASSWORD`부터 `PORT`까지 실제 운영 값을 포함한 `.env.production` 전체 내용을 붙여 넣습니다. 이 Secret이 없거나 비어 있으면 배포는 서버 파일을 바꾸기 전에 중단합니다. Actions는 배포 중에만 서버의 `/srv/da-moa/shared/.env.production`을 권한 `600`으로 만들고, 성공·실패 시 업로드본과 함께 삭제합니다. 기존 배포에서 남은 환경 파일과 백업본도 삭제합니다. 값만 바꿨다면 **Actions → CI → Run workflow → main**을 다시 실행하면 같은 커밋에서도 앱 컨테이너를 재생성합니다. 환경 파일을 보관하지 않으므로 잘못된 새 Secret으로 컨테이너가 교체된 뒤에는 이전 설정으로 자동 복구할 수 없습니다. Secret을 수정해 다시 배포해야 합니다. Docker 재시작 정책에 따른 기존 컨테이너 재시작에는 파일이 필요하지 않지만, 수동 Compose 재생성에는 Secret을 다시 전달해야 합니다. `POSTGRES_PASSWORD`는 기존 DB 계정 비밀번호를 자동으로 바꾸지 않으므로 회전할 때는 위의 `\password da_moa` 절차도 필요합니다. `.minio.env`와 `minio.license`는 서버에 계속 보관합니다. 또한 실행 중인 컨테이너의 환경변수는 Docker 권한으로 조회할 수 있어, 파일 삭제만으로 인스턴스 침해 시 비밀값 노출을 막을 수는 없습니다. [GitHub Environment Secret 설정](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets)
+`OCI_PRODUCTION_ENV`에는 위의 `POSTGRES_PASSWORD`부터 `PORT`까지 실제 운영 값을 포함한 `.env.production` 전체 내용을 붙여 넣습니다. `OCI_MINIO_ENV`에는 `MINIO_ROOT_USER`와 `MINIO_ROOT_PASSWORD`가 들어 있는 `.minio.env` 전체 내용을 넣습니다. 둘 중 하나라도 없거나 비어 있으면 배포를 시작하지 않습니다. Actions는 배포 중에만 서버에 두 파일을 권한 `600`으로 만들고, 성공·실패 시 업로드본과 함께 삭제합니다. 기존 배포에서 남은 `.env.production` 백업본도 삭제합니다. 앱 환경값만 바꿨다면 **Actions → CI → Run workflow → main**을 다시 실행하면 같은 커밋에서도 앱 컨테이너를 재생성합니다. MinIO 컨테이너는 배포 때 `--no-recreate`로 유지하므로 `OCI_MINIO_ENV`의 관리자 값을 바꿔도 기존 컨테이너에는 적용되지 않습니다. MinIO 관리자 자격 증명 변경은 별도로 진행해야 합니다. 환경 파일을 보관하지 않으므로 잘못된 새 Secret으로 앱이 교체된 뒤에는 이전 설정으로 자동 복구할 수 없습니다. Secret을 수정해 다시 배포해야 합니다. Docker 재시작 정책에 따른 기존 컨테이너 재시작에는 파일이 필요하지 않지만, 수동 Compose 재생성에는 두 Secret을 다시 전달해야 합니다. `POSTGRES_PASSWORD`는 기존 DB 계정 비밀번호를 자동으로 바꾸지 않으므로 회전할 때는 위의 `\password da_moa` 절차도 필요합니다. `minio.license`는 서버에 계속 보관합니다. 실행 중인 컨테이너의 환경변수는 Docker 권한으로 조회할 수 있어, 파일 삭제만으로 인스턴스 침해 시 비밀값 노출을 막을 수는 없습니다. [GitHub Environment Secret 설정](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets)
 
 MinIO 컨테이너와 비공개 버킷·앱 전용 키를 먼저 준비한 뒤 변경 사항을 `main`에 반영하면 CI가 자동으로 배포합니다. 처음에는 **Actions → CI → Run workflow → main**으로도 실행할 수 있습니다. 완료 후 `https://161.33.3.222/api/docs`와 실제 카카오 로그인·영수증 업로드·조회·삭제·정산 흐름을 확인합니다. 서버에서 상태와 로그는 다음 명령으로 확인합니다.
 

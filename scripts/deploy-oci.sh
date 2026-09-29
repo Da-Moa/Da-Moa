@@ -8,28 +8,32 @@ root=/srv/da-moa
 release="$root/releases/$sha"
 archive="$HOME/da-moa-$sha.tar.gz"
 incoming_env="$HOME/da-moa-$sha.env.production"
+incoming_minio_env="$HOME/da-moa-$sha.minio.env"
 env_file="$root/shared/.env.production"
+minio_env_file="$root/shared/.minio.env"
 cleanup() {
   local status=$?
   trap - EXIT
-  rm -f "$archive" "$incoming_env" "$env_file" "$env_file.next" "$root/shared"/.env.production.backup.*
+  rm -f "$archive" "$incoming_env" "$incoming_minio_env" "$env_file" "$env_file.next" "$minio_env_file" "$minio_env_file.next" "$root/shared"/.env.production.backup.*
   exit "$status"
 }
 trap cleanup EXIT
-test -f "$root/shared/.minio.env"
 test -f "$root/shared/minio.license"
 test -f "$archive"
 test -s "$incoming_env"
+test -s "$incoming_minio_env"
 previous=''
 if [ -L "$root/current" ]; then previous=$(readlink -f "$root/current"); fi
 install -m 600 "$incoming_env" "$env_file.next"
 mv -Tf "$env_file.next" "$env_file"
+install -m 600 "$incoming_minio_env" "$minio_env_file.next"
+mv -Tf "$minio_env_file.next" "$minio_env_file"
 if [ "$previous" != "$release" ]; then
   rm -rf "$release"
   mkdir -p "$release"
   tar -xzf "$archive" -C "$release"
   ln -s "$env_file" "$release/.env.production"
-  ln -s "$root/shared/.minio.env" "$release/.minio.env"
+  ln -s "$minio_env_file" "$release/.minio.env"
 fi
 
 export APP_VERSION="$sha"
