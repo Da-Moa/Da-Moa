@@ -38,6 +38,8 @@ npm run dev
 
 [http://localhost:3000](http://localhost:3000)에서 시작합니다. API 문서는 `/api/docs`, OpenAPI JSON은 `/api/openapi.json`에서 확인할 수 있습니다. [정산기능-intent.md](intent/정산기능-intent.md)는 정책 결정 기록, [정산기능-spec.md](spec/정산기능-spec.md)는 요구사항·상태·권한·인수 기준입니다. 금액 부호는 최신 명세를 따라 **부담액 − 결제액**, 양수는 보낼 돈·음수는 받을 돈입니다.
 
+상태 확인 API는 인증 없이 사용할 수 있습니다. `/api/health/live`는 앱 응답만 확인하며, `/api/health/dependencies`는 PostgreSQL `SELECT 1`과 MinIO 저장소의 읽기·쓰기 정족수를 각각 확인합니다. `/api/health`는 앱과 두 의존 서비스를 종합해 반환합니다. 의존 서비스가 하나라도 실패하면 해당 API는 `503`과 각 검사 결과를 반환하며 응답을 캐시하지 않습니다. MinIO 검사는 실제 객체 작업이나 영수증 버킷·키 권한까지 검증하지 않습니다.
+
 ## 사용자 흐름
 
 1. 카카오 로그인 후 은행·전체 계좌번호·예금주를 직접 입력해 가입합니다. 계좌 자동 연동·실명조회는 제공하지 않으며, 송금 전 계좌번호와 예금주를 직접 확인해야 합니다.

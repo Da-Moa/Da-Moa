@@ -21,6 +21,7 @@ printf '%s\n' "$*" >> "$DOCKER_LOG"
 EOF
 cat > "$tmp/bin/curl" <<'EOF'
 #!/usr/bin/env bash
+[[ " $* " == *'http://127.0.0.1:3000/api/health'* ]]
 test ! -f "$HOME/fail-health"
 EOF
 cat > "$tmp/bin/mv" <<'EOF'

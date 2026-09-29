@@ -1,6 +1,6 @@
 # OCI Ubuntu arm64 배포
 
-GitHub Actions는 PR에서 `npm test`와 `npm run build`를 실행합니다. `main` push 또는 수동 실행 시 검증을 통과한 커밋을 SSH로 전송합니다. 서버는 arm64 앱 이미지를 빌드하고 Compose에서 앱·PostgreSQL·MinIO를 실행합니다. PostgreSQL과 MinIO는 각각 이름 있는 Docker 볼륨에 데이터를 저장합니다. 첫 배포에서는 빈 DB에 스키마를 만들고, 앱 전환 후 `/api/openapi.json` 점검에 실패하면 이전 앱 이미지로 되돌립니다. 배포용 앱 환경 파일은 배포가 끝나면 서버에서 삭제합니다.
+GitHub Actions는 PR에서 `npm test`와 `npm run build`를 실행합니다. `main` push 또는 수동 실행 시 검증을 통과한 커밋을 SSH로 전송합니다. 서버는 arm64 앱 이미지를 빌드하고 Compose에서 앱·PostgreSQL·MinIO를 실행합니다. PostgreSQL과 MinIO는 각각 이름 있는 Docker 볼륨에 데이터를 저장합니다. 첫 배포에서는 빈 DB에 스키마를 만들고, 앱 전환 후 `/api/health` 점검에 실패하면 이전 앱 이미지로 되돌립니다. 배포용 앱 환경 파일은 배포가 끝나면 서버에서 삭제합니다.
 
 ## 1. 공인 IP와 인스턴스 준비
 
@@ -273,4 +273,4 @@ readlink -f /srv/da-moa/current
 
 배포 실패 시 Actions 로그를 확인합니다. 빌드나 DB 스키마 생성 실패는 현재 앱을 유지합니다. 전환 직후 점검 실패는 이전 앱 이미지로 복귀를 시도하지만 새 환경값을 사용하므로 잘못된 Secret은 수정 후 재배포해야 합니다. 서버 용량이 부족해지면 현재 및 복구에 필요한 앱 이미지와 릴리스를 제외한 오래된 항목을 삭제합니다.
 
-첫 배포에서 `curl: (52) Empty reply from server`가 나왔다면 앱 시작 중 연결이 끊겼거나 앱이 재시작 중일 수 있습니다. 서버에서 `sudo docker logs --tail=100 da-moa-app-1`, `sudo docker ps -a --filter name=da-moa-app-1`, `curl -i --max-time 5 http://127.0.0.1:3000/api/openapi.json`을 확인합니다. 배포 스크립트는 일시적인 빈 응답도 최대 2분 동안 재시도합니다. `current` 심볼릭 링크가 없는 첫 배포 실패에서는 위의 컨테이너 명령으로 확인합니다.
+첫 배포에서 `curl: (52) Empty reply from server`가 나왔다면 앱 시작 중 연결이 끊겼거나 앱이 재시작 중일 수 있습니다. 서버에서 `sudo docker logs --tail=100 da-moa-app-1`, `sudo docker ps -a --filter name=da-moa-app-1`, `curl -i --max-time 5 http://127.0.0.1:3000/api/health`를 확인합니다. 배포 스크립트는 일시적인 빈 응답도 최대 2분 동안 재시도합니다. `current` 심볼릭 링크가 없는 첫 배포 실패에서는 위의 컨테이너 명령으로 확인합니다.

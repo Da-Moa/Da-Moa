@@ -109,6 +109,12 @@ function operation(tag: string, summary: string, options: OperationOptions = {})
   }
 }
 const roundCommand = (summary: string, description: string) => operation('정산', summary, { mutation: true, request: versionBody, description })
+const healthCheck: Schema = { type: 'string', enum: ['ok', 'down'] }
+function healthOperation(summary: string, names: string[]) {
+  const checks = object(Object.fromEntries(names.map(name => [name, name === 'application' ? { type: 'string', enum: ['ok'] } : healthCheck])), names)
+  const response = { content: { 'application/json': { schema: object({ status: names.includes('database') ? healthCheck : { type: 'string', enum: ['ok'] }, checks }, ['status', 'checks']) } } }
+  return { tags: ['상태'], summary, description: '인증 없이 조회합니다. 결과를 캐시하지 않으며 내부 오류·연결 정보는 반환하지 않습니다.', security: [], responses: { '200': { description: '모든 검사 정상', ...response }, ...(names.includes('database') ? { '503': { description: '하나 이상의 의존 서비스 장애', ...response } } : {}) } }
+}
 const domainPaths = {
   '/api/me': { get: operation('계정', '본인 프로필·가입 상태·계좌 조회', { response: ref('Me'), description: 'app 또는 onboarding 목적의 활성 세션으로 본인 데이터만 조회합니다. 일반 기능은 가입 완료 app 세션이 필요합니다.' }) },
   '/api/me/onboarding': { post: operation('계정', '계좌 저장 후 가입·명시적 재가입 완료', { response: object({ id, returnTo: string }, ['id', 'returnTo']), request: { ...object({ ...bankInputFields, confirmRejoin: { type: 'boolean', description: '탈퇴 계정의 명시적 재가입 동의' } }, bankInputRequired), additionalProperties: false }, parameters: [mutationParameters[0]], description: '은행·계좌번호·예금주를 직접 입력해 가입을 완료합니다. 계좌·가입·새 app 세션을 원자적으로 저장하며 기존 모임·관리 권한은 복구하지 않습니다. 쿠키 응답 유실은 카카오 재로그인으로 복구합니다.' }) },
@@ -167,9 +173,12 @@ export const openApiDocument = {
     description: '카카오 인증·계좌·모임·회차·증빙·개인 정산 API. HttpOnly 쿠키로 인증하며 변경은 origin·권한·멱등 키를 검증합니다. 금액은 정확한 문자열이고 양수 잔액은 보낼 돈, 음수는 받을 돈입니다.',
   },
   servers: [{ url: '/', description: '현재 배포 주소' }],
-  tags: [{ name: '인증', description: '카카오 로그인과 토큰 관리' }, { name: '계정' }, { name: '모임' }, { name: '지출' }, { name: '정산' }],
+  tags: [{ name: '상태' }, { name: '인증', description: '카카오 로그인과 토큰 관리' }, { name: '계정' }, { name: '모임' }, { name: '지출' }, { name: '정산' }],
   paths: {
     ...documentedDomainPaths,
+    '/api/health/live': { get: healthOperation('애플리케이션 응답 확인', ['application']) },
+    '/api/health/dependencies': { get: healthOperation('PostgreSQL·MinIO 저장소 읽기·쓰기 상태 확인', ['database', 'minio']) },
+    '/api/health': { get: healthOperation('전체 상태 확인', ['application', 'database', 'minio']) },
     '/api/auth/kakao': {
       get: {
         tags: ['인증'],

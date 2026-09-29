@@ -45,7 +45,7 @@ fi
 dc run --rm --no-deps app npm run db:migrate
 app_up=(up -d --no-deps app)
 if [ "$previous" = "$release" ]; then app_up=(up -d --force-recreate --no-deps app); fi
-if ! dc "${app_up[@]}" || ! curl --fail --silent --show-error --retry 60 --retry-delay 2 --retry-max-time 120 --retry-all-errors --max-time 5 --output /dev/null http://127.0.0.1:3000/api/openapi.json; then
+if ! dc "${app_up[@]}" || ! curl --fail --silent --show-error --retry 60 --retry-delay 2 --retry-max-time 120 --retry-all-errors --max-time 5 --output /dev/null http://127.0.0.1:3000/api/health; then
   if [ -n "$previous" ] && [ "$previous" != "$release" ]; then
     APP_VERSION="$(basename "$previous")" docker compose -p da-moa --env-file "$env_file" -f "$previous/compose.production.yaml" up -d --force-recreate --no-deps app
   fi
