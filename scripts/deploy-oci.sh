@@ -39,6 +39,9 @@ fi
 export APP_VERSION="$sha"
 dc() { docker compose -p da-moa --env-file "$env_file" -f "$release/compose.production.yaml" "$@"; }
 dc up -d --wait --no-recreate postgres minio
+dc up -d --wait prometheus grafana
+curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-max-time 60 --retry-all-errors --max-time 3 --output /dev/null http://127.0.0.1:9090/-/ready
+curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-max-time 60 --retry-all-errors --max-time 3 --output /dev/null http://127.0.0.1:3001/api/health
 if [ "$previous" != "$release" ]; then
   dc build app
 fi

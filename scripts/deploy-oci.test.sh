@@ -21,8 +21,11 @@ printf '%s\n' "$*" >> "$DOCKER_LOG"
 EOF
 cat > "$tmp/bin/curl" <<'EOF'
 #!/usr/bin/env bash
-[[ " $* " == *'http://127.0.0.1:3000/api/health'* ]]
-test ! -f "$HOME/fail-health"
+case " $* " in
+  *'http://127.0.0.1:9090/-/ready'*|*'http://127.0.0.1:3001/api/health'*) ;;
+  *'http://127.0.0.1:3000/api/health'*) test ! -f "$HOME/fail-health" ;;
+  *) exit 1 ;;
+esac
 EOF
 cat > "$tmp/bin/mv" <<'EOF'
 #!/usr/bin/env bash
@@ -43,6 +46,7 @@ test ! -e "$root/shared/.env.production.backup.legacy"
 test ! -e "$HOME/da-moa-$sha.env.production"
 test ! -e "$HOME/da-moa-$sha.minio.env"
 grep -q 'up -d --force-recreate --no-deps app' "$DOCKER_LOG"
+grep -q 'up -d --wait prometheus grafana' "$DOCKER_LOG"
 
 printf 'BAD=value\n' > "$HOME/da-moa-$sha.env.production"
 printf 'BAD_MINIO=value\n' > "$HOME/da-moa-$sha.minio.env"

@@ -21,6 +21,9 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: bash scripts/deploy-oci.test.sh
+      - run: POSTGRES_PASSWORD=test GRAFANA_ADMIN_PASSWORD=test docker compose -f compose.production.yaml config --no-env-resolution --quiet
+      - run: docker run --rm -v "$PWD/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro" --entrypoint /bin/promtool prom/prometheus:v3.14.0 check config /etc/prometheus/prometheus.yml
+      - run: docker run --rm -v "$PWD/monitoring/blackbox.yml:/etc/blackbox_exporter/config.yml:ro" prom/blackbox-exporter:v0.28.0 --config.file=/etc/blackbox_exporter/config.yml --config.check
       - run: npm run build
 
   deploy:
