@@ -68,6 +68,7 @@ POSTGRES_PASSWORD=openssl_rand_hex_32로_생성한_값
 DATABASE_URL=postgresql://da_moa:위와_같은_비밀번호@postgres:5432/da_moa
 AUTH_JWT_SECRET=32바이트_이상_임의_문자열
 KAKAO_REST_API_KEY=카카오_REST_API_키
+KAKAO_CLIENT_SECRET=
 KAKAO_REDIRECT_URI=https://203.0.113.10/auth/v1/kakao
 MINIO_ENDPOINT=http://minio:9000
 MINIO_BUCKET=da-moa-receipts
@@ -76,7 +77,7 @@ MINIO_SECRET_KEY=버킷_생성_후_채울_앱_전용_비밀_키
 PORT=3000
 ```
 
-`AUTH_JWT_SECRET`은 `openssl rand -base64 48`로 생성할 수 있습니다. 카카오 콘솔에 Redirect URI를 동일하게 등록하고 OpenID Connect를 활성화합니다.
+`AUTH_JWT_SECRET`은 `openssl rand -base64 48`로 생성할 수 있습니다. 카카오 콘솔에 Redirect URI를 동일하게 등록하고 OpenID Connect를 활성화합니다. 카카오 REST API 키의 클라이언트 시크릿이 ON이면 `KAKAO_CLIENT_SECRET`에 **별도 코드**를 설정합니다. `KAKAO_REST_API_KEY`에 시크릿을 넣으면 안 됩니다. [카카오 토큰 요청](https://developers.kakao.com/docs/ko/kakaologin/rest-api)
 
 `POSTGRES_PASSWORD`는 PostgreSQL 데이터 볼륨을 **처음 초기화할 때만** `da_moa` 계정에 적용됩니다. 이후 `.env.production`의 값을 바꿔도 기존 DB 비밀번호는 바뀌지 않습니다. 마이그레이션에서 `password authentication failed for user "da_moa"`가 나오면 `POSTGRES_PASSWORD`와 `DATABASE_URL`의 비밀번호가 같은지 확인합니다. 특수문자가 있으면 URL 쪽 비밀번호는 퍼센트 인코딩해야 합니다. DB에 설정된 비밀번호를 변경해야 한다면 서버에서 다음 명령으로 `psql`에 들어가 `\password da_moa`를 실행하고, `.env.production`과 같은 새 비밀번호를 두 번 입력한 뒤 `\q`로 나옵니다. 데이터 볼륨은 유지됩니다. [PostgreSQL 공식 이미지](https://hub.docker.com/_/postgres), [psql 비밀번호 변경](https://www.postgresql.org/docs/17/sql-alterrole.html)
 
