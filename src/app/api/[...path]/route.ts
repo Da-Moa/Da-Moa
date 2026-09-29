@@ -51,7 +51,7 @@ async function handle(request: NextRequest, context: { params: Promise<{ path: s
     } else if (path[0] === 'rounds' && path.length === 6 && path[2] === 'expenses' && path[4] === 'receipts' && method === 'DELETE') data = await removeReceipt(access, key, path[1], path[3], path[5], await jsonBody(request))
     else if (path[0] === 'receipts' && path.length === 2 && method === 'GET') {
       const receipt = await getReceipt(access, path[1])
-      return new Response(receipt.content, { headers: { 'Content-Type': receipt.mimeType, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, no-store' } })
+      return new Response(new Uint8Array(receipt.content).buffer, { headers: { 'Content-Type': receipt.mimeType, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, no-store' } })
     } else throw new AppError(404, 'not_found', '요청한 API를 찾을 수 없어요')
     if (method !== 'GET' && realtimeEnabled()) {
       if (path[0] === 'groups' && path.length === 1) after(() => publishGroupInvalidation((data as { id: string }).id))

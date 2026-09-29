@@ -92,9 +92,9 @@ CREATE TABLE expense_receipts (
   mime_type TEXT NOT NULL CHECK (mime_type IN ('image/jpeg', 'image/png', 'image/webp')),
   byte_size INTEGER NOT NULL CHECK (byte_size > 0 AND byte_size <= 2097152),
   sha256 TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
-  content BYTEA NOT NULL,
+  object_key TEXT NOT NULL UNIQUE,
   created_at BIGINT NOT NULL,
-  CHECK (byte_size = octet_length(content))
+  CHECK (object_key <> '')
 );
 CREATE INDEX expense_receipts_expense_idx ON expense_receipts(expense_id);
 CREATE TABLE settlement_balances (

@@ -5,6 +5,7 @@ import { AppError, badInput } from './errors'
 import { domainMutation, idsInput, missing, nowSeconds, onlyKeys, ownerGroup, pageOf, pagination, textInput, type Identity } from './group-store'
 import { formatMoney, MAX_EXPENSE_MAJOR, MAX_ROUND_TOTAL_MAJOR, minorLimit, parseAmount, requireCurrency, type Currency } from './money'
 import { replayMutation } from './mutations'
+import { deleteReceiptObject, putReceipt, readReceipt } from './receipt-storage'
 import { calculateBase, finalizeSettlement, previewSettlement, validateCustomShares } from './split'
 import type { ExclusionCheck, Expense, MutationResult, RoundDetail, RoundMember, RoundStatus, RoundSummary, SettlementDTO, SettlementTransfer } from './domain-types'
 
@@ -252,13 +253,24 @@ export async function saveExpense(access: Identity, key: string, roundId: string
 
 export async function deleteExpense(access: Identity, key: string, roundId: string, expenseId: string, body: Record<string, unknown>) {
   onlyKeys(body, ['expectedVersion'])
-  return domainMutation(access, key, 'expense.delete', { roundId, expenseId, ...body }, async (client, userId) => {
+  let objectKeys: string[] = []
+  const result = await domainMutation(access, key, 'expense.delete', { roundId, expenseId, ...body }, async (client, userId) => {
     const round = await roundFor(client, roundId, userId), expense = await expenseFor(client, roundId, expenseId)
     await editable(client, round, userId, expense)
     version(round, body.expectedVersion)
+    objectKeys = (await client.query('SELECT object_key FROM expense_receipts WHERE expense_id=$1 AND object_key IS NOT NULL', [expenseId])).rows.map(row => row.object_key)
     await client.query('DELETE FROM expenses WHERE id=$1', [expenseId])
     return { ...await bump(client, roundId), id: expenseId }
   })
+  await cleanupReceiptObjects(objectKeys)
+  return result
+}
+
+async function cleanupReceiptObjects(keys: string[]) {
+  for (const key of keys) {
+    try { await deleteReceiptObject(key) }
+    catch (error) { console.error('receipt_cleanup_failed', key, error) }
+  }
 }
 
 async function exclusions(client: Database, round: Row, targetId: string): Promise<ExclusionCheck> {
@@ -329,7 +341,8 @@ async function finalize(client: Database, roundId: string, currency: Currency, d
 export async function roundCommand(access: Identity, key: string, roundId: string, action: string, body: Record<string, unknown>) {
   onlyKeys(body, ['expectedVersion'])
   if (!['confirm', 'reopen', 'send', 'draw', 'complete', 'force-complete', 'cancel'].includes(action)) throw missing()
-  return domainMutation(access, key, `round.${action}`, { roundId, ...body }, async (client, userId) => {
+  let objectKeys: string[] = []
+  const result = await domainMutation(access, key, `round.${action}`, { roundId, ...body }, async (client, userId) => {
     const round = await roundFor(client, roundId, userId)
     creator(round)
     if (action === 'draw' && round.finalized_at !== null) return { id: roundId, roundId, status: round.status, version: round.version }
@@ -367,11 +380,14 @@ export async function roundCommand(access: Identity, key: string, roundId: strin
       await client.query("UPDATE rounds SET status='COMPLETED',completed_at=$2 WHERE id=$1", [roundId, now])
     } else {
       state(round, 'RECORDING')
+      objectKeys = (await client.query('SELECT object_key FROM expense_receipts WHERE expense_id IN (SELECT id FROM expenses WHERE round_id=$1) AND object_key IS NOT NULL', [roundId])).rows.map(row => row.object_key)
       await client.query('DELETE FROM rounds WHERE id=$1', [roundId])
       return { id: roundId, roundId }
     }
     return bump(client, roundId)
   })
+  await cleanupReceiptObjects(objectKeys)
+  return result
 }
 
 export async function setSettlementCheck(access: Identity, key: string, roundId: string, body: Record<string, unknown>) {
@@ -451,45 +467,53 @@ async function convertReceipt(content: Uint8Array, claimedType: string) {
 export async function addReceipt(access: Identity, key: string, roundId: string, expenseId: string, expectedVersion: number, bytes: Uint8Array, type: string) {
   const sourceSha256 = createHash('sha256').update(bytes).digest('hex')
   const payload = { roundId, expenseId, expectedVersion, sourceSha256, type }
-  const replayed = await withReadTransaction(async client => {
+  const checked = await withReadTransaction(async client => {
     const account = await requireAccount(client, access)
     const replay = await replayMutation<MutationResult>(client, account.id, 'receipt.create', key, payload)
-    if (replay.result) return replay.result
+    if (replay.result) return { replayed: replay.result, userId: account.id }
     const round = await roundFor(client, roundId, account.id), expense = await expenseFor(client, roundId, expenseId)
     await editable(client, round, account.id, expense)
     version(round, expectedVersion)
-    return null
+    return { replayed: null, userId: account.id }
   })
-  if (replayed) return replayed
+  if (checked.replayed) return checked.replayed
   const file = await convertReceipt(bytes, type)
+  const objectKey = `receipts/${checked.userId}/${key}.avif`
+  // ponytail: a failed DB commit can leave an orphan; add object reconciliation if orphan growth matters.
+  await putReceipt(objectKey, file.content, file.mimeType)
   return domainMutation(access, key, 'receipt.create', payload, async (client, userId) => {
     const round = await roundFor(client, roundId, userId), expense = await expenseFor(client, roundId, expenseId)
     await editable(client, round, userId, expense)
     version(round, expectedVersion)
     const id = randomUUID()
-    await client.query('INSERT INTO expense_receipts(id,expense_id,uploaded_by,mime_type,byte_size,sha256,content,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [id, expenseId, userId, file.mimeType, file.content.length, file.sha256, file.content, nowSeconds()])
+    await client.query('INSERT INTO expense_receipts(id,expense_id,uploaded_by,mime_type,byte_size,sha256,object_key,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [id, expenseId, userId, file.mimeType, file.content.length, file.sha256, objectKey, nowSeconds()])
     return { ...await bump(client, roundId), id }
   })
 }
 
 export async function removeReceipt(access: Identity, key: string, roundId: string, expenseId: string, receiptId: string, body: Record<string, unknown>) {
   onlyKeys(body, ['expectedVersion'])
-  return domainMutation(access, key, 'receipt.delete', { roundId, expenseId, receiptId, ...body }, async (client, userId) => {
+  let objectKey: string | null = null
+  const result = await domainMutation(access, key, 'receipt.delete', { roundId, expenseId, receiptId, ...body }, async (client, userId) => {
     const round = await roundFor(client, roundId, userId), expense = await expenseFor(client, roundId, expenseId)
     await editable(client, round, userId, expense)
     version(round, body.expectedVersion)
-    const { rowCount } = await client.query('DELETE FROM expense_receipts WHERE id=$1 AND expense_id=$2', [receiptId, expenseId])
+    const { rows, rowCount } = await client.query('DELETE FROM expense_receipts WHERE id=$1 AND expense_id=$2 RETURNING object_key', [receiptId, expenseId])
     if (!rowCount) throw missing()
+    objectKey = rows[0].object_key
     return { ...await bump(client, roundId), id: receiptId }
   })
+  if (objectKey) await cleanupReceiptObjects([objectKey])
+  return result
 }
 
 export async function getReceipt(access: Identity, receiptId: string) {
-  return withReadTransaction(async client => {
+  const stored = await withReadTransaction(async client => {
     const account = await requireAccount(client, access)
-    const { rows } = await client.query(`SELECT r.mime_type,r.content FROM expense_receipts r JOIN expenses e ON e.id=r.expense_id
+    const { rows } = await client.query(`SELECT r.mime_type,r.object_key FROM expense_receipts r JOIN expenses e ON e.id=r.expense_id
       JOIN round_members m ON m.round_id=e.round_id AND m.user_id=$2 WHERE r.id=$1`, [receiptId, account.id])
     if (!rows[0]) throw missing()
-    return { mimeType: rows[0].mime_type as string, content: new Uint8Array(rows[0].content) }
+    return { mimeType: rows[0].mime_type as string, objectKey: rows[0].object_key as string }
   })
+  return { mimeType: stored.mimeType, content: await readReceipt(stored.objectKey) }
 }
