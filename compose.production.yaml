@@ -54,6 +54,19 @@ services:
     command: ["--config.file=/etc/blackbox_exporter/config.yml"]
     volumes:
       - ./monitoring/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+  node-exporter:
+    image: quay.io/prometheus/node-exporter:v1.12.1
+    restart: unless-stopped
+    read_only: true
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --collector.disable-defaults
+      - --collector.cpu
+      - --collector.meminfo
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
   prometheus:
     image: prom/prometheus:v3.14.0
     restart: unless-stopped
@@ -69,6 +82,7 @@ services:
       - prometheus-data:/prometheus
     depends_on:
       - blackbox
+      - node-exporter
   grafana:
     image: grafana/grafana:13.1.6-slim
     restart: unless-stopped

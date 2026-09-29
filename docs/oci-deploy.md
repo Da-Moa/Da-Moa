@@ -1,6 +1,6 @@
 # OCI Ubuntu arm64 배포
 
-GitHub Actions는 PR에서 `npm test`와 `npm run build`를 실행합니다. `main` push 또는 수동 실행 시 검증을 통과한 커밋을 SSH로 전송합니다. 서버는 arm64 앱 이미지를 빌드하고 Compose에서 앱·PostgreSQL·MinIO·Prometheus·Blackbox Exporter·Grafana를 실행합니다. PostgreSQL·MinIO·Prometheus·Grafana 데이터는 이름 있는 Docker 볼륨에 저장합니다. 첫 배포에서는 빈 DB에 스키마를 만들고, 앱 전환 후 `/api/health` 점검에 실패하면 이전 앱 이미지로 되돌립니다. 배포용 앱 환경 파일은 배포가 끝나면 서버에서 삭제합니다.
+GitHub Actions는 PR에서 `npm test`와 `npm run build`를 실행합니다. `main` push 또는 수동 실행 시 검증을 통과한 커밋을 SSH로 전송합니다. 서버는 arm64 앱 이미지를 빌드하고 Compose에서 앱·PostgreSQL·MinIO·Prometheus·Blackbox Exporter·Node Exporter·Grafana를 실행합니다. PostgreSQL·MinIO·Prometheus·Grafana 데이터는 이름 있는 Docker 볼륨에 저장합니다. 첫 배포에서는 빈 DB에 스키마를 만들고, 앱 전환 후 `/api/health` 점검에 실패하면 이전 앱 이미지로 되돌립니다. 배포용 앱 환경 파일은 배포가 끝나면 서버에서 삭제합니다.
 
 ## 1. 공인 IP와 인스턴스 준비
 
@@ -213,6 +213,10 @@ server {
     location = /internal/realtime { return 404; }
     location = /api/health { return 404; }
     location = /api/health/ { return 404; }
+    location = /api/health/database { return 404; }
+    location = /api/health/database/ { return 404; }
+    location = /api/health/minio { return 404; }
+    location = /api/health/minio/ { return 404; }
     location = /api/health/dependencies { return 404; }
     location = /api/health/dependencies/ { return 404; }
     location = /realtime {
@@ -284,9 +288,11 @@ readlink -f /srv/da-moa/current
 
 ## 6. 모니터링
 
-배포는 Prometheus와 Grafana를 앱 전환 전에 시작하고 각각의 준비 상태를 확인합니다. Prometheus는 Blackbox Exporter로 `/api/health/live`, `/api/health/dependencies`, `/api/health`를 30초마다 조회합니다. `probe_success`가 `1`이면 성공, `0`이면 장애입니다. 영수증의 실제 객체 작업과 앱 계정의 MinIO 권한은 이 지표에 포함되지 않습니다. Prometheus 데이터는 최대 15일·2GB까지 보존하고 Grafana 설정과 데이터는 별도 볼륨에 유지합니다.
+배포는 Prometheus와 Grafana를 앱 전환 전에 시작하고 각각의 준비 상태를 확인합니다. Prometheus는 Blackbox Exporter로 `/api/health/live`, `/api/health/database`, `/api/health/minio`, `/api/health`를 30초마다 조회합니다. Grafana는 앱 실행·DB 상태·MinIO 상태·전체 상태를 각각 표시합니다. `probe_success`가 `1`이면 성공, `0`이면 장애입니다. 영수증의 실제 객체 작업과 앱 계정의 MinIO 권한은 이 지표에 포함되지 않습니다. Prometheus 데이터는 최대 15일·2GB까지 보존하고 Grafana 설정과 데이터는 별도 볼륨에 유지합니다.
 
-Grafana와 Prometheus는 서버의 `127.0.0.1`에만 열려 있습니다. 로컬 컴퓨터에서 SSH 터널을 열고 `http://localhost:3001`에 `admin`과 `GRAFANA_ADMIN_PASSWORD`로 로그인하면 **다모아 운영 → 다모아 서비스 상태** 대시보드를 볼 수 있습니다. Prometheus 대상 상태는 `http://localhost:9090/targets`에서 확인합니다.
+Node Exporter는 운영 서버의 CPU·메모리 지표만 수집하며 외부 포트를 열지 않습니다. Prometheus가 30초마다 수집하고 **다모아 서버 자원** 대시보드에서 최근 5분 평균 CPU 사용률과 사용 가능한 메모리를 제외한 메모리 사용률의 현재값·6시간 추이를 표시합니다. 두 값은 서버 전체 기준이며 앱 컨테이너만의 사용량은 아닙니다.
+
+Grafana와 Prometheus는 서버의 `127.0.0.1`에만 열려 있습니다. 로컬 컴퓨터에서 SSH 터널을 열고 `http://localhost:3001`에 `admin`과 `GRAFANA_ADMIN_PASSWORD`로 로그인하면 **다모아 운영 → 다모아 서비스 상태 / 다모아 서버 자원** 대시보드를 볼 수 있습니다. Prometheus 대상 상태는 `http://localhost:9090/targets`에서 확인합니다.
 
 ```bash
 ssh -L 3001:127.0.0.1:3001 -L 9090:127.0.0.1:9090 ubuntu@161.33.3.222
