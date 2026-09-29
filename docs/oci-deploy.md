@@ -50,7 +50,8 @@ cat ~/.ssh/da-moa-deploy-key.pub
 # 로컬 컴퓨터
 scp minio.license ubuntu@203.0.113.10:/tmp/da-moa-minio.license
 # OCI 인스턴스
-sudo install -o da-moa -g da-moa -m 600 /tmp/da-moa-minio.license /srv/da-moa/shared/minio.license
+sudo install -T -o da-moa -g da-moa -m 600 /tmp/da-moa-minio.license /srv/da-moa/shared/minio.license
+test -f /srv/da-moa/shared/minio.license
 ```
 
 서버에서 `sudoedit /srv/da-moa/shared/.minio.env`를 열고 MinIO 관리자 계정만 넣습니다.
@@ -99,6 +100,35 @@ docker volume ls --filter name=da-moa_
 
 같은 Compose 프로젝트명 `da-moa`를 이후 배포에서도 사용합니다. 첫 실행 시 `da-moa_postgres-data`와 `da-moa_minio-data` 볼륨이 생성됩니다. 앱 이미지를 다시 빌드하거나 컨테이너를 교체해도 이 볼륨은 유지됩니다. 배포 스크립트는 저장소 컨테이너에 `--no-recreate`를 적용하고 볼륨 삭제 명령을 실행하지 않습니다. [Docker의 Compose 볼륨 동작](https://docs.docker.com/reference/compose-file/volumes/)
 
+이전 Compose 설정으로 먼저 실행해 `/srv/da-moa/shared/minio.license`가 디렉터리가 되었고 그 안에 `da-moa-minio.license`가 들어 있다면 다음처럼 복구합니다. `ubuntu` 계정에서도 실행할 수 있도록 절대 경로를 사용합니다. MinIO 컨테이너만 다시 만들며 저장 데이터 볼륨은 유지됩니다.
+
+```bash
+sudo bash -e <<'SH'
+test -s /srv/da-moa/shared/minio.license/da-moa-minio.license
+test ! -e /srv/da-moa/shared/minio.license.directory-backup
+docker compose -p da-moa --env-file /srv/da-moa/shared/.env.production -f /srv/da-moa/bootstrap/compose.production.yaml stop minio
+mv /srv/da-moa/shared/minio.license /srv/da-moa/shared/minio.license.directory-backup
+install -T -o da-moa -g da-moa -m 600 /srv/da-moa/shared/minio.license.directory-backup/da-moa-minio.license /srv/da-moa/shared/minio.license
+test -s /srv/da-moa/shared/minio.license
+echo 'MinIO 라이선스 파일 확인됨'
+docker compose -p da-moa --env-file /srv/da-moa/shared/.env.production -f /srv/da-moa/bootstrap/compose.production.yaml up -d --wait --force-recreate --no-deps minio
+SH
+```
+
+콘솔에 접속하기 전에 라이선스 설치 상태를 확인합니다. AIStor는 라이선스가 없어도 콘솔이 열릴 수 있습니다. 서버에서 배포 계정으로 실행하고, 프롬프트에 `.minio.env`의 관리자 계정을 입력합니다. 비밀번호는 터미널에 표시되지 않습니다. 첫 명령에서 `확인됨`이 출력되지 않으면 라이선스 파일을 다시 복사한 뒤 진행합니다.
+
+```bash
+test -f /srv/da-moa/shared/minio.license && test -s /srv/da-moa/shared/minio.license && echo 'MinIO 라이선스 파일 확인됨'
+read -r -p 'MinIO 관리자 아이디: ' minio_admin_user
+read -r -s -p 'MinIO 관리자 비밀번호: ' minio_admin_password; echo
+sudo docker compose -p da-moa --env-file /srv/da-moa/shared/.env.production -f /srv/da-moa/bootstrap/compose.production.yaml exec -T minio mc alias set da-moa http://127.0.0.1:9000 "$minio_admin_user" "$minio_admin_password"
+unset minio_admin_user minio_admin_password
+sudo docker compose -p da-moa --env-file /srv/da-moa/shared/.env.production -f /srv/da-moa/bootstrap/compose.production.yaml exec -T minio mc license update da-moa /minio.license
+sudo docker compose -p da-moa --env-file /srv/da-moa/shared/.env.production -f /srv/da-moa/bootstrap/compose.production.yaml exec -T minio mc license info da-moa
+```
+
+`mc license info`에 라이선스 정보가 표시된 다음 콘솔 로그인을 진행합니다. `license update`가 실패하면 `docker compose -p da-moa --env-file /srv/da-moa/shared/.env.production -f /srv/da-moa/bootstrap/compose.production.yaml logs --tail=50 minio`로 오류를 확인하고, 내려받은 라이선스 파일과 `/minio.license` 마운트를 점검합니다. 볼륨을 삭제할 필요는 없습니다. [AIStor 라이선스 적용](https://docs.min.io/aistor/reference/cli/mc-license/mc-license-update/), [상태 확인](https://docs.min.io/aistor/reference/cli/mc-license/mc-license-info/)
+
 MinIO의 S3 API와 콘솔은 서버의 `127.0.0.1:9000`, `127.0.0.1:9001`에만 바인딩합니다. 로컬 컴퓨터에서 `ssh -L 9001:127.0.0.1:9001 ubuntu@203.0.113.10`으로 터널을 연 뒤 `http://127.0.0.1:9001`에 접속합니다. `da-moa-receipts`라는 **비공개 버킷**을 만들고, 이 버킷의 객체 읽기·쓰기·삭제만 허용하는 앱 전용 사용자/키를 만듭니다. 앱에는 관리자 키 대신 이 키를 설정합니다. 정책 예시:
 
 ```json
@@ -129,7 +159,7 @@ Let's Encrypt는 IP용 인증서를 발급합니다. 인증서는 약 6일간 �
 ```nginx
 server {
     listen 80;
-    server_name 203.0.113.10;
+    server_name 161.33.3.222;
 
     location ^~ /.well-known/acme-challenge/ {
         root /var/www/letsencrypt;
@@ -145,17 +175,32 @@ sudo systemctl reload nginx
 sudo snap install --classic certbot
 sudo ln -s /snap/bin/certbot /usr/local/bin/certbot
 certbot --version   # 5.4 이상 확인
-sudo certbot certonly --preferred-profile shortlived --webroot --webroot-path /var/www/letsencrypt --ip-address 203.0.113.10
 ```
 
-발급 후 같은 파일에 다음 HTTPS 블록을 추가합니다. 앱은 `127.0.0.1:3000`에만 바인딩합니다.
+인증서 요청 전에 80번 포트와 챌린지 파일이 실제로 제공되는지 확인합니다. 서버에서 다음을 실행하면 마지막 명령이 `ok`를 출력해야 합니다.
+
+```bash
+sudo ss -ltnp '( sport = :80 )'
+sudo install -d -m 755 /var/www/letsencrypt/.well-known/acme-challenge
+printf 'ok\n' | sudo tee /var/www/letsencrypt/.well-known/acme-challenge/check.txt >/dev/null
+curl -fsS -H 'Host: 161.33.3.222' http://127.0.0.1/.well-known/acme-challenge/check.txt
+```
+
+이어서 **서버 밖의 컴퓨터**에서 `curl --max-time 10 -fsS http://161.33.3.222/.well-known/acme-challenge/check.txt`를 실행해 `ok`를 확인합니다. 로컬에서는 되는데 외부에서 접속 시간이 초과되면 OCI 인스턴스에 연결된 보안 목록 또는 NSG의 인바운드 규칙(소스 `0.0.0.0/0`, TCP, **목적지 포트 80**)과 인스턴스의 iptables 규칙을 확인합니다. 외부에서 파일을 읽을 수 있을 때 인증서를 요청합니다. [Let's Encrypt HTTP-01 포트](https://letsencrypt.org/docs/challenge-types/), [OCI 보안 목록](https://docs.oracle.com/en-us/iaas/Content/Network/Concepts/securitylists.htm)
+
+```bash
+sudo rm /var/www/letsencrypt/.well-known/acme-challenge/check.txt
+sudo certbot certonly --preferred-profile shortlived --webroot --webroot-path /var/www/letsencrypt --ip-address 161.33.3.222
+```
+
+발급 후 같은 파일에 다음 HTTPS 블록을 **추가**합니다. 위의 HTTP 80 블록과 `/.well-known/acme-challenge/` 위치는 갱신에 필요하므로 유지합니다. 앱은 `127.0.0.1:3000`에만 바인딩합니다.
 
 ```nginx
 server {
     listen 443 ssl;
-    server_name 203.0.113.10;
-    ssl_certificate /etc/letsencrypt/live/203.0.113.10/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/203.0.113.10/privkey.pem;
+    server_name 161.33.3.222;
+    ssl_certificate /etc/letsencrypt/live/161.33.3.222/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/161.33.3.222/privkey.pem;
 
     location = /internal/realtime { return 404; }
     location = /realtime {
@@ -186,6 +231,10 @@ systemctl list-timers | grep -i certbot
 ```
 
 갱신 타이머와 deploy hook이 실제로 작동하는지 확인합니다. 80 포트의 인증 경로는 갱신에도 필요합니다. 첫 배포 전 프록시가 502를 반환해도 인증서 발급용 HTTP 경로가 열려 있으면 됩니다. 영수증 크기에 맞춰 Nginx `client_max_body_size`도 확인합니다.
+
+`renew --dry-run`이 실패하면 마지막 요약 위에 있는 최초 오류를 확인합니다. `systemctl list-timers`는 다음 실행 일정만 보여 주며 갱신 성공을 보장하지 않습니다. 서버에서 `sudo nginx -t`, `sudo certbot certificates`, `sudo tail -n 120 /var/log/letsencrypt/letsencrypt.log`를 실행해 원인을 확인한 뒤 다시 모의 갱신합니다.
+
+오류가 `Invalid response ... : 404`이면 포트 80 접속은 성공했지만 챌린지 파일이 제공되지 않은 것입니다. HTTP 80 블록의 `server_name`이 실제 IP이고, 챌린지 `location`의 `root`가 Certbot의 `--webroot-path`와 같은지 확인합니다. 위의 `check.txt` 테스트를 서버와 외부 컴퓨터에서 다시 수행해 `ok`가 나온 뒤 `sudo certbot renew --dry-run --run-deploy-hooks`를 재실행합니다.
 
 ## 5. GitHub 설정과 첫 배포
 

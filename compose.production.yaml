@@ -42,7 +42,12 @@ services:
       retries: 12
     volumes:
       - minio-data:/mnt/data
-      - /srv/da-moa/shared/minio.license:/minio.license:ro
+      - type: bind
+        source: /srv/da-moa/shared/minio.license
+        target: /minio.license
+        read_only: true
+        bind:
+          create_host_path: false
 
 volumes:
   postgres-data:
