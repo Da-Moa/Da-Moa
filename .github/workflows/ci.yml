@@ -20,6 +20,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - run: bash scripts/deploy-oci.test.sh
       - run: npm run build
 
   deploy:
@@ -45,9 +46,19 @@ jobs:
         env:
           DEPLOY_HOST: ${{ vars.OCI_HOST }}
           DEPLOY_USER: ${{ vars.OCI_USER }}
+          PRODUCTION_ENV: ${{ secrets.OCI_PRODUCTION_ENV }}
+          MINIO_ENV: ${{ secrets.OCI_MINIO_ENV }}
         run: |
           set -euo pipefail
           test -n "$DEPLOY_HOST" && test -n "$DEPLOY_USER"
+          : "${PRODUCTION_ENV:?Set production Environment secret OCI_PRODUCTION_ENV}"
+          : "${MINIO_ENV:?Set production Environment secret OCI_MINIO_ENV}"
+          umask 077
+          trap 'rm -f release.tar.gz production.env minio.env' EXIT
           git archive --format=tar HEAD | gzip > release.tar.gz
+          printf '%s' "$PRODUCTION_ENV" > production.env
+          printf '%s' "$MINIO_ENV" > minio.env
           scp -o StrictHostKeyChecking=yes release.tar.gz "$DEPLOY_USER@$DEPLOY_HOST:da-moa-${GITHUB_SHA}.tar.gz"
+          scp -p -o StrictHostKeyChecking=yes production.env "$DEPLOY_USER@$DEPLOY_HOST:da-moa-${GITHUB_SHA}.env.production"
+          scp -p -o StrictHostKeyChecking=yes minio.env "$DEPLOY_USER@$DEPLOY_HOST:da-moa-${GITHUB_SHA}.minio.env"
           ssh -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- "$GITHUB_SHA" < scripts/deploy-oci.sh
