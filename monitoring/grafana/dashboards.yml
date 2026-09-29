@@ -1,0 +1,10 @@
+apiVersion: 1
+providers:
+  - name: da-moa
+    orgId: 1
+    folder: 다모아 운영
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/dashboards

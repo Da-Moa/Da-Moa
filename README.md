@@ -38,6 +38,8 @@ npm run dev
 
 [http://localhost:3000](http://localhost:3000)에서 시작합니다. API 문서는 `/api/docs`, OpenAPI JSON은 `/api/openapi.json`에서 확인할 수 있습니다. [정산기능-intent.md](intent/정산기능-intent.md)는 정책 결정 기록, [정산기능-spec.md](spec/정산기능-spec.md)는 요구사항·상태·권한·인수 기준입니다. 금액 부호는 최신 명세를 따라 **부담액 − 결제액**, 양수는 보낼 돈·음수는 받을 돈입니다.
 
+상태 확인 API는 인증 없이 사용할 수 있습니다. `/api/health/live`는 앱 응답만 확인하며, `/api/health/dependencies`는 PostgreSQL `SELECT 1`과 MinIO 저장소의 읽기·쓰기 정족수를 각각 확인합니다. `/api/health`는 앱과 두 의존 서비스를 종합해 반환합니다. 의존 서비스가 하나라도 실패하면 해당 API는 `503`과 각 검사 결과를 반환하며 응답을 캐시하지 않습니다. MinIO 검사는 실제 객체 작업이나 영수증 버킷·키 권한까지 검증하지 않습니다.
+
 ## 사용자 흐름
 
 1. 카카오 로그인 후 은행·전체 계좌번호·예금주를 직접 입력해 가입합니다. 계좌 자동 연동·실명조회는 제공하지 않으며, 송금 전 계좌번호와 예금주를 직접 확인해야 합니다.
@@ -125,10 +127,16 @@ npm run db:seed:test-accounts
 
 Ubuntu arm64 오라클 인스턴스의 IP HTTPS, Docker Compose 앱·PostgreSQL·MinIO 설정과 GitHub Actions 배포 절차는 [OCI 배포 가이드](docs/oci-deploy.md)를 따릅니다. PostgreSQL과 MinIO 데이터는 각각 이름 있는 Docker 볼륨에 저장하고, 배포 시 기존 저장소 컨테이너와 볼륨을 유지하면서 앱만 교체합니다. `main`에 반영하면 테스트·빌드가 통과한 커밋으로 앱 이미지를 서버에서 빌드하고, 빈 운영 DB에 스키마를 만든 뒤 컨테이너를 전환합니다. 개발·운영 DB와 MinIO 버킷은 분리합니다. 운영 API의 변경 요청과 WebSocket 연결은 `KAKAO_REDIRECT_URI`의 공개 주소에서 온 요청만 허용합니다. 같은 IP를 유지하면 기존 세션을 유지할 수 있도록 `AUTH_JWT_SECRET`도 유지하고, 공개 주소가 바뀌면 카카오 콘솔의 Redirect URI와 `KAKAO_REDIRECT_URI`를 함께 변경합니다.
 
+운영 Compose는 Prometheus·Blackbox Exporter·Grafana로 헬스 API 상태를 기록하고 표시합니다. Grafana와 Prometheus는 SSH 터널로만 접근하며, 운영 환경의 `GRAFANA_ADMIN_PASSWORD`가 필요합니다. 접속 방법은 [OCI 배포 가이드](docs/oci-deploy.md#6-모니터링)에 있습니다.
+
 TLS가 적용된 Nginx `server` 블록 안에서 앱과 WebSocket을 같은 포트로 프록시합니다. Compose 앱의 3000번 포트는 호스트의 `127.0.0.1:3000`에만 게시합니다. 아래 위치 설정은 [OCI 배포 가이드](docs/oci-deploy.md)의 IP 인증서 설정에 추가합니다.
 
 ```nginx
 location = /internal/realtime { return 404; }
+location = /api/health { return 404; }
+location = /api/health/ { return 404; }
+location = /api/health/dependencies { return 404; }
+location = /api/health/dependencies/ { return 404; }
 location = /realtime {
     proxy_pass http://127.0.0.1:3000;
     proxy_http_version 1.1;

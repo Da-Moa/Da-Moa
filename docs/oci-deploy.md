@@ -1,11 +1,11 @@
 # OCI Ubuntu arm64 배포
 
-GitHub Actions는 PR에서 `npm test`와 `npm run build`를 실행합니다. `main` push 또는 수동 실행 시 검증을 통과한 커밋을 SSH로 전송합니다. 서버는 arm64 앱 이미지를 빌드하고 Compose에서 앱·PostgreSQL·MinIO를 실행합니다. PostgreSQL과 MinIO는 각각 이름 있는 Docker 볼륨에 데이터를 저장합니다. 첫 배포에서는 빈 DB에 스키마를 만들고, 앱 전환 후 `/api/openapi.json` 점검에 실패하면 이전 앱 이미지로 되돌립니다. 배포용 앱 환경 파일은 배포가 끝나면 서버에서 삭제합니다.
+GitHub Actions는 PR에서 `npm test`와 `npm run build`를 실행합니다. `main` push 또는 수동 실행 시 검증을 통과한 커밋을 SSH로 전송합니다. 서버는 arm64 앱 이미지를 빌드하고 Compose에서 앱·PostgreSQL·MinIO·Prometheus·Blackbox Exporter·Grafana를 실행합니다. PostgreSQL·MinIO·Prometheus·Grafana 데이터는 이름 있는 Docker 볼륨에 저장합니다. 첫 배포에서는 빈 DB에 스키마를 만들고, 앱 전환 후 `/api/health` 점검에 실패하면 이전 앱 이미지로 되돌립니다. 배포용 앱 환경 파일은 배포가 끝나면 서버에서 삭제합니다.
 
 ## 1. 공인 IP와 인스턴스 준비
 
 1. OCI Ubuntu arm64 인스턴스의 공인 IPv4를 확인합니다. 아래 예시의 `203.0.113.10`은 실제 공인 IP로 모두 바꿉니다. 인스턴스를 교체할 때도 IP를 유지하려면 예약 공인 IP를 선택합니다. **먼저 카카오 개발자 콘솔의 REST API 키에 `https://203.0.113.10/auth/v1/kakao` 형식의 Redirect URI를 등록할 수 있는지 확인하세요.** 카카오 공식 문서는 URI 일치 규칙을 설명하지만 숫자 IP의 등록 허용 여부는 명시하지 않습니다. 콘솔에서 거절하면 카카오 로그인을 위해 도메인이 필요합니다. [카카오 Redirect URI 설정](https://developers.kakao.com/docs/ko/app-setting/app)
-2. OCI VCN 보안 목록 또는 NSG에서 TCP 22(SSH), 80(인증서 발급·HTTP 리다이렉트), 443(HTTPS)을 허용합니다. 인스턴스의 iptables에도 80·443을 허용합니다. OCI Ubuntu 이미지에서는 UFW로 기본 방화벽 규칙을 바꾸지 않습니다. **앱 3000, PostgreSQL 5432, MinIO 9000·9001은 외부에 열지 않습니다.** SSH는 가능하면 관리 IP로 제한하되 GitHub 호스팅 러너가 배포할 때 접근할 수 있어야 합니다. [OCI 보안 목록](https://docs.oracle.com/en-us/iaas/Content/Network/Concepts/securitylists.htm), [Ubuntu 이미지 방화벽 안내](https://docs.oracle.com/en-us/iaas/Content/Compute/References/images.htm)
+2. OCI VCN 보안 목록 또는 NSG에서 TCP 22(SSH), 80(인증서 발급·HTTP 리다이렉트), 443(HTTPS)을 허용합니다. 인스턴스의 iptables에도 80·443을 허용합니다. OCI Ubuntu 이미지에서는 UFW로 기본 방화벽 규칙을 바꾸지 않습니다. **앱 3000, Grafana 3001, PostgreSQL 5432, Prometheus 9090, MinIO 9000·9001은 외부에 열지 않습니다.** SSH는 가능하면 관리 IP로 제한하되 GitHub 호스팅 러너가 배포할 때 접근할 수 있어야 합니다. [OCI 보안 목록](https://docs.oracle.com/en-us/iaas/Content/Network/Concepts/securitylists.htm), [Ubuntu 이미지 방화벽 안내](https://docs.oracle.com/en-us/iaas/Content/Compute/References/images.htm)
 3. Nginx, curl, tar를 설치합니다. Node.js는 앱 이미지 안에 포함됩니다.
 
 ```bash
@@ -23,7 +23,7 @@ sudo netfilter-persistent save
 
 ## 2. Docker와 배포 계정 준비
 
-[Docker 공식 Ubuntu 설치 안내](https://docs.docker.com/engine/install/ubuntu/)대로 arm64용 Docker Engine과 Compose 플러그인을 설치하고 `docker compose version`을 확인합니다. 운영에서는 [compose.production.yaml](../compose.production.yaml)의 앱·PostgreSQL·MinIO만 사용합니다. 개발용 `compose.yaml`은 사용하지 않습니다.
+[Docker 공식 Ubuntu 설치 안내](https://docs.docker.com/engine/install/ubuntu/)대로 arm64용 Docker Engine과 Compose 플러그인을 설치하고 `docker compose version`을 확인합니다. 운영에서는 [compose.production.yaml](../compose.production.yaml)을 사용합니다. 개발용 `compose.yaml`은 사용하지 않습니다.
 
 ```bash
 sudo adduser --disabled-password --gecos '' da-moa
@@ -74,6 +74,7 @@ MINIO_ENDPOINT=http://minio:9000
 MINIO_BUCKET=da-moa-receipts
 MINIO_ACCESS_KEY=버킷_생성_후_채울_앱_전용_키
 MINIO_SECRET_KEY=버킷_생성_후_채울_앱_전용_비밀_키
+GRAFANA_ADMIN_PASSWORD=별도로_생성한_관리자_비밀번호
 PORT=3000
 ```
 
@@ -210,6 +211,10 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/161.33.3.222/privkey.pem;
 
     location = /internal/realtime { return 404; }
+    location = /api/health { return 404; }
+    location = /api/health/ { return 404; }
+    location = /api/health/dependencies { return 404; }
+    location = /api/health/dependencies/ { return 404; }
     location = /realtime {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
@@ -226,6 +231,8 @@ server {
     }
 }
 ```
+
+기존 운영 서버에도 위의 헬스 경로 차단 설정을 직접 반영합니다. GitHub Actions 배포는 Nginx 설정을 변경하지 않습니다.
 
 ```bash
 sudo nginx -t
@@ -258,7 +265,7 @@ systemctl list-timers | grep -i certbot
 
 `OCI_SSH_KNOWN_HOSTS`는 로컬에서 `ssh-keyscan -t ed25519 인스턴스_IP`로 얻을 수 있습니다. 등록 전에 이미 신뢰하는 SSH 접속에서 확인한 호스트 키 지문과 `ssh-keygen -lf` 결과를 대조합니다. 개인키를 Git이나 서버의 웹 루트에 복사하지 않습니다. `OCI_HOST`에는 `known_hosts`에 사용한 것과 같은 호스트를 넣습니다.
 
-`OCI_PRODUCTION_ENV`에는 위의 `POSTGRES_PASSWORD`부터 `PORT`까지 실제 운영 값을 포함한 `.env.production` 전체 내용을 붙여 넣습니다. `OCI_MINIO_ENV`에는 `MINIO_ROOT_USER`와 `MINIO_ROOT_PASSWORD`가 들어 있는 `.minio.env` 전체 내용을 넣습니다. 둘 중 하나라도 없거나 비어 있으면 배포를 시작하지 않습니다. Actions는 배포 중에만 서버에 두 파일을 권한 `600`으로 만들고, 성공·실패 시 업로드본과 함께 삭제합니다. 기존 배포에서 남은 `.env.production` 백업본도 삭제합니다. 앱 환경값만 바꿨다면 **Actions → CI → Run workflow → main**을 다시 실행하면 같은 커밋에서도 앱 컨테이너를 재생성합니다. MinIO 컨테이너는 배포 때 `--no-recreate`로 유지하므로 `OCI_MINIO_ENV`의 관리자 값을 바꿔도 기존 컨테이너에는 적용되지 않습니다. MinIO 관리자 자격 증명 변경은 별도로 진행해야 합니다. 환경 파일을 보관하지 않으므로 잘못된 새 Secret으로 앱이 교체된 뒤에는 이전 설정으로 자동 복구할 수 없습니다. Secret을 수정해 다시 배포해야 합니다. Docker 재시작 정책에 따른 기존 컨테이너 재시작에는 파일이 필요하지 않지만, 수동 Compose 재생성에는 두 Secret을 다시 전달해야 합니다. `POSTGRES_PASSWORD`는 기존 DB 계정 비밀번호를 자동으로 바꾸지 않으므로 회전할 때는 위의 `\password da_moa` 절차도 필요합니다. `minio.license`는 서버에 계속 보관합니다. 실행 중인 컨테이너의 환경변수는 Docker 권한으로 조회할 수 있어, 파일 삭제만으로 인스턴스 침해 시 비밀값 노출을 막을 수는 없습니다. [GitHub Environment Secret 설정](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets)
+`OCI_PRODUCTION_ENV`에는 위의 `POSTGRES_PASSWORD`부터 `PORT`까지 실제 운영 값을 포함한 `.env.production` 전체 내용을 붙여 넣습니다. `GRAFANA_ADMIN_PASSWORD`는 `openssl rand -base64 36` 등으로 별도 생성합니다. `OCI_MINIO_ENV`에는 `MINIO_ROOT_USER`와 `MINIO_ROOT_PASSWORD`가 들어 있는 `.minio.env` 전체 내용을 넣습니다. 둘 중 하나라도 없거나 비어 있으면 배포를 시작하지 않습니다. Actions는 배포 중에만 서버에 두 파일을 권한 `600`으로 만들고, 성공·실패 시 업로드본과 함께 삭제합니다. 기존 배포에서 남은 `.env.production` 백업본도 삭제합니다. 앱 환경값만 바꿨다면 **Actions → CI → Run workflow → main**을 다시 실행하면 같은 커밋에서도 앱 컨테이너를 재생성합니다. MinIO 컨테이너는 배포 때 `--no-recreate`로 유지하므로 `OCI_MINIO_ENV`의 관리자 값을 바꿔도 기존 컨테이너에는 적용되지 않습니다. MinIO 관리자 자격 증명 변경은 별도로 진행해야 합니다. 환경 파일을 보관하지 않으므로 잘못된 새 Secret으로 앱이 교체된 뒤에는 이전 설정으로 자동 복구할 수 없습니다. Secret을 수정해 다시 배포해야 합니다. Docker 재시작 정책에 따른 기존 컨테이너 재시작에는 파일이 필요하지 않지만, 수동 Compose 재생성에는 두 Secret을 다시 전달해야 합니다. `POSTGRES_PASSWORD`는 기존 DB 계정 비밀번호를 자동으로 바꾸지 않으므로 회전할 때는 위의 `\password da_moa` 절차도 필요합니다. `minio.license`는 서버에 계속 보관합니다. 실행 중인 컨테이너의 환경변수는 Docker 권한으로 조회할 수 있어, 파일 삭제만으로 인스턴스 침해 시 비밀값 노출을 막을 수는 없습니다. [GitHub Environment Secret 설정](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets)
 
 MinIO 컨테이너와 비공개 버킷·앱 전용 키를 먼저 준비한 뒤 변경 사항을 `main`에 반영하면 CI가 자동으로 배포합니다. 처음에는 **Actions → CI → Run workflow → main**으로도 실행할 수 있습니다. 완료 후 `https://161.33.3.222/api/docs`와 실제 카카오 로그인·영수증 업로드·조회·삭제·정산 흐름을 확인합니다. 서버에서 상태와 로그는 다음 명령으로 확인합니다.
 
@@ -273,4 +280,16 @@ readlink -f /srv/da-moa/current
 
 배포 실패 시 Actions 로그를 확인합니다. 빌드나 DB 스키마 생성 실패는 현재 앱을 유지합니다. 전환 직후 점검 실패는 이전 앱 이미지로 복귀를 시도하지만 새 환경값을 사용하므로 잘못된 Secret은 수정 후 재배포해야 합니다. 서버 용량이 부족해지면 현재 및 복구에 필요한 앱 이미지와 릴리스를 제외한 오래된 항목을 삭제합니다.
 
-첫 배포에서 `curl: (52) Empty reply from server`가 나왔다면 앱 시작 중 연결이 끊겼거나 앱이 재시작 중일 수 있습니다. 서버에서 `sudo docker logs --tail=100 da-moa-app-1`, `sudo docker ps -a --filter name=da-moa-app-1`, `curl -i --max-time 5 http://127.0.0.1:3000/api/openapi.json`을 확인합니다. 배포 스크립트는 일시적인 빈 응답도 최대 2분 동안 재시도합니다. `current` 심볼릭 링크가 없는 첫 배포 실패에서는 위의 컨테이너 명령으로 확인합니다.
+첫 배포에서 `curl: (52) Empty reply from server`가 나왔다면 앱 시작 중 연결이 끊겼거나 앱이 재시작 중일 수 있습니다. 서버에서 `sudo docker logs --tail=100 da-moa-app-1`, `sudo docker ps -a --filter name=da-moa-app-1`, `curl -i --max-time 5 http://127.0.0.1:3000/api/health`를 확인합니다. 배포 스크립트는 일시적인 빈 응답도 최대 2분 동안 재시도합니다. `current` 심볼릭 링크가 없는 첫 배포 실패에서는 위의 컨테이너 명령으로 확인합니다.
+
+## 6. 모니터링
+
+배포는 Prometheus와 Grafana를 앱 전환 전에 시작하고 각각의 준비 상태를 확인합니다. Prometheus는 Blackbox Exporter로 `/api/health/live`, `/api/health/dependencies`, `/api/health`를 30초마다 조회합니다. `probe_success`가 `1`이면 성공, `0`이면 장애입니다. 영수증의 실제 객체 작업과 앱 계정의 MinIO 권한은 이 지표에 포함되지 않습니다. Prometheus 데이터는 최대 15일·2GB까지 보존하고 Grafana 설정과 데이터는 별도 볼륨에 유지합니다.
+
+Grafana와 Prometheus는 서버의 `127.0.0.1`에만 열려 있습니다. 로컬 컴퓨터에서 SSH 터널을 열고 `http://localhost:3001`에 `admin`과 `GRAFANA_ADMIN_PASSWORD`로 로그인하면 **다모아 운영 → 다모아 서비스 상태** 대시보드를 볼 수 있습니다. Prometheus 대상 상태는 `http://localhost:9090/targets`에서 확인합니다.
+
+```bash
+ssh -L 3001:127.0.0.1:3001 -L 9090:127.0.0.1:9090 da-moa@161.33.3.222
+```
+
+대시보드는 현재 상태와 헬스체크 응답 시간을 표시합니다. 알림 발송 대상은 설정하지 않았습니다. Grafana 관리자 비밀번호를 나중에 바꿀 때는 Grafana UI에서 변경합니다. 운영 값 변경으로 컨테이너를 재생성해도 기존 Grafana 볼륨의 비밀번호는 자동 변경되지 않습니다.

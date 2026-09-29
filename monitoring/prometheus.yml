@@ -1,0 +1,29 @@
+global:
+  scrape_interval: 30s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: [prometheus:9090]
+  - job_name: blackbox
+    static_configs:
+      - targets: [blackbox:9115]
+  - job_name: health
+    metrics_path: /probe
+    scrape_timeout: 15s
+    params:
+      module: [http_health]
+    static_configs:
+      - targets: [http://app:3000/api/health/live]
+        labels: { check: live }
+      - targets: [http://app:3000/api/health/dependencies]
+        labels: { check: dependencies }
+      - targets: [http://app:3000/api/health]
+        labels: { check: overall }
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox:9115
