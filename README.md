@@ -133,6 +133,10 @@ TLS가 적용된 Nginx `server` 블록 안에서 앱과 WebSocket을 같은 포�
 
 ```nginx
 location = /internal/realtime { return 404; }
+location = /api/health { return 404; }
+location = /api/health/ { return 404; }
+location = /api/health/dependencies { return 404; }
+location = /api/health/dependencies/ { return 404; }
 location = /realtime {
     proxy_pass http://127.0.0.1:3000;
     proxy_http_version 1.1;

@@ -211,6 +211,10 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/161.33.3.222/privkey.pem;
 
     location = /internal/realtime { return 404; }
+    location = /api/health { return 404; }
+    location = /api/health/ { return 404; }
+    location = /api/health/dependencies { return 404; }
+    location = /api/health/dependencies/ { return 404; }
     location = /realtime {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
@@ -227,6 +231,8 @@ server {
     }
 }
 ```
+
+기존 운영 서버에도 위의 헬스 경로 차단 설정을 직접 반영합니다. GitHub Actions 배포는 Nginx 설정을 변경하지 않습니다.
 
 ```bash
 sudo nginx -t
