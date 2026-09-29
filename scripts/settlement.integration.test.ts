@@ -355,6 +355,8 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
         const metadata = (await get(r.id)).expenses[0].receipts.find(item => item.id === receipt.id)
         assert.equal(metadata?.mimeType, 'image/avif')
         assert.equal(metadata?.byteSize, stored.content.length)
+        const persisted = (await client.query('SELECT object_key FROM expense_receipts WHERE id=$1', [receipt.id])).rows[0]
+        assert.match(persisted.object_key, /^receipts\/[\w-]+\/[\w-]+\.avif$/)
         assert.equal((await addReceipt(b, uploadKey, r.id, e.id, expectedVersion, source.content, source.mimeType)).id, receipt.id)
         uploaded.push(receipt)
       }

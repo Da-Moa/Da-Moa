@@ -6,7 +6,7 @@ export type Database = Client
 export function createDatabaseClient(value: string) {
   const url = new URL(value)
   // Local development uses PostgreSQL directly; hosted Neon retains its secure WebSocket transport.
-  const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+  const local = ['localhost', '127.0.0.1', '[::1]', 'postgres'].includes(url.hostname)
   // The bundled pg connection takes a stream instance; its public type incorrectly describes a factory.
   return new Client({ connectionString: value, connectionTimeoutMillis: 10_000, ...(local ? { stream: new Socket() as unknown as ClientConfig['stream'], ssl: false } : {}) })
 }
