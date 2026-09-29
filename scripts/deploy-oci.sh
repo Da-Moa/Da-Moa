@@ -45,7 +45,7 @@ curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-max-time 60
 if [ "$previous" != "$release" ]; then
   dc build app
 fi
-dc run --rm --no-deps app npm run db:migrate
+dc run --rm --no-deps --interactive=false -T app npm run db:migrate < /dev/null
 app_up=(up -d --no-deps app)
 if [ "$previous" = "$release" ]; then app_up=(up -d --force-recreate --no-deps app); fi
 if ! dc "${app_up[@]}" || ! curl --fail --silent --show-error --retry 60 --retry-delay 2 --retry-max-time 120 --retry-all-errors --max-time 5 --output /dev/null http://127.0.0.1:3000/api/health; then

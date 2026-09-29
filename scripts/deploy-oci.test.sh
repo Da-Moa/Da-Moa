@@ -18,6 +18,7 @@ cat > "$tmp/bin/docker" <<'EOF'
 test -s "$TEST_ENV_FILE"
 test -s "$TEST_MINIO_ENV_FILE"
 printf '%s\n' "$*" >> "$DOCKER_LOG"
+if [[ " $* " == *' run '* ]]; then cat > /dev/null; fi
 EOF
 cat > "$tmp/bin/curl" <<'EOF'
 #!/usr/bin/env bash
@@ -39,7 +40,7 @@ printf 'NEW=value\n' > "$HOME/da-moa-$sha.env.production"
 printf 'NEW_MINIO=value\n' > "$HOME/da-moa-$sha.minio.env"
 printf 'OLD=value\n' > "$root/shared/.env.production.backup.legacy"
 touch "$HOME/da-moa-$sha.tar.gz"
-bash "$tmp/deploy.sh" "$sha"
+bash -s -- "$sha" < "$tmp/deploy.sh"
 test ! -e "$root/shared/.env.production"
 test ! -e "$root/shared/.minio.env"
 test ! -e "$root/shared/.env.production.backup.legacy"
@@ -51,7 +52,7 @@ grep -q 'up -d --wait prometheus grafana' "$DOCKER_LOG"
 printf 'BAD=value\n' > "$HOME/da-moa-$sha.env.production"
 printf 'BAD_MINIO=value\n' > "$HOME/da-moa-$sha.minio.env"
 touch "$HOME/da-moa-$sha.tar.gz" "$HOME/fail-health"
-if bash "$tmp/deploy.sh" "$sha"; then
+if bash -s -- "$sha" < "$tmp/deploy.sh"; then
   echo 'Expected deployment failure' >&2
   exit 1
 fi

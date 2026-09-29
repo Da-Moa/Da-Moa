@@ -289,7 +289,7 @@ readlink -f /srv/da-moa/current
 Grafana와 Prometheus는 서버의 `127.0.0.1`에만 열려 있습니다. 로컬 컴퓨터에서 SSH 터널을 열고 `http://localhost:3001`에 `admin`과 `GRAFANA_ADMIN_PASSWORD`로 로그인하면 **다모아 운영 → 다모아 서비스 상태** 대시보드를 볼 수 있습니다. Prometheus 대상 상태는 `http://localhost:9090/targets`에서 확인합니다.
 
 ```bash
-ssh -L 3001:127.0.0.1:3001 -L 9090:127.0.0.1:9090 da-moa@161.33.3.222
+ssh -L 3001:127.0.0.1:3001 -L 9090:127.0.0.1:9090 ubuntu@161.33.3.222
 ```
 
 대시보드는 현재 상태와 헬스체크 응답 시간을 표시합니다. 알림 발송 대상은 설정하지 않았습니다. Grafana 관리자 비밀번호를 나중에 바꿀 때는 Grafana UI에서 변경합니다. 운영 값 변경으로 컨테이너를 재생성해도 기존 Grafana 볼륨의 비밀번호는 자동 변경되지 않습니다.
