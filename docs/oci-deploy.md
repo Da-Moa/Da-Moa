@@ -78,6 +78,12 @@ PORT=3000
 
 `AUTH_JWT_SECRET`은 `openssl rand -base64 48`로 생성할 수 있습니다. 카카오 콘솔에 Redirect URI를 동일하게 등록하고 OpenID Connect를 활성화합니다.
 
+`POSTGRES_PASSWORD`는 PostgreSQL 데이터 볼륨을 **처음 초기화할 때만** `da_moa` 계정에 적용됩니다. 이후 `.env.production`의 값을 바꿔도 기존 DB 비밀번호는 바뀌지 않습니다. 마이그레이션에서 `password authentication failed for user "da_moa"`가 나오면 `POSTGRES_PASSWORD`와 `DATABASE_URL`의 비밀번호가 같은지 확인합니다. 특수문자가 있으면 URL 쪽 비밀번호는 퍼센트 인코딩해야 합니다. DB에 설정된 비밀번호를 변경해야 한다면 서버에서 다음 명령으로 `psql`에 들어가 `\password da_moa`를 실행하고, `.env.production`과 같은 새 비밀번호를 두 번 입력한 뒤 `\q`로 나옵니다. 데이터 볼륨은 유지됩니다. [PostgreSQL 공식 이미지](https://hub.docker.com/_/postgres), [psql 비밀번호 변경](https://www.postgresql.org/docs/17/sql-alterrole.html)
+
+```bash
+sudo docker compose -p da-moa --env-file /srv/da-moa/shared/.env.production -f /srv/da-moa/bootstrap/compose.production.yaml exec postgres psql -U da_moa -d da_moa
+```
+
 ## 3. 저장소 컨테이너 첫 실행
 
 첫 배포 전에 [compose.production.yaml](../compose.production.yaml)을 서버의 `/srv/da-moa/bootstrap/compose.production.yaml`로 복사합니다.
@@ -249,7 +255,7 @@ systemctl list-timers | grep -i certbot
 
 `OCI_SSH_KNOWN_HOSTS`는 로컬에서 `ssh-keyscan -t ed25519 인스턴스_IP`로 얻을 수 있습니다. 등록 전에 이미 신뢰하는 SSH 접속에서 확인한 호스트 키 지문과 `ssh-keygen -lf` 결과를 대조합니다. 개인키를 Git이나 서버의 웹 루트에 복사하지 않습니다. `OCI_HOST`에는 `known_hosts`에 사용한 것과 같은 호스트를 넣습니다.
 
-MinIO 컨테이너와 비공개 버킷·앱 전용 키를 먼저 준비한 뒤 변경 사항을 `main`에 반영하면 CI가 자동으로 배포합니다. 처음에는 **Actions → CI → Run workflow → main**으로도 실행할 수 있습니다. 완료 후 `https://203.0.113.10/api/docs`와 실제 카카오 로그인·영수증 업로드·조회·삭제·정산 흐름을 확인합니다. 서버에서 상태와 로그는 다음 명령으로 확인합니다.
+MinIO 컨테이너와 비공개 버킷·앱 전용 키를 먼저 준비한 뒤 변경 사항을 `main`에 반영하면 CI가 자동으로 배포합니다. 처음에는 **Actions → CI → Run workflow → main**으로도 실행할 수 있습니다. 완료 후 `https://161.33.3.222/api/docs`와 실제 카카오 로그인·영수증 업로드·조회·삭제·정산 흐름을 확인합니다. 서버에서 상태와 로그는 다음 명령으로 확인합니다.
 
 ```bash
 docker compose -p da-moa --env-file /srv/da-moa/shared/.env.production -f /srv/da-moa/current/compose.production.yaml ps
@@ -259,3 +265,5 @@ readlink -f /srv/da-moa/current
 ```
 
 배포 실패 시 Actions 로그를 확인합니다. 빌드나 DB 스키마 생성 실패는 현재 앱을 유지합니다. 전환 직후 점검 실패는 이전 앱 이미지로 복귀를 시도합니다. 서버 용량이 부족해지면 현재 및 복구에 필요한 앱 이미지와 릴리스를 제외한 오래된 항목을 삭제합니다.
+
+첫 배포에서 `curl: (52) Empty reply from server`가 나왔다면 앱 시작 중 연결이 끊겼거나 앱이 재시작 중일 수 있습니다. 서버에서 `sudo docker logs --tail=100 da-moa-app-1`, `sudo docker ps -a --filter name=da-moa-app-1`, `curl -i --max-time 5 http://127.0.0.1:3000/api/openapi.json`을 확인합니다. 배포 스크립트는 일시적인 빈 응답도 최대 2분 동안 재시도합니다. `current` 심볼릭 링크가 없는 첫 배포 실패에서는 위의 컨테이너 명령으로 확인합니다.

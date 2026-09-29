@@ -30,7 +30,7 @@ if [ "$previous" != "$release" ]; then
   dc build app
   dc run --rm --no-deps app npm run db:migrate
   dc up -d --no-deps app
-  if ! curl --fail --silent --show-error --retry 12 --retry-delay 2 --retry-connrefused http://127.0.0.1:3000/api/openapi.json > /dev/null; then
+  if ! curl --fail --silent --show-error --retry 60 --retry-delay 2 --retry-max-time 120 --retry-all-errors --max-time 5 --output /dev/null http://127.0.0.1:3000/api/openapi.json; then
     if [ -n "$previous" ]; then
       APP_VERSION="$(basename "$previous")" docker compose -p da-moa --env-file "$env_file" -f "$previous/compose.production.yaml" up -d --no-deps app
     fi
