@@ -4,7 +4,7 @@
 
 ## 실행
 
-Node.js **22.18 이상**과 Docker가 필요합니다. 로컬 개발은 Docker PostgreSQL을 사용합니다. 앱과 실시간 연결은 같은 Node 서버에서 실행하며, 운영 DB에는 별도의 PostgreSQL 또는 Neon `DATABASE_URL`을 사용합니다.
+Node.js **22.18 이상**과 Docker가 필요합니다. 로컬 개발은 Docker PostgreSQL을 사용합니다. 앱과 실시간 연결은 같은 Node 서버에서 실행합니다. 영수증 업로드에는 MinIO가 필요합니다.
 
 ```bash
 npm install
@@ -19,7 +19,10 @@ cp .env.example .env.local
 | `KAKAO_REDIRECT_URI` | 로컬에서는 `http://localhost:3000/auth/v1/kakao`. 카카오 콘솔에 같은 URI 등록 |
 | `KAKAO_CLIENT_SECRET` | 카카오 콘솔에서 Client Secret을 사용하는 경우만 설정 |
 | `AUTH_JWT_SECRET` | 32바이트 이상의 임의 비밀 문자열 |
-| `DATABASE_URL` | 로컬은 `postgresql://da_moa:da_moa_local@127.0.0.1:55432/da_moa_dev`, 배포 환경은 해당 PostgreSQL 또는 Neon 연결 문자열 |
+| `DATABASE_URL` | 로컬은 `postgresql://da_moa:da_moa_local@127.0.0.1:55432/da_moa_dev`, OCI 앱 컨테이너는 Compose의 `postgres:5432` 연결 문자열 |
+| `MINIO_ENDPOINT` | MinIO S3 API 주소. 운영 앱 컨테이너는 `http://minio:9000` |
+| `MINIO_BUCKET` | 비공개 영수증 버킷 이름 |
+| `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` | 해당 버킷에 읽기·쓰기·삭제 권한이 있는 전용 사용자 키 |
 | `NEXT_DEV_ALLOWED_ORIGINS` | 개발 서버 접근 허용 호스트를 쉼표로 구분. 미설정 시 기존 `192.168.219.141`, 빈 값이면 추가 허용 없음. 변경 후 개발 서버 재시작 |
 
 ```bash
@@ -30,6 +33,8 @@ npm run dev
 ```
 
 `npm run db:local:down`은 컨테이너만 중지하고 DB 데이터는 Docker volume에 유지합니다. `da_moa_dev_test`를 담던 기존 `postgres-data` 볼륨은 보존하고 개발 DB는 별도 `postgres-dev-data` 볼륨에 생성합니다. `.env.local`은 Git 배포에 포함되지 않습니다.
+
+이전 버전으로 이미 만든 로컬 DB에는 영수증 `content` 컬럼이 남아 있을 수 있습니다. 이번 초기 스키마는 빈 DB를 대상으로 하므로 기존 로컬 데이터를 계속 쓸 경우 별도 이행이 필요합니다. 운영 첫 배포에는 영향이 없습니다.
 
 [http://localhost:3000](http://localhost:3000)에서 시작합니다. API 문서는 `/api/docs`, OpenAPI JSON은 `/api/openapi.json`에서 확인할 수 있습니다. [정산기능-intent.md](intent/정산기능-intent.md)는 정책 결정 기록, [정산기능-spec.md](spec/정산기능-spec.md)는 요구사항·상태·권한·인수 기준입니다. 금액 부호는 최신 명세를 따라 **부담액 − 결제액**, 양수는 보낼 돈·음수는 받을 돈입니다.
 
@@ -47,7 +52,7 @@ npm run dev
 
 통화의 주 단위를 기준으로 지출 한 건은 100,000,000 이하, 한 회차의 전체 지출은 1,000,000,000 이하로 제한합니다. 수정할 때는 기존 금액을 제외한 회차 합계를 다시 계산합니다.
 
-영수증은 지출 저장 후 별도로 업로드하는 **증빙 이미지**입니다. JPEG·PNG·WebP를 받으며 신규 파일은 AVIF로 변환해 PostgreSQL에 저장하고 AVIF로 응답합니다. 앱 자체 파일 크기 제한은 없고 기존에 저장된 JPEG·PNG·WebP는 원래 형식으로 계속 조회합니다. 이미지 변환기의 픽셀 수 안전장치는 유지합니다. OCR·자동 금액 입력, 환불 기록, 복수 결제자, 환전, 실제 송금·입금 추적, 카카오 메시지 발송은 제공하지 않습니다.
+영수증은 지출 저장 후 별도로 업로드하는 **증빙 이미지**입니다. JPEG·PNG·WebP를 받으며 AVIF로 변환해 비공개 MinIO 버킷에 저장합니다. PostgreSQL에는 객체 키·형식·크기·해시만 남기고 인증된 API를 통해 AVIF로 응답합니다. 앱 자체 파일 크기 제한은 없으며 이미지 변환기의 픽셀 수 안전장치는 유지합니다. OCR·자동 금액 입력, 환불 기록, 복수 결제자, 환전, 실제 송금·입금 추적, 카카오 메시지 발송은 제공하지 않습니다.
 
 ## 이탈·탈퇴와 개인정보
 
@@ -61,7 +66,7 @@ npm run dev
 
 개인별 물리 정산 테이블을 만들지 않습니다. 회차의 분담·개인 잔액과 공통 `보내는 사람 → 받는 사람` 송금 행을 하나의 DB 트랜잭션으로 저장합니다. 변경 요청은 `Idempotency-Key`를 사용하고 회차 변경은 `expectedVersion`도 요구합니다. 응답이 유실되면 같은 키·본문으로 재시도하며 이미 성공한 작업을 다시 적용하지 않습니다. 지출 저장의 버전 충돌은 최신 회차를 자동 조회한 뒤 같은 입력으로 한 번 재저장합니다.
 
-초기 쓰기는 공통 PostgreSQL advisory transaction lock으로 직렬화합니다. 읽기는 별도 스냅샷을 사용합니다. 이 방식과 PostgreSQL의 증빙 저장은 초기 구현 선택이며, 실제 쓰기 대기나 이미지 저장 비용 또는 배포 인프라의 파일 전달 한계가 문제가 될 때 잠금 세분화·비공개 객체 저장소 직접 업로드 이행을 검토합니다.
+초기 쓰기는 공통 PostgreSQL advisory transaction lock으로 직렬화합니다. 읽기는 별도 스냅샷을 사용합니다. 영수증 객체는 MinIO에 저장하고 DB는 객체 키를 관리합니다. 업로드 후 DB 저장이 실패하거나 DB 커밋 뒤 객체 삭제가 실패하면 참조되지 않은 객체가 남을 수 있으므로 저장소를 점검해야 합니다.
 
 모임·회차·지출·정산·계좌 변경은 DB 커밋 후 이 Node 서버의 인증된 사용자별 WebSocket 연결로 재조회 키만 발행합니다. 브라우저는 이벤트를 받으면 기존 인증 API를 다시 읽습니다. 금액·계좌·영수증·초대 토큰은 메시지에 넣지 않으며, 연결이 끊기면 재연결 시 현재 화면을 다시 조회합니다. 실시간 연결이 일시 실패해도 저장 결과는 유지되고 수동 새로고침을 사용할 수 있습니다.
 
@@ -78,7 +83,7 @@ npm test
 npm run build
 ```
 
-`npm test`는 `node --import tsx --test`로 금액·분배·인증·권한·API 계약을 검증합니다. DB 트랜잭션·롤백·동시 요청과 Route Handler 검증에는 **로컬 호스트에서 이름에 `test`가 포함된 별도 DB**를 먼저 만들고 `TEST_DATABASE_URL`로 지정합니다. 테스트가 마이그레이션과 검증용 회원·모임·지출을 실제로 저장하므로 개발·운영 DB를 사용하지 않습니다. 테스트 명령은 `.env.local`을 자동으로 읽지 않습니다.
+`npm test`는 `node --import tsx --test`로 금액·분배·인증·권한·API 계약을 검증합니다. DB 트랜잭션·롤백·동시 요청과 Route Handler 검증에는 **로컬 호스트에서 이름에 `test`가 포함된 별도 DB**를 먼저 만들고 `TEST_DATABASE_URL`로 지정합니다. 영수증 통합 테스트에는 개발·운영과 분리된 MinIO 버킷과 `MINIO_*` 환경 변수도 필요합니다. 테스트가 마이그레이션과 검증용 회원·모임·지출·영수증을 실제로 저장하므로 개발·운영 저장소를 사용하지 않습니다. 테스트 명령은 `.env.local`을 자동으로 읽지 않습니다.
 
 ```bash
 export TEST_DATABASE_URL='postgresql://사용자:비밀번호@127.0.0.1:5432/da_moa_test'
@@ -118,33 +123,12 @@ npm run db:seed:test-accounts
 
 ## 배포
 
-오라클 Compute 인스턴스에서 Node 22.18 이상으로 실행합니다. 기존 Neon `DATABASE_URL`을 그대로 사용할 수 있고, 개발·운영 DB는 분리합니다. `DATABASE_URL`, `AUTH_JWT_SECRET`, 카카오 인증 변수를 설정한 뒤 `npm ci --include=dev`, `npm run db:migrate`, `npm run build`, `npm start` 순서로 실행합니다. 운영 서버는 기본적으로 `127.0.0.1:3000`에만 바인딩됩니다. `PORT`와 `HOST`로 변경할 수 있습니다. 운영 API의 변경 요청과 WebSocket 연결은 `KAKAO_REDIRECT_URI`의 공개 도메인에서 온 요청만 허용합니다. 같은 도메인을 유지하면 기존 세션을 유지할 수 있도록 `AUTH_JWT_SECRET`도 유지하고, 도메인이 바뀌면 카카오 콘솔의 Redirect URI와 `KAKAO_REDIRECT_URI`를 함께 변경합니다. 마이그레이션은 기존 사용자 ID와 카카오 식별자를 보존하고 완료한 이행을 반복하지 않습니다.
+Ubuntu arm64 오라클 인스턴스의 IP HTTPS, Docker Compose 앱·PostgreSQL·MinIO 설정과 GitHub Actions 배포 절차는 [OCI 배포 가이드](docs/oci-deploy.md)를 따릅니다. PostgreSQL과 MinIO 데이터는 각각 이름 있는 Docker 볼륨에 저장하고, 배포 시 기존 저장소 컨테이너와 볼륨을 유지하면서 앱만 교체합니다. `main`에 반영하면 테스트·빌드가 통과한 커밋으로 앱 이미지를 서버에서 빌드하고, 빈 운영 DB에 스키마를 만든 뒤 컨테이너를 전환합니다. 개발·운영 DB와 MinIO 버킷은 분리합니다. 운영 API의 변경 요청과 WebSocket 연결은 `KAKAO_REDIRECT_URI`의 공개 주소에서 온 요청만 허용합니다. 같은 IP를 유지하면 기존 세션을 유지할 수 있도록 `AUTH_JWT_SECRET`도 유지하고, 공개 주소가 바뀌면 카카오 콘솔의 Redirect URI와 `KAKAO_REDIRECT_URI`를 함께 변경합니다.
 
-지속 실행에는 systemd를 사용합니다. `/etc/da-moa.env`에 위 서버 환경 변수를 설정하고 소유자만 읽게 한 뒤, 실제 Node 경로와 배포 디렉터리에 맞춰 다음 서비스를 등록합니다.
-
-```ini
-# /etc/systemd/system/da-moa.service
-[Unit]
-Description=Da Moa web app
-After=network-online.target
-
-[Service]
-Type=simple
-User=da-moa
-WorkingDirectory=/srv/da-moa
-Environment=NODE_ENV=production
-EnvironmentFile=/etc/da-moa.env
-ExecStart=/usr/bin/node /srv/da-moa/server.mjs
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-```
-
-TLS가 적용된 Nginx `server` 블록 안에서 앱과 WebSocket을 같은 포트로 프록시합니다. 아래 위치 설정은 기존 도메인과 인증서 설정에 추가합니다.
+TLS가 적용된 Nginx `server` 블록 안에서 앱과 WebSocket을 같은 포트로 프록시합니다. Compose 앱의 3000번 포트는 호스트의 `127.0.0.1:3000`에만 게시합니다. 아래 위치 설정은 [OCI 배포 가이드](docs/oci-deploy.md)의 IP 인증서 설정에 추가합니다.
 
 ```nginx
+location = /internal/realtime { return 404; }
 location = /realtime {
     proxy_pass http://127.0.0.1:3000;
     proxy_http_version 1.1;
@@ -161,11 +145,6 @@ location / {
 }
 ```
 
-Oracle 방화벽에서는 HTTPS만 공개하고 앱 포트 3000은 공개하지 않습니다. 실시간 알림은 현재 단일 서버 인스턴스 안에서 전달하므로 앱을 한 인스턴스로 실행합니다. 여러 인스턴스로 확장할 때는 인스턴스 간 발행 경로를 추가해야 합니다.
+Oracle 방화벽에서는 인증서 발급·갱신용 HTTP 80과 HTTPS 443만 공개하고 앱 포트 3000, DB 포트 5432, MinIO 포트 9000·9001은 공개하지 않습니다. 실시간 알림은 현재 단일 서버 인스턴스 안에서 전달하므로 앱을 한 인스턴스로 실행합니다. 여러 인스턴스로 확장할 때는 인스턴스 간 발행 경로를 추가해야 합니다.
 
-기존 회원은 계좌 정보가 없으므로 첫 이행에서 기존 세션을 폐기하고 **한 번 재로그인·계좌 등록**을 요구합니다. 스키마를 먼저 이행하고 새 가입·소프트 삭제·도메인 코드를 배포합니다. 구버전의 회원 물리 삭제 코드로 되돌리거나 스키마 롤백으로 과거 자료를 삭제하지 않습니다. 큰 증빙 이미지 업로드·조회는 배포 프록시의 요청·응답 크기 상한을 확인해야 합니다.
-
-회차별 통화 선택 전환은 `004` 추가 마이그레이션으로 적용합니다. 기존 `001~003` 파일과 과거 회차의 통화·금액·정산 결과를 유지하며 인증 이행·기존 세션 폐기를 반복하지 않습니다.
-회차 생성자 분리는 `005`, 신규 증빙의 AVIF 변환 저장과 앱의 바이트 상한 제거는 `006` 추가 마이그레이션으로 적용합니다.
-기존 완료 회차의 정산 확인 시각은 `007`에서 임시 회원 단위 값으로 이행하고, `008`에서 각 수취 이체로 복사한 뒤 임시 컬럼을 제거합니다. `008`은 반드시 `007` 다음에 적용합니다.
-개별 항목 분배는 `010` 추가 마이그레이션으로 적용합니다. 기존 지출·정산 결과를 유지하고 `expense_shares.assigned_amount_minor`에 개별 지정 부담금을 저장하며 기존 균등 분배의 해당 컬럼은 NULL로 둡니다.
+첫 배포에서는 빈 운영 DB에 `001~010` 스키마 파일을 순서대로 적용합니다. 영수증 테이블은 처음부터 MinIO 객체 키를 저장합니다. 큰 증빙 이미지 업로드·조회는 배포 프록시의 요청·응답 크기 상한을 확인해야 합니다.
