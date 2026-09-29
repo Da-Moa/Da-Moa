@@ -1,6 +1,6 @@
 # OCI Ubuntu arm64 배포
 
-GitHub Actions는 PR에서 `npm test`와 `npm run build`를 실행합니다. `main` push 또는 수동 실행 시 검증을 통과한 커밋을 SSH로 전송합니다. 서버는 arm64 앱 이미지를 빌드하고 Compose에서 앱·PostgreSQL·MinIO를 실행합니다. PostgreSQL과 MinIO는 각각 이름 있는 Docker 볼륨에 데이터를 저장합니다. 첫 배포에서는 빈 DB에 스키마를 만들고, 앱 전환 후 `/api/openapi.json` 점검에 실패하면 이전 앱 이미지로 되돌립니다.
+GitHub Actions는 PR에서 `npm test`와 `npm run build`를 실행합니다. `main` push 또는 수동 실행 시 검증을 통과한 커밋을 SSH로 전송합니다. 서버는 arm64 앱 이미지를 빌드하고 Compose에서 앱·PostgreSQL·MinIO를 실행합니다. PostgreSQL과 MinIO는 각각 이름 있는 Docker 볼륨에 데이터를 저장합니다. 첫 배포에서는 빈 DB에 스키마를 만들고, 앱 전환 후 `/api/openapi.json` 점검에 실패하면 이전 앱 이미지로 되돌립니다. 배포용 앱 환경 파일은 배포가 끝나면 서버에서 삭제합니다.
 
 ## 1. 공인 IP와 인스턴스 준비
 
@@ -61,7 +61,7 @@ MINIO_ROOT_USER=고유한_관리자_아이디
 MINIO_ROOT_PASSWORD=길고_임의의_관리자_비밀번호
 ```
 
-서버에서 `sudoedit /srv/da-moa/shared/.env.production`을 열고 앱과 PostgreSQL 설정을 넣습니다. DB 비밀번호에 URL 예약 문자가 있으면 `DATABASE_URL`에서 퍼센트 인코딩합니다. MinIO 앱 전용 키는 다음 절에서 버킷을 만든 후 채웁니다.
+초기 저장소 실행에 사용할 `/srv/da-moa/shared/.env.production`을 준비합니다. 이후 운영 값은 GitHub `production` Environment Secret `OCI_PRODUCTION_ENV`에 **파일 전체 내용**을 등록하고, 배포가 서버 파일을 교체합니다. DB 비밀번호에 URL 예약 문자가 있으면 `DATABASE_URL`에서 퍼센트 인코딩합니다. MinIO 앱 전용 키는 다음 절에서 버킷을 만든 후 채웁니다.
 
 ```dotenv
 POSTGRES_PASSWORD=openssl_rand_hex_32로_생성한_값
@@ -79,10 +79,10 @@ PORT=3000
 
 `AUTH_JWT_SECRET`은 `openssl rand -base64 48`로 생성할 수 있습니다. 카카오 콘솔에 Redirect URI를 동일하게 등록하고 OpenID Connect를 활성화합니다. 카카오 REST API 키의 클라이언트 시크릿이 ON이면 `KAKAO_CLIENT_SECRET`에 **별도 코드**를 설정합니다. `KAKAO_REST_API_KEY`에 시크릿을 넣으면 안 됩니다. [카카오 토큰 요청](https://developers.kakao.com/docs/ko/kakaologin/rest-api)
 
-`POSTGRES_PASSWORD`는 PostgreSQL 데이터 볼륨을 **처음 초기화할 때만** `da_moa` 계정에 적용됩니다. 이후 `.env.production`의 값을 바꿔도 기존 DB 비밀번호는 바뀌지 않습니다. 마이그레이션에서 `password authentication failed for user "da_moa"`가 나오면 `POSTGRES_PASSWORD`와 `DATABASE_URL`의 비밀번호가 같은지 확인합니다. 특수문자가 있으면 URL 쪽 비밀번호는 퍼센트 인코딩해야 합니다. DB에 설정된 비밀번호를 변경해야 한다면 서버에서 다음 명령으로 `psql`에 들어가 `\password da_moa`를 실행하고, `.env.production`과 같은 새 비밀번호를 두 번 입력한 뒤 `\q`로 나옵니다. 데이터 볼륨은 유지됩니다. [PostgreSQL 공식 이미지](https://hub.docker.com/_/postgres), [psql 비밀번호 변경](https://www.postgresql.org/docs/17/sql-alterrole.html)
+`POSTGRES_PASSWORD`는 PostgreSQL 데이터 볼륨을 **처음 초기화할 때만** `da_moa` 계정에 적용됩니다. 이후 Secret의 값을 바꿔도 기존 DB 비밀번호는 바뀌지 않습니다. 마이그레이션에서 `password authentication failed for user "da_moa"`가 나오면 `POSTGRES_PASSWORD`와 `DATABASE_URL`의 비밀번호가 같은지 확인합니다. 특수문자가 있으면 URL 쪽 비밀번호는 퍼센트 인코딩해야 합니다. DB에 설정된 비밀번호를 변경해야 한다면 서버에서 다음 명령으로 `psql`에 들어가 `\password da_moa`를 실행하고, GitHub Secret에 넣을 새 비밀번호를 두 번 입력한 뒤 `\q`로 나옵니다. 데이터 볼륨은 유지됩니다. [PostgreSQL 공식 이미지](https://hub.docker.com/_/postgres), [psql 비밀번호 변경](https://www.postgresql.org/docs/17/sql-alterrole.html)
 
 ```bash
-sudo docker compose -p da-moa --env-file /srv/da-moa/shared/.env.production -f /srv/da-moa/bootstrap/compose.production.yaml exec postgres psql -U da_moa -d da_moa
+sudo docker exec -it da-moa-postgres-1 psql -U da_moa -d da_moa
 ```
 
 ## 3. 저장소 컨테이너 첫 실행
@@ -149,12 +149,12 @@ MinIO의 S3 API와 콘솔은 서버의 `127.0.0.1:9000`, `127.0.0.1:9001`에만 
 }
 ```
 
-발급한 앱 전용 키를 `/srv/da-moa/shared/.env.production`의 `MINIO_ACCESS_KEY`·`MINIO_SECRET_KEY`에 넣습니다. 앱 컨테이너는 Compose 내부에서 `postgres:5432`와 `minio:9000`에 접속하며, Nginx는 호스트의 `127.0.0.1:3000`으로 프록시합니다. DB와 MinIO 포트는 OCI 보안 목록에 열지 않습니다.
+발급한 앱 전용 키를 GitHub `production` Environment Secret `OCI_PRODUCTION_ENV`의 `MINIO_ACCESS_KEY`·`MINIO_SECRET_KEY`에 넣습니다. 앱 컨테이너는 Compose 내부에서 `postgres:5432`와 `minio:9000`에 접속하며, Nginx는 호스트의 `127.0.0.1:3000`으로 프록시합니다. DB와 MinIO 포트는 OCI 보안 목록에 열지 않습니다.
 
 **`docker compose down -v`, `docker volume rm`, `docker volume prune`를 운영 데이터 볼륨에 실행하지 마세요.** 볼륨은 인스턴스 디스크에 있으므로 인스턴스나 디스크 자체의 장애에는 별도 백업이 필요합니다. PostgreSQL 덤프와 MinIO 객체를 정기적으로 인스턴스 밖에 백업하고 복원도 확인합니다. DB 백업 예시:
 
 ```bash
-docker compose -p da-moa --env-file /srv/da-moa/shared/.env.production -f /srv/da-moa/current/compose.production.yaml exec -T postgres pg_dump -U da_moa -Fc da_moa > "$HOME/da-moa-$(date +%F).dump"
+docker exec -i da-moa-postgres-1 pg_dump -U da_moa -Fc da_moa > "$HOME/da-moa-$(date +%F).dump"
 ```
 
 ## 4. IP용 HTTPS 인증서와 Nginx
@@ -253,18 +253,23 @@ systemctl list-timers | grep -i certbot
 | Variable | `OCI_USER` | `da-moa` |
 | Secret | `OCI_SSH_PRIVATE_KEY` | 배포 전용 개인키 전체 내용 |
 | Secret | `OCI_SSH_KNOWN_HOSTS` | 인스턴스 SSH 호스트 키의 `known_hosts` 한 줄 |
+| Secret | `OCI_PRODUCTION_ENV` | `.env.production` 전체 내용(여러 줄 그대로 입력) |
 
 `OCI_SSH_KNOWN_HOSTS`는 로컬에서 `ssh-keyscan -t ed25519 인스턴스_IP`로 얻을 수 있습니다. 등록 전에 이미 신뢰하는 SSH 접속에서 확인한 호스트 키 지문과 `ssh-keygen -lf` 결과를 대조합니다. 개인키를 Git이나 서버의 웹 루트에 복사하지 않습니다. `OCI_HOST`에는 `known_hosts`에 사용한 것과 같은 호스트를 넣습니다.
+
+`OCI_PRODUCTION_ENV`에는 위의 `POSTGRES_PASSWORD`부터 `PORT`까지 실제 운영 값을 포함한 `.env.production` 전체 내용을 붙여 넣습니다. 이 Secret이 없거나 비어 있으면 배포는 서버 파일을 바꾸기 전에 중단합니다. Actions는 배포 중에만 서버의 `/srv/da-moa/shared/.env.production`을 권한 `600`으로 만들고, 성공·실패 시 업로드본과 함께 삭제합니다. 기존 배포에서 남은 환경 파일과 백업본도 삭제합니다. 값만 바꿨다면 **Actions → CI → Run workflow → main**을 다시 실행하면 같은 커밋에서도 앱 컨테이너를 재생성합니다. 환경 파일을 보관하지 않으므로 잘못된 새 Secret으로 컨테이너가 교체된 뒤에는 이전 설정으로 자동 복구할 수 없습니다. Secret을 수정해 다시 배포해야 합니다. Docker 재시작 정책에 따른 기존 컨테이너 재시작에는 파일이 필요하지 않지만, 수동 Compose 재생성에는 Secret을 다시 전달해야 합니다. `POSTGRES_PASSWORD`는 기존 DB 계정 비밀번호를 자동으로 바꾸지 않으므로 회전할 때는 위의 `\password da_moa` 절차도 필요합니다. `.minio.env`와 `minio.license`는 서버에 계속 보관합니다. 또한 실행 중인 컨테이너의 환경변수는 Docker 권한으로 조회할 수 있어, 파일 삭제만으로 인스턴스 침해 시 비밀값 노출을 막을 수는 없습니다. [GitHub Environment Secret 설정](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets)
 
 MinIO 컨테이너와 비공개 버킷·앱 전용 키를 먼저 준비한 뒤 변경 사항을 `main`에 반영하면 CI가 자동으로 배포합니다. 처음에는 **Actions → CI → Run workflow → main**으로도 실행할 수 있습니다. 완료 후 `https://161.33.3.222/api/docs`와 실제 카카오 로그인·영수증 업로드·조회·삭제·정산 흐름을 확인합니다. 서버에서 상태와 로그는 다음 명령으로 확인합니다.
 
 ```bash
-docker compose -p da-moa --env-file /srv/da-moa/shared/.env.production -f /srv/da-moa/current/compose.production.yaml ps
-docker compose -p da-moa --env-file /srv/da-moa/shared/.env.production -f /srv/da-moa/current/compose.production.yaml logs --tail=100 app postgres minio
+docker ps --filter name=da-moa-
+docker logs --tail=100 da-moa-app-1
+docker logs --tail=100 da-moa-postgres-1
+docker logs --tail=100 da-moa-minio-1
 docker volume ls --filter name=da-moa_
 readlink -f /srv/da-moa/current
 ```
 
-배포 실패 시 Actions 로그를 확인합니다. 빌드나 DB 스키마 생성 실패는 현재 앱을 유지합니다. 전환 직후 점검 실패는 이전 앱 이미지로 복귀를 시도합니다. 서버 용량이 부족해지면 현재 및 복구에 필요한 앱 이미지와 릴리스를 제외한 오래된 항목을 삭제합니다.
+배포 실패 시 Actions 로그를 확인합니다. 빌드나 DB 스키마 생성 실패는 현재 앱을 유지합니다. 전환 직후 점검 실패는 이전 앱 이미지로 복귀를 시도하지만 새 환경값을 사용하므로 잘못된 Secret은 수정 후 재배포해야 합니다. 서버 용량이 부족해지면 현재 및 복구에 필요한 앱 이미지와 릴리스를 제외한 오래된 항목을 삭제합니다.
 
 첫 배포에서 `curl: (52) Empty reply from server`가 나왔다면 앱 시작 중 연결이 끊겼거나 앱이 재시작 중일 수 있습니다. 서버에서 `sudo docker logs --tail=100 da-moa-app-1`, `sudo docker ps -a --filter name=da-moa-app-1`, `curl -i --max-time 5 http://127.0.0.1:3000/api/openapi.json`을 확인합니다. 배포 스크립트는 일시적인 빈 응답도 최대 2분 동안 재시도합니다. `current` 심볼릭 링크가 없는 첫 배포 실패에서는 위의 컨테이너 명령으로 확인합니다.

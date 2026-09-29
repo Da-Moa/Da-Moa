@@ -7,14 +7,23 @@ sha="${1:?commit SHA required}"
 root=/srv/da-moa
 release="$root/releases/$sha"
 archive="$HOME/da-moa-$sha.tar.gz"
+incoming_env="$HOME/da-moa-$sha.env.production"
 env_file="$root/shared/.env.production"
-test -f "$env_file"
+cleanup() {
+  local status=$?
+  trap - EXIT
+  rm -f "$archive" "$incoming_env" "$env_file" "$env_file.next" "$root/shared"/.env.production.backup.*
+  exit "$status"
+}
+trap cleanup EXIT
 test -f "$root/shared/.minio.env"
 test -f "$root/shared/minio.license"
 test -f "$archive"
+test -s "$incoming_env"
 previous=''
 if [ -L "$root/current" ]; then previous=$(readlink -f "$root/current"); fi
-trap 'rm -f "$archive"' EXIT
+install -m 600 "$incoming_env" "$env_file.next"
+mv -Tf "$env_file.next" "$env_file"
 if [ "$previous" != "$release" ]; then
   rm -rf "$release"
   mkdir -p "$release"
@@ -28,15 +37,18 @@ dc() { docker compose -p da-moa --env-file "$env_file" -f "$release/compose.prod
 dc up -d --wait --no-recreate postgres minio
 if [ "$previous" != "$release" ]; then
   dc build app
-  dc run --rm --no-deps app npm run db:migrate
-  dc up -d --no-deps app
-  if ! curl --fail --silent --show-error --retry 60 --retry-delay 2 --retry-max-time 120 --retry-all-errors --max-time 5 --output /dev/null http://127.0.0.1:3000/api/openapi.json; then
-    if [ -n "$previous" ]; then
-      APP_VERSION="$(basename "$previous")" docker compose -p da-moa --env-file "$env_file" -f "$previous/compose.production.yaml" up -d --no-deps app
-    fi
-    echo 'Deployment failed; restored previous app when available' >&2
-    exit 1
+fi
+dc run --rm --no-deps app npm run db:migrate
+app_up=(up -d --no-deps app)
+if [ "$previous" = "$release" ]; then app_up=(up -d --force-recreate --no-deps app); fi
+if ! dc "${app_up[@]}" || ! curl --fail --silent --show-error --retry 60 --retry-delay 2 --retry-max-time 120 --retry-all-errors --max-time 5 --output /dev/null http://127.0.0.1:3000/api/openapi.json; then
+  if [ -n "$previous" ] && [ "$previous" != "$release" ]; then
+    APP_VERSION="$(basename "$previous")" docker compose -p da-moa --env-file "$env_file" -f "$previous/compose.production.yaml" up -d --force-recreate --no-deps app
   fi
+  echo 'Deployment failed; previous app code restored when available (using the new environment)' >&2
+  exit 1
+fi
+if [ "$previous" != "$release" ]; then
   ln -s "$release" "$root/current.next"
   mv -Tf "$root/current.next" "$root/current"
 fi
