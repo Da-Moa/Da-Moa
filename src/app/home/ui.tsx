@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Check, ChevronDown, ChevronLeft, CircleUserRound, History, House, Menu, Users, X } from 'lucide-react'
+import { ChevronDown, ChevronLeft, CircleUserRound, History, House, Menu, Users, X } from 'lucide-react'
 import { ApiError, apiRequest, discardBankAccountRequests, discardPendingRequest } from '../../lib/api-client'
 import { BANKS, formatAccountNumber, parseClipboardAccount, suggestBanks } from '../../lib/bank-account'
 import type { RoundStatus } from '../../lib/domain-types'
@@ -122,6 +122,7 @@ export function BankFields({ disabled, error, account }: { disabled?: boolean; e
   const fields = useRef<HTMLDivElement>(null)
   const bankDialog = useRef<HTMLDialogElement>(null)
   const bankTrigger = useRef<HTMLButtonElement>(null)
+  const bankClosing = useRef(false)
   const [bankOpen, setBankOpen] = useState(false)
   const [selectedBank, setSelectedBank] = useState(account?.bankCode ?? BANKS.find(bank => bank.name === account?.bankName)?.code ?? '')
   const [number, setNumber] = useState(account?.accountNumber ?? '')
@@ -130,17 +131,29 @@ export function BankFields({ disabled, error, account }: { disabled?: boolean; e
   const clipboardReading = useRef(false)
   const candidates = suggestBanks(number)
   function openBanks() {
-    if (disabled || !number) return
+    if (disabled || !number || bankClosing.current) return
     bankDialog.current?.showModal()
     setBankOpen(true)
     bankDialog.current?.querySelector<HTMLButtonElement>(`[data-bank-code="${selectedBank || BANKS[0].code}"]`)?.focus()
   }
+  async function closeBanks() {
+    const dialog = bankDialog.current
+    if (!dialog?.open || bankClosing.current) return
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { dialog.close(); return }
+    bankClosing.current = true
+    const animation = dialog.animate([{ transform: getComputedStyle(dialog).transform }, { transform: 'translateY(100%)' }], { duration: 200, easing: 'ease-in', fill: 'forwards' })
+    try { await animation.finished } catch { /* A cancelled animation must still close the dialog. */ }
+    if (dialog.isConnected) dialog.close()
+    animation.cancel()
+    bankClosing.current = false
+  }
   function formatInput(input: HTMLInputElement, bank = selectedBank, partial = true) { input.value = formatAccountNumber(bank, input.value, partial) }
   function chooseBank(code: string) {
+    if (bankClosing.current) return
     setSelectedBank(code)
     const input = fields.current?.querySelector<HTMLInputElement>('[name="accountNumber"]')
     if (input) formatInput(input, code)
-    bankDialog.current?.close()
+    void closeBanks()
   }
   function pasteAccount(parsed: ReturnType<typeof parseClipboardAccount>, input: HTMLInputElement) {
     setClipboardAccount(null)
@@ -203,9 +216,9 @@ export function BankFields({ disabled, error, account }: { disabled?: boolean; e
       {number && (candidates.length > 0 ? <div className="bank-candidates" aria-label="계좌번호로 찾은 은행 후보"><div className="bank-candidate-list">{candidates.map(code => <button aria-pressed={selectedBank === code} className="bank-candidate" disabled={disabled} key={code} onClick={() => chooseBank(code)} type="button"><img alt="" draggable={false} height={20} src={`/banks/${code}.${code === '227' ? 'png' : 'svg'}`} width={20} />{BANKS.find(bank => bank.code === code)?.name}</button>)}</div></div> : <p className="help-text">은행을 직접 선택해 주세요.</p>)}
     </div>
     <label className="field line-field" htmlFor={`${id}-holder`}><span>예금주</span><input autoComplete="off" defaultValue={account?.accountHolder ?? ''} disabled={disabled} id={`${id}-holder`} maxLength={100} name="accountHolder" placeholder=" " required /></label>
-    <dialog aria-labelledby={`${id}-banks-title`} className="bank-sheet" id={`${id}-banks`} onClick={event => { if (event.target === event.currentTarget) event.currentTarget.close() }} onClose={() => { setBankOpen(false); bankTrigger.current?.focus() }} ref={bankDialog}>
-      <div className="bank-sheet-content"><div className="bank-sheet-handle" aria-hidden="true" /><header className="bank-sheet-header"><h2 id={`${id}-banks-title`}>은행을 선택해 주세요</h2><button aria-label="은행 선택 닫기" className="icon-button" onClick={() => bankDialog.current?.close()} type="button"><X aria-hidden="true" size={20} /></button></header>
-        <div aria-label="은행 목록" className="bank-grid" role="group">{BANKS.map(bank => <button aria-pressed={selectedBank === bank.code} className="bank-tile" data-bank-code={bank.code} key={bank.code} onClick={() => chooseBank(bank.code)} type="button"><img alt="" draggable={false} height={32} src={`/banks/${bank.code}.${bank.code === '227' ? 'png' : 'svg'}`} width={32} /><span>{bank.name}</span>{selectedBank === bank.code && <Check aria-hidden="true" className="bank-tile-check" size={16} />}</button>)}</div>
+    <dialog aria-labelledby={`${id}-banks-title`} className="bank-sheet" id={`${id}-banks`} onCancel={event => { event.preventDefault(); void closeBanks() }} onClick={event => { if (event.target === event.currentTarget) void closeBanks() }} onClose={() => { setBankOpen(false); bankTrigger.current?.focus() }} ref={bankDialog}>
+      <div className="bank-sheet-content"><div className="bank-sheet-handle" aria-hidden="true" /><header className="bank-sheet-header"><h2 id={`${id}-banks-title`}>은행을 선택해 주세요</h2><button aria-label="은행 선택 닫기" className="icon-button" onClick={() => void closeBanks()} type="button"><X aria-hidden="true" size={20} /></button></header>
+        <div aria-label="은행 목록" className="bank-grid" role="group">{BANKS.map(bank => <button aria-pressed={selectedBank === bank.code} className="bank-tile" data-bank-code={bank.code} key={bank.code} onClick={() => chooseBank(bank.code)} type="button"><img alt="" draggable={false} height={32} src={`/banks/${bank.code}.${bank.code === '227' ? 'png' : 'svg'}`} width={32} /><span>{bank.name}</span></button>)}</div>
       </div>
     </dialog>
   </div>

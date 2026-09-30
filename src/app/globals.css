@@ -362,6 +362,8 @@ select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3
 .bank-select-trigger svg { color: #6b7684; flex-shrink: 0; }
 .bank-select-native { height: 1px; opacity: 0; overflow: hidden; pointer-events: none; position: absolute; width: 1px; }
 .bank-sheet { background: #fff; border: 0; border-radius: 24px 24px 0 0; bottom: 0; box-shadow: var(--box-shadow); color: #191f28; inset-inline: 0; margin: auto auto 0; max-height: min(80dvh, 720px); max-width: 480px; overflow: hidden; padding: 0; width: 100%; }
+.bank-sheet[open] { animation: bank-sheet-rise .24s cubic-bezier(.2, .8, .2, 1); }
+@keyframes bank-sheet-rise { from { transform: translateY(100%); } to { transform: translateY(0); } }
 .bank-sheet::backdrop { background: rgba(25, 31, 40, .58); }
 .bank-sheet-content { display: flex; flex-direction: column; max-height: min(80dvh, 720px); padding: 10px 20px max(24px, env(safe-area-inset-bottom)); }
 .bank-sheet-handle { background: #d8dee6; border-radius: 3px; flex-shrink: 0; height: 4px; margin: 0 auto 16px; width: 36px; }
@@ -370,12 +372,10 @@ select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3
 .bank-sheet-header .icon-button { background: #f2f4f6; color: #6b7684; flex-shrink: 0; }
 .bank-grid { display: grid; gap: 8px; grid-template-columns: repeat(3, minmax(0, 1fr)); min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 6px; }
 .bank-tile { align-items: center; background: #f2f4f6; border: 2px solid transparent; border-radius: 14px; color: #4e5968; display: flex; flex-direction: column; font-size: 13px; font-weight: 600; gap: 9px; justify-content: center; min-height: 88px; padding: 12px 5px; position: relative; }
-.bank-tile > svg { color: #146db0; }
 .bank-tile > img { height: 32px; object-fit: contain; width: 32px; }
 .bank-tile > img[src$='.png'] { width: 72px; }
 .bank-tile[aria-pressed='true'] { background: #e6f4ff; border-color: #146db0; color: #145e99; }
-.bank-tile-check { position: absolute; right: 5px; top: 5px; }
-@media (prefers-reduced-motion: reduce) { .field.line-field > span, .bank-select > span { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .field.line-field > span, .bank-select > span { transition: none; } .bank-sheet[open] { animation: none; } }
 .bank-choice { gap: 8px; }
 .bank-choice > .help-text, .bank-candidates > .help-text { margin: 0; }
 .bank-candidates { display: grid; gap: 8px; }
