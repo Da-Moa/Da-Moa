@@ -63,7 +63,7 @@ function GroupsList() {
   return <div className="stack">
     <form className="domain-card stack" onSubmit={event => { event.preventDefault(); void create(event.currentTarget) }}>
       <h2>새 모임 만들기</h2>
-      <label className="field"><span>모임 이름</span><input autoComplete="off" maxLength={100} name="name" placeholder="예: 주말 친구 모임" required /></label>
+      <label className="field line-field"><span>모임 이름</span><input autoComplete="off" maxLength={100} name="name" placeholder=" " required /></label>
       <ErrorNotice error={action.error} />
       <button className="primary-button" disabled={action.busy} type="submit"><Plus size={18} />{action.busy ? '만드는 중…' : '모임 만들기'}</button>
     </form>

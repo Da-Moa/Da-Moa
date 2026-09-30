@@ -1,4 +1,4 @@
-// Settlement UI regression only: legacy account fixtures in an isolated local DB.
+// UI regression in an isolated local DB; --forms-only checks custom input and bank controls.
 // Run with a dev server using that same test DB and Chrome --remote-debugging-port=9223.
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
@@ -9,6 +9,7 @@ import sharp from 'sharp'
 import { signInKakao } from '../src/lib/auth-store.ts'
 import { ACCESS_TOKEN_COOKIE_NAME, REFRESH_TOKEN_COOKIE_NAME } from '../src/lib/auth.ts'
 import { withWriteTransaction } from '../src/lib/db.ts'
+import { BANKS, formatAccountNumber } from '../src/lib/bank-account.ts'
 
 const database = process.env.TEST_DATABASE_URL
 assert.ok(database && ['localhost', '127.0.0.1', '[::1]'].includes(new URL(database).hostname), 'TEST_DATABASE_URL must point to an isolated local PostgreSQL database')
@@ -74,7 +75,15 @@ async function click(text) {
   await evaluate(`Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === ${JSON.stringify(text)} && !button.disabled && button.getClientRects().length > 0).click()`)
 }
 async function fill(selector, value) {
-  await waitFor(`Array.from(document.querySelectorAll(${JSON.stringify(selector)})).some(element => ['INPUT', 'SELECT', 'TEXTAREA'].includes(element.tagName) && element.getClientRects().length > 0)`, `input ${selector}`)
+  if (selector === '[name=bankCode]') {
+    await waitFor("Boolean(document.querySelector('.bank-select-trigger') && !document.querySelector('.bank-select-trigger').disabled)")
+    await evaluate("document.querySelector('.bank-select-trigger').click()")
+    await waitFor("Boolean(document.querySelector('.bank-sheet[open]'))")
+    await evaluate(`document.querySelector('[data-bank-code="${value}"]').click()`)
+    await waitFor("!document.querySelector('.bank-sheet[open]')")
+    return
+  }
+  await waitFor(`Array.from(document.querySelectorAll(${JSON.stringify(selector)})).some(element => ['INPUT', 'SELECT', 'TEXTAREA'].includes(element.tagName) && !element.disabled && element.getClientRects().length > 0)`, `input ${selector}`)
   await evaluate(`(() => { const element = Array.from(document.querySelectorAll(${JSON.stringify(selector)})).find(element => ['INPUT', 'SELECT', 'TEXTAREA'].includes(element.tagName) && element.getClientRects().length > 0); if (!element) throw new Error('Input missing'); const setter = Object.getOwnPropertyDescriptor(element.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value').set; setter.call(element, ${JSON.stringify(value)}); element.dispatchEvent(new Event('input', {bubbles:true})); element.dispatchEvent(new Event('change', {bubbles:true})); })()`)
 }
 async function setSession(session) {
@@ -116,28 +125,80 @@ try {
   await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
   await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
   const newcomer = await user('신규', '', true)
-  const owner = await user('A', '001111')
-  const payer = await user('B', '002222')
-  const participant = await user('C', '003333')
-  const extraD = await user('D', '004444')
-  const extraE = await user('E', '005555')
   await setSession(newcomer.session)
   await navigate('/onboarding', '검증 신규님, 반가워요')
-  assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.onboarding-page button')).map(button => button.textContent.trim())"), ['저장하기', '다른 카카오 계정으로 로그인', '뒤로가기'])
+  assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.onboarding-page button')).filter(button => button.getClientRects().length && !button.classList.contains('bank-select-trigger')).map(button => button.textContent.trim())"), ['저장하기', '다른 카카오 계정으로 로그인', '뒤로가기'])
   await waitFor("Boolean(document.querySelector('[name=bankCode]'))")
   assert.equal(await evaluate("document.querySelectorAll('[name=bankCode], [name=accountNumber], [name=accountHolder]').length"), 3)
   assert.equal(await evaluate("Boolean(document.querySelector('[name=birthDate]'))"), false)
   const newcomerAccount = await api(newcomer.session, '/api/me')
   assert.equal(newcomerAccount.purpose, 'onboarding')
   assert.equal(newcomerAccount.bankAccount, null)
-  await fill('[name=bankCode]', '004')
+  assert.equal(await evaluate("document.querySelector('.bank-select-trigger').disabled"), true)
   await fill('[name=accountNumber]', '0001234567')
   await fill('[name=accountHolder]', '신규')
+  await evaluate("document.querySelector('form').requestSubmit()")
+  await waitFor("Boolean(document.querySelector('.bank-sheet[open]'))")
+  assert.equal(await evaluate("document.querySelectorAll('.bank-tile').length"), BANKS.length)
+  await waitFor("Array.from(document.querySelectorAll('.bank-tile img')).length > 0 && Array.from(document.querySelectorAll('.bank-tile img')).every(img => img.complete && img.naturalWidth > 0 && new URL(img.src).pathname.startsWith('/banks/'))", 'all bank logos loaded locally')
+  assert.equal(await evaluate("document.querySelector('.bank-sheet').contains(document.activeElement)"), true)
+  await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await waitFor("!document.querySelector('.bank-sheet[open]')")
+  await waitFor("document.activeElement === document.querySelector('.bank-select-trigger')", 'bank trigger focus restored')
+  await fill('[name=bankCode]', '004')
+  assert.equal(await evaluate("document.querySelector('.bank-select-trigger').textContent"), 'KB국민은행')
+  assert.equal(await evaluate("new FormData(document.querySelector('form')).get('bankCode')"), '004')
   await evaluate("document.querySelector('form').requestSubmit()")
   await waitFor("location.pathname.startsWith('/home')")
   const savedAccount = await evaluate("fetch('/api/me').then(response => response.json()).then(result => ({ purpose: result.data.purpose, verifiedAt: result.data.bankAccount.verifiedAt }))")
   assert.deepEqual(savedAccount, { purpose: 'app', verifiedAt: null })
   console.log('PASS onboarding saves a manually entered account')
+  if (process.argv.includes('--forms-only')) {
+    await navigate('/home/groups', '새 모임 만들기')
+    await fill('[name=name]', `입력 검증 ${runId}`)
+    assert.equal(await evaluate("document.querySelector('[name=name]').closest('.line-field') !== null"), true)
+    assert.deepEqual(await evaluate("(() => { const s = getComputedStyle(document.querySelector('[name=name]')); return [s.borderTopWidth, s.borderBottomWidth, s.borderRadius, s.boxShadow] })()"), ['0px', '2px', '0px', 'none'])
+    await click('모임 만들기')
+    await waitFor("location.pathname.startsWith('/home/groups/')")
+    await navigate('/home/account', '내 정보')
+    await click('계좌 수정하기')
+    assert.equal(await evaluate("document.querySelector('[name=accountNumber]').value"), formatAccountNumber('004', '0001234567'))
+    await fill('[name=accountNumber]', '3333123456789')
+    await fill('[name=bankCode]', '090')
+    assert.equal(await evaluate("document.querySelector('[name=accountNumber]').value"), '3333-12-3456789')
+    await fill('[name=accountHolder]', '수정 검증')
+    await mkdir(artifactDir, { recursive: true })
+    for (const width of [320, 390, 1024]) {
+      await cdp('Emulation.setDeviceMetricsOverride', { width, height: 844, deviceScaleFactor: 1, mobile: width < 480 })
+      assert.equal(await evaluate("document.documentElement.scrollWidth <= innerWidth"), true)
+      await evaluate("document.querySelector('.bank-select-trigger').click()")
+      await waitFor("Boolean(document.querySelector('.bank-sheet[open]'))")
+      assert.equal(await evaluate("getComputedStyle(document.querySelector('.bank-grid')).gridTemplateColumns.split(' ').length"), 3)
+      assert.equal(await evaluate("document.querySelector('.bank-sheet').scrollWidth <= document.querySelector('.bank-sheet').clientWidth"), true)
+      assert.equal(await evaluate("document.querySelector('.bank-sheet-header').getBoundingClientRect().top >= document.querySelector('.bank-sheet').getBoundingClientRect().top"), true)
+      const shot = await cdp('Page.captureScreenshot', { format: 'png' })
+      await writeFile(join(artifactDir, `bank-picker-${width}.png`), Buffer.from(shot.data, 'base64'))
+      await evaluate("document.querySelector('.bank-sheet').close()")
+      await waitFor("!document.querySelector('.bank-sheet[open]')")
+    }
+    await click('계좌 저장')
+    await waitFor(hasText('계좌를 저장했어요.'))
+    await click('계좌 수정하기')
+    assert.deepEqual(await evaluate("['bankCode', 'accountNumber', 'accountHolder'].map(name => document.querySelector(`[name=${name}]`).value)"), ['090', '3333-12-3456789', '수정 검증'])
+    const shot = await cdp('Page.captureScreenshot', { format: 'png' })
+    await writeFile(join(artifactDir, 'form-inputs.png'), Buffer.from(shot.data, 'base64'))
+    assert.deepEqual(exceptions, [])
+    console.log('PASS custom controls: required bank, Escape/focus, group creation, account save, 320/390/1024px layouts')
+    console.log(`Browser evidence: ${artifactDir}`)
+    ws.close()
+    process.exit(0)
+  }
+  const owner = await user('A', '001111')
+  const payer = await user('B', '002222')
+  const participant = await user('C', '003333')
+  const extraD = await user('D', '004444')
+  const extraE = await user('E', '005555')
   await setSession(owner.session)
   await navigate('/home', '함께 쓴 돈, 함께 정리해요')
   console.log('SETUP settlement regression uses legacy account fixtures seeded only in TEST_DATABASE_URL')
@@ -474,15 +535,15 @@ try {
   assert.equal(payer.session.purpose, 'onboarding')
   await setSession(payer.session)
   await navigate('/onboarding', '검증 B님, 다시 만나 반가워요')
-  assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.onboarding-page button')).map(button => button.textContent.trim())"), ['재가입하기', '다른 카카오 계정으로 로그인', '뒤로가기'])
+  assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.onboarding-page button')).filter(button => button.getClientRects().length && !button.classList.contains('bank-select-trigger')).map(button => button.textContent.trim())"), ['재가입하기', '다른 카카오 계정으로 로그인', '뒤로가기'])
   await waitFor("Boolean(document.querySelector('[name=bankCode]'))")
   assert.equal(await evaluate("document.querySelectorAll('[name=bankCode], [name=accountNumber], [name=accountHolder]').length"), 3)
   assert.equal(await evaluate("Boolean(document.querySelector('[name=birthDate]'))"), false)
   const rejoining = await api(payer.session, '/api/me')
   assert.equal(rejoining.purpose, 'onboarding')
   assert.notEqual(rejoining.deletedAt, null)
-  await fill('[name=bankCode]', '004')
   await fill('[name=accountNumber]', '0002223333')
+  await fill('[name=bankCode]', '004')
   await fill('[name=accountHolder]', '검증 B')
   assert.equal(await evaluate("document.querySelector('form').checkValidity()"), true)
   await click('재가입하기')

@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { ChevronLeft, CircleUserRound, History, House, Menu, Users } from 'lucide-react'
+import { Check, ChevronDown, ChevronLeft, CircleUserRound, History, House, Menu, Users, X } from 'lucide-react'
 import { ApiError, apiRequest, discardBankAccountRequests, discardPendingRequest } from '../../lib/api-client'
 import { BANKS, formatAccountNumber, parseClipboardAccount, suggestBanks } from '../../lib/bank-account'
 import type { RoundStatus } from '../../lib/domain-types'
@@ -120,17 +120,27 @@ export function useAccount() {
 export function BankFields({ disabled, error, account }: { disabled?: boolean; error?: Error | null; account?: Account['bankAccount'] }) {
   const id = useId()
   const fields = useRef<HTMLDivElement>(null)
+  const bankDialog = useRef<HTMLDialogElement>(null)
+  const bankTrigger = useRef<HTMLButtonElement>(null)
+  const [bankOpen, setBankOpen] = useState(false)
   const [selectedBank, setSelectedBank] = useState(account?.bankCode ?? BANKS.find(bank => bank.name === account?.bankName)?.code ?? '')
   const [number, setNumber] = useState(account?.accountNumber ?? '')
   const [clipboardMessage, setClipboardMessage] = useState('')
   const [clipboardAccount, setClipboardAccount] = useState<ReturnType<typeof parseClipboardAccount>>(null)
   const clipboardReading = useRef(false)
   const candidates = suggestBanks(number)
+  function openBanks() {
+    if (disabled || !number) return
+    bankDialog.current?.showModal()
+    setBankOpen(true)
+    bankDialog.current?.querySelector<HTMLButtonElement>(`[data-bank-code="${selectedBank || BANKS[0].code}"]`)?.focus()
+  }
   function formatInput(input: HTMLInputElement, bank = selectedBank, partial = true) { input.value = formatAccountNumber(bank, input.value, partial) }
   function chooseBank(code: string) {
     setSelectedBank(code)
     const input = fields.current?.querySelector<HTMLInputElement>('[name="accountNumber"]')
     if (input) formatInput(input, code)
+    bankDialog.current?.close()
   }
   function pasteAccount(parsed: ReturnType<typeof parseClipboardAccount>, input: HTMLInputElement) {
     setClipboardAccount(null)
@@ -157,10 +167,11 @@ export function BankFields({ disabled, error, account }: { disabled?: boolean; e
   useEffect(() => {
     if (!(error instanceof ApiError)) return
     const detail = error.details as { field?: unknown } | undefined
-    if (typeof detail?.field === 'string' && ['bankCode', 'accountNumber', 'accountHolder'].includes(detail.field)) fields.current?.querySelector<HTMLElement>(`[name="${detail.field}"]`)?.focus()
+    if (detail?.field === 'bankCode') bankTrigger.current?.focus()
+    else if (typeof detail?.field === 'string' && ['accountNumber', 'accountHolder'].includes(detail.field)) fields.current?.querySelector<HTMLElement>(`[name="${detail.field}"]`)?.focus()
   }, [error])
   return <div className="stack" ref={fields}>
-    <label className="field" htmlFor={`${id}-number`}><span>계좌번호</span><input autoComplete="off" defaultValue={account ? account.formattedAccountNumber ?? formatAccountNumber(account.bankCode ?? account.bankName, account.accountNumber) : ''} disabled={disabled} id={`${id}-number`} inputMode="numeric" maxLength={64} name="accountNumber" onBlur={event => formatInput(event.currentTarget, selectedBank, false)} onFocus={event => void readClipboard(event.currentTarget)} onPaste={event => {
+    <label className="field line-field" htmlFor={`${id}-number`}><span>계좌번호</span><input autoComplete="off" defaultValue={account ? account.formattedAccountNumber ?? formatAccountNumber(account.bankCode ?? account.bankName, account.accountNumber) : ''} disabled={disabled} id={`${id}-number`} inputMode="numeric" maxLength={64} name="accountNumber" placeholder=" " onBlur={event => formatInput(event.currentTarget, selectedBank, false)} onFocus={event => void readClipboard(event.currentTarget)} onPaste={event => {
       const text = event.clipboardData.getData('text')
       if (pasteAccount(parseClipboardAccount(text, selectedBank), event.currentTarget) || !/^[0-9 -]+$/.test(text) || text.replace(/[ -]/g, '').length >= 7) event.preventDefault()
     }} onInput={event => {
@@ -184,10 +195,19 @@ export function BankFields({ disabled, error, account }: { disabled?: boolean; e
     }} type="button">{BANKS.find(bank => bank.code === clipboardAccount.bankCode)?.name} {formatAccountNumber(clipboardAccount.bankCode, clipboardAccount.accountNumber)} 붙여넣기</button>}
     {clipboardMessage && <p className="help-text" role="status">{clipboardMessage}</p>}
     <div className="stack bank-choice">
-      <label className="field" htmlFor={`${id}-bank`}><span>은행</span><select autoComplete="off" disabled={disabled || !number} id={`${id}-bank`} name="bankCode" onChange={event => chooseBank(event.currentTarget.value)} required value={selectedBank}><option value="" disabled>은행을 선택해 주세요</option>{BANKS.map(bank => <option key={bank.code} value={bank.code}>{bank.name}</option>)}</select></label>
+      <div className={`bank-select${selectedBank ? ' bank-select-filled' : ''}`}>
+        <span id={`${id}-bank-label`}>은행 선택</span>
+        <button aria-controls={`${id}-banks`} aria-expanded={bankOpen} aria-haspopup="dialog" aria-labelledby={`${id}-bank-label ${id}-bank-value`} className="bank-select-trigger" disabled={disabled || !number} onClick={openBanks} ref={bankTrigger} type="button"><span id={`${id}-bank-value`}>{BANKS.find(bank => bank.code === selectedBank)?.name}</span><ChevronDown aria-hidden="true" size={20} /></button>
+        <select aria-hidden="true" autoComplete="off" className="bank-select-native" disabled={disabled || !number} name="bankCode" onChange={event => chooseBank(event.currentTarget.value)} onInvalid={event => { event.preventDefault(); openBanks() }} required tabIndex={-1} value={selectedBank}><option value="" disabled>은행을 선택해 주세요</option>{BANKS.map(bank => <option key={bank.code} value={bank.code}>{bank.name}</option>)}</select>
+      </div>
       {number && (candidates.length > 0 ? <div className="bank-candidates" aria-label="계좌번호로 찾은 은행 후보"><div className="bank-candidate-list">{candidates.map(code => <button aria-pressed={selectedBank === code} className="bank-candidate" disabled={disabled} key={code} onClick={() => chooseBank(code)} type="button">{BANKS.find(bank => bank.code === code)?.name}</button>)}</div></div> : <p className="help-text">은행을 직접 선택해 주세요.</p>)}
     </div>
-    <label className="field" htmlFor={`${id}-holder`}><span>예금주</span><input autoComplete="off" defaultValue={account?.accountHolder ?? ''} disabled={disabled} id={`${id}-holder`} maxLength={100} name="accountHolder" required /></label>
+    <label className="field line-field" htmlFor={`${id}-holder`}><span>예금주</span><input autoComplete="off" defaultValue={account?.accountHolder ?? ''} disabled={disabled} id={`${id}-holder`} maxLength={100} name="accountHolder" placeholder=" " required /></label>
+    <dialog aria-labelledby={`${id}-banks-title`} className="bank-sheet" id={`${id}-banks`} onClick={event => { if (event.target === event.currentTarget) event.currentTarget.close() }} onClose={() => { setBankOpen(false); bankTrigger.current?.focus() }} ref={bankDialog}>
+      <div className="bank-sheet-content"><div className="bank-sheet-handle" aria-hidden="true" /><header className="bank-sheet-header"><h2 id={`${id}-banks-title`}>은행을 선택해 주세요</h2><button aria-label="은행 선택 닫기" className="icon-button" onClick={() => bankDialog.current?.close()} type="button"><X aria-hidden="true" size={20} /></button></header>
+        <div aria-label="은행 목록" className="bank-grid" role="group">{BANKS.map(bank => <button aria-pressed={selectedBank === bank.code} className="bank-tile" data-bank-code={bank.code} key={bank.code} onClick={() => chooseBank(bank.code)} type="button"><img alt="" draggable={false} height={32} src={`/banks/${bank.code}.${bank.code === '227' ? 'png' : 'svg'}`} width={32} /><span>{bank.name}</span>{selectedBank === bank.code && <Check aria-hidden="true" className="bank-tile-check" size={16} />}</button>)}</div>
+      </div>
+    </dialog>
   </div>
 }
 export function bankValues(form: HTMLFormElement) {
