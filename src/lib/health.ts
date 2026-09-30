@@ -19,11 +19,13 @@ export async function healthResponse(scope: Scope, checks: { database: Probe; mi
   const application = { application: 'ok' }
   if (scope === 'live') return Response.json({ status: 'ok', checks: application }, { headers: { 'Cache-Control': 'no-store' } })
 
-  const names: (keyof typeof checks)[] = scope === 'database' || scope === 'minio' ? [scope] : ['database', 'minio']
-  const results = Object.fromEntries(await Promise.all(names.map(async name => [name, await checks[name]().then(() => 'ok', () => 'down')])))
-  const healthy = Object.values(results).every(result => result === 'ok')
+  const selected = scope === 'database' || scope === 'minio' ? { [scope]: checks[scope] } : checks
+  const results = await Promise.all(Object.entries(selected).map(async ([name, probe]) =>
+    [name, await probe().then(() => 'ok', () => 'down')] as const,
+  ))
+  const healthy = results.every(([, status]) => status === 'ok')
   return Response.json(
-    { status: healthy ? 'ok' : 'down', checks: { ...(scope === 'overall' ? application : {}), ...results } },
+    { status: healthy ? 'ok' : 'down', checks: { ...(scope === 'overall' ? application : {}), ...Object.fromEntries(results) } },
     { status: healthy ? 200 : 503, headers: { 'Cache-Control': 'no-store' } },
   )
 }

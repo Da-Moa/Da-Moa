@@ -2,6 +2,26 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { GET } from '../app/api/health/[[...check]]/route'
 import { checkMinio, healthResponse } from './health'
+import { openApiDocument } from './openapi'
+
+test('individual health checks only probe the selected dependency and report failures', async () => {
+  for (const scope of ['database', 'minio'] as const) {
+    for (const up of [true, false]) {
+      const calls: string[] = []
+      const probe = async (name: string) => { calls.push(name); if (!up) throw new Error('secret connection detail') }
+      const probes = { database: () => probe('database'), minio: () => probe('minio') }
+      const response = await healthResponse(scope, probes)
+      assert.deepEqual(calls, [scope])
+      assert.equal(response.status, up ? 200 : 503)
+      assert.equal(response.headers.get('Cache-Control'), 'no-store')
+      assert.deepEqual(await response.json(), { status: up ? 'ok' : 'down', checks: { [scope]: up ? 'ok' : 'down' } })
+      const operation = openApiDocument.paths[`/api/health/${scope}`].get
+      assert.ok(operation.responses['503'])
+      const schema = operation.responses['200'].content['application/json'].schema as { properties: { checks: { required: string[] } } }
+      assert.deepEqual(schema.properties.checks.required, [scope])
+    }
+  }
+})
 
 test('liveness skips dependencies and overall health reports each failure', async () => {
   let databaseChecks = 0
@@ -54,6 +74,7 @@ test('health routes require MinIO read and write quorum', async () => {
     await checkMinio()
     assert.deepEqual(paths.sort(), ['http://127.0.0.1:9000/minio/health/cluster', 'http://127.0.0.1:9000/minio/health/cluster/read'])
     const minio = await GET(new Request('http://localhost/api/health/minio'), { params: Promise.resolve({ check: ['minio'] }) })
+    assert.equal(minio.status, 200)
     assert.deepEqual(await minio.json(), { status: 'ok', checks: { minio: 'ok' } })
     for (const failedPath of paths) {
       globalThis.fetch = async input => new Response(null, { status: String(input) === failedPath ? 503 : 200 })
