@@ -1,9 +1,25 @@
 import type { Metadata } from 'next'
+import { connection } from 'next/server'
 import './globals.css'
 
-export const metadata: Metadata = {
-  title: '다모아 | 간편 정산',
-  description: '영수증으로 시작하는 간편한 모임 정산',
+export async function generateMetadata(): Promise<Metadata> {
+  // Docker builds run before the public origin is configured at runtime.
+  await connection()
+
+  return {
+    metadataBase: new URL(new URL(process.env.KAKAO_REDIRECT_URI ?? 'http://localhost:3000').origin),
+    title: '다모아 | 간편 정산',
+    description: '영수증으로 시작하는 간편한 모임 정산',
+    icons: { icon: { url: '/logo/da-moa-128px-trans.png', type: 'image/png', sizes: '128x128' } },
+    openGraph: {
+      title: '다모아 | 간편 정산',
+      description: '영수증으로 시작하는 간편한 모임 정산',
+      siteName: '다모아',
+      locale: 'ko_KR',
+      type: 'website',
+      images: [{ url: '/og/da-moa-og.png', width: 2848, height: 1504, alt: '다모아 | 간편 정산' }],
+    },
+  }
 }
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
