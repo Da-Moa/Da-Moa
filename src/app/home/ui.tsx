@@ -138,7 +138,7 @@ export function BankFields({ disabled, error, account }: { disabled?: boolean; e
     input.value = formatAccountNumber(parsed.bankCode, parsed.accountNumber)
     setNumber(parsed.accountNumber)
     setSelectedBank(parsed.bankCode ?? '')
-    setClipboardMessage(parsed.bankCode ? '계좌번호와 은행을 채웠어요. 저장 전 확인해 주세요.' : '계좌번호를 붙여 넣었어요. 은행을 선택해 주세요.')
+    setClipboardMessage(parsed.bankCode ? '' : '계좌번호를 붙여 넣었어요. 은행을 선택해 주세요.')
     return true
   }
   async function readClipboard(input: HTMLInputElement) {
