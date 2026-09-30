@@ -185,10 +185,9 @@ export function BankFields({ disabled, error, account }: { disabled?: boolean; e
     {clipboardMessage && <p className="help-text" role="status">{clipboardMessage}</p>}
     <div className="stack bank-choice">
       <label className="field" htmlFor={`${id}-bank`}><span>은행</span><select autoComplete="off" disabled={disabled || !number} id={`${id}-bank`} name="bankCode" onChange={event => chooseBank(event.currentTarget.value)} required value={selectedBank}><option value="" disabled>은행을 선택해 주세요</option>{BANKS.map(bank => <option key={bank.code} value={bank.code}>{bank.name}</option>)}</select></label>
-      {number && (candidates.length > 0 ? <div className="bank-candidates" aria-label="계좌번호로 찾은 은행 후보"><p className="help-text">가능성이 있는 은행이에요. 확인 후 선택해 주세요.</p><div className="bank-candidate-list">{candidates.map(code => <button aria-pressed={selectedBank === code} className="bank-candidate" disabled={disabled} key={code} onClick={() => chooseBank(code)} type="button">{BANKS.find(bank => bank.code === code)?.name}</button>)}</div></div> : <p className="help-text">은행을 직접 선택해 주세요.</p>)}
+      {number && (candidates.length > 0 ? <div className="bank-candidates" aria-label="계좌번호로 찾은 은행 후보"><div className="bank-candidate-list">{candidates.map(code => <button aria-pressed={selectedBank === code} className="bank-candidate" disabled={disabled} key={code} onClick={() => chooseBank(code)} type="button">{BANKS.find(bank => bank.code === code)?.name}</button>)}</div></div> : <p className="help-text">은행을 직접 선택해 주세요.</p>)}
     </div>
     <label className="field" htmlFor={`${id}-holder`}><span>예금주</span><input autoComplete="off" defaultValue={account?.accountHolder ?? ''} disabled={disabled} id={`${id}-holder`} maxLength={100} name="accountHolder" required /></label>
-    <p className="notice notice-warning">계좌 정보는 자동으로 확인하지 않습니다. 송금 전 계좌번호와 예금주를 직접 확인해 주세요.</p>
   </div>
 }
 export function bankValues(form: HTMLFormElement) {
@@ -333,12 +332,9 @@ export function AccountPanel() {
       <span className="account-avatar">{account.profileImageUrl ? <img alt="" height={80} width={80} referrerPolicy="no-referrer" src={account.profileImageUrl} /> : <CircleUserRound size={40} />}</span>
       <h2 id="account-profile-heading">{account.displayName ?? '카카오 사용자'}님의 정보</h2>
       <dl className="account-details"><div><dt>이름</dt><dd>{account.displayName ?? '카카오 사용자'}</dd></div>{account.email && <div><dt>이메일</dt><dd>{account.email}</dd></div>}<div><dt>계좌</dt><dd>{account.bankAccount ? `${account.bankAccount.bankName} · ${account.bankAccount.formattedAccountNumber ?? formatAccountNumber(account.bankAccount.bankCode ?? account.bankAccount.bankName, account.bankAccount.accountNumber)}` : '등록된 계좌가 없어요.'}</dd></div></dl>
-      {account.bankAccount && !account.bankAccount.verifiedAt && <p className="help-text account-verification-note">확인되지 않은 계좌입니다.</p>}
       <button aria-expanded={editingBank} className="secondary-button account-bank-toggle" disabled={action.busy} onClick={() => { if (editingBank) { bankForm.clear(); action.setError(null); setSaved(false) } else setDraftVersion(account.bankVersion); setEditingBank(!editingBank) }} type="button">{editingBank ? '계좌 수정 닫기' : '계좌 수정하기'}</button>
     </section>
     {editingBank && <section className="domain-card stack" id="bank-settings" aria-labelledby="bank-settings-heading"><h2 id="bank-settings-heading">계좌 설정</h2>
-    <h3>현재 계좌</h3>
-    {account.bankAccount ? <div className="notice"><p>{account.bankAccount.bankName} · {account.bankAccount.formattedAccountNumber ?? formatAccountNumber(account.bankAccount.bankCode ?? account.bankAccount.bankName, account.bankAccount.accountNumber)}</p>{!account.bankAccount.verifiedAt && <p className="help-text">확인되지 않은 계좌입니다.</p>}<p className="help-text">송금 전 계좌번호와 예금주를 직접 확인해 주세요.</p></div> : <p className="help-text">등록된 계좌가 없어요.</p>}
     <h3>계좌 정보 변경</h3>
     <form aria-busy={action.busy} autoComplete="off" className="stack" ref={bankForm.form} onSubmit={event => { event.preventDefault(); void save(event.currentTarget) }}>
       <BankFields key={formKey} disabled={action.busy || !ready} error={action.error} account={account.bankAccount} />
