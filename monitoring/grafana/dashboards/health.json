@@ -4,7 +4,7 @@
   "tags": ["da-moa"],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 2,
+  "version": 3,
   "refresh": "30s",
   "time": { "from": "now-6h", "to": "now" },
   "panels": [
@@ -80,6 +80,16 @@
       "gridPos": { "x": 0, "y": 5, "w": 24, "h": 8 },
       "targets": [{ "refId": "A", "expr": "probe_duration_seconds{job=\"health\"}", "legendFormat": "{{check}}" }],
       "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 6,
+      "title": "앱 P95 응답 시간",
+      "description": "최근 5분 동안 완료된 앱 HTTP 요청의 응답시간 P95 추정치. 헬스체크·정적 파일·내부 요청 제외. 요청이 없으면 표시하지 않습니다.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 13, "w": 24, "h": 8 },
+      "targets": [{ "refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(da_moa_http_request_duration_seconds_bucket{job=\"app\"}[5m]))) and on() (sum(rate(da_moa_http_request_duration_seconds_count{job=\"app\"}[5m])) > 0)" }],
+      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } }, "overrides": [] }
     }
   ]
 }
