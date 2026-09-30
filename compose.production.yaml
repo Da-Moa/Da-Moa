@@ -6,6 +6,7 @@ services:
     env_file: .env.production
     environment:
       HOST: 0.0.0.0
+      METRICS_PORT: "9464"
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:
@@ -90,11 +91,14 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:?DISCORD_BOT_TOKEN is required}
+      DISCORD_DM_CHANNEL_ID: ${DISCORD_DM_CHANNEL_ID:?DISCORD_DM_CHANNEL_ID is required}
     ports:
       - "127.0.0.1:3001:3000"
     volumes:
       - grafana-data:/var/lib/grafana
       - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./monitoring/grafana/alerting:/etc/grafana/provisioning/alerting:ro
       - ./monitoring/grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/da-moa.yml:ro
       - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
     depends_on:

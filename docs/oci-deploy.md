@@ -75,6 +75,8 @@ MINIO_BUCKET=da-moa-receipts
 MINIO_ACCESS_KEY=버킷_생성_후_채울_앱_전용_키
 MINIO_SECRET_KEY=버킷_생성_후_채울_앱_전용_비밀_키
 GRAFANA_ADMIN_PASSWORD=별도로_생성한_관리자_비밀번호
+DISCORD_BOT_TOKEN=디스코드_봇_토큰
+DISCORD_DM_CHANNEL_ID=봇과_본인_사이의_DM_채널_ID
 PORT=3000
 ```
 
@@ -298,4 +300,54 @@ Grafana와 Prometheus는 서버의 `127.0.0.1`에만 열려 있습니다. 로컬
 ssh -L 3001:127.0.0.1:3001 -L 9090:127.0.0.1:9090 ubuntu@161.33.3.222
 ```
 
-대시보드는 현재 상태와 헬스체크 응답 시간을 표시합니다. 알림 발송 대상은 설정하지 않았습니다. Grafana 관리자 비밀번호를 나중에 바꿀 때는 Grafana UI에서 변경합니다. 운영 값 변경으로 컨테이너를 재생성해도 기존 Grafana 볼륨의 비밀번호는 자동 변경되지 않습니다.
+앱은 Compose 내부 `app:9464/metrics`로 완료된 HTTP 요청의 응답시간 히스토그램을 제공합니다. 호스트 포트는 공개하지 않습니다. 페이지·API·영수증 응답을 포함하며 헬스체크·정적 파일·루프백 내부 요청·WebSocket 연결은 제외합니다. 실제 사용자 요청의 서버 처리 시작부터 응답 전송 완료까지 측정하며 Nginx·인터넷 구간은 포함하지 않습니다. **다모아 서비스 상태** 대시보드의 P95 패널은 최근 5분 데이터를 사용합니다. 요청이 없으면 P95는 표시되지 않습니다.
+
+### Discord 개인 DM 알림 연결
+
+Discord의 Incoming Webhook은 서버 채널용이며 개인 DM에는 사용할 수 없습니다. 이 구성은 Grafana의 **Webhook** Contact point로 Discord Bot API를 직접 호출하므로 별도 봇 서버가 필요하지 않습니다.
+
+1. [Discord Developer Portal](https://discord.com/developers/applications)에서 **New Application → Bot**으로 봇을 만들고 토큰을 발급합니다. **OAuth2 → URL Generator → bot**으로 초대 URL을 만들어 본인 서버에 초대합니다. 관리자 권한과 Privileged Gateway Intents는 필요 없습니다.
+2. Discord의 해당 서버 개인정보 설정에서 **서버 멤버의 DM 허용**을 켭니다. 봇을 차단하지 않았는지 확인하고 봇 프로필에서 DM을 먼저 엽니다.
+3. **사용자 설정 → 고급 → 개발자 모드**를 켜고 본인 프로필에서 **사용자 ID 복사**를 누릅니다.
+4. 아래 명령을 **로컬 Bash 터미널**에서 실행해 봇과 본인 사이의 DM 채널 ID를 얻습니다. Node.js 22.18 이상이 필요합니다. 토큰은 화면에 표시하지 않고 서버 응답에서 ID만 출력합니다. 이미 있는 DM 채널은 그대로 반환합니다.
+
+```bash
+read -r -s -p 'Discord Bot Token: ' DISCORD_BOT_TOKEN; echo
+read -r -p '본인 Discord 사용자 ID: ' DISCORD_USER_ID
+export DISCORD_BOT_TOKEN DISCORD_USER_ID
+node --input-type=module <<'JS'
+if (!process.env.DISCORD_BOT_TOKEN || !/^\d{17,20}$/.test(process.env.DISCORD_USER_ID ?? '')) throw new Error('봇 토큰과 사용자 ID를 확인하세요.')
+const response = await fetch('https://discord.com/api/v10/users/@me/channels', {
+  method: 'POST',
+  headers: { Authorization: `Bot ${process.env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ recipient_id: process.env.DISCORD_USER_ID }),
+  signal: AbortSignal.timeout(10000),
+})
+if (!response.ok) throw new Error(`DM 채널 생성 실패: HTTP ${response.status}`)
+const channel = await response.json()
+if (channel.type !== 1 || !/^\d{17,20}$/.test(channel.id ?? '')) throw new Error('DM 채널 응답을 확인하세요.')
+console.log(`DISCORD_DM_CHANNEL_ID=${channel.id}`)
+JS
+unset DISCORD_BOT_TOKEN DISCORD_USER_ID
+```
+
+5. GitHub **Settings → Environments → production → OCI_PRODUCTION_ENV**의 기존 내용에 `DISCORD_BOT_TOKEN=...`과 `DISCORD_DM_CHANNEL_ID=...` 두 줄을 추가합니다. 토큰은 Git이나 채팅에 넣지 않습니다. Compose는 두 값이 없으면 실행을 중단합니다. 사용자 ID와 DM 채널 ID는 서로 다릅니다.
+6. 이 변경을 `main`에 배포합니다. 값만 변경할 때는 **Actions → CI → Run workflow → main**으로 다시 배포합니다.
+7. Grafana **Alerting → Contact points → da-moa-discord-dm → Test**에서 테스트 알림을 보내 개인 DM 수신을 확인합니다. **Alert rules → 다모아 운영 → da-moa**에서 8개 규칙과 평가 상태를 확인합니다. Discord `50007` 오류는 DM 허용·봇 차단·공통 서버 여부를 확인하고, `401`은 봇 토큰을 확인합니다.
+
+알림 규칙과 DM Contact point는 [da-moa.yml](../monitoring/grafana/alerting/da-moa.yml)에서 자동 등록하며, 각 규칙이 DM 수신처를 직접 지정합니다. 기준 변경은 이 파일을 수정하고 재배포합니다. 토큰은 Authorization 헤더에만 넣고 메시지에는 상태·알림 이름·요약만 보냅니다. [Grafana 파일 프로비저닝](https://grafana.com/docs/grafana/latest/alerting/set-up/provision-alerting-resources/file-provisioning/), [Grafana Webhook Custom Payload](https://grafana.com/docs/grafana/latest/alerting/configure-notifications/manage-contact-points/integrations/webhook-notifier/), [Discord DM 채널 API](https://docs.discord.com/developers/resources/user#create-dm)
+
+| 알림 | 조건 | 지속 시간 |
+| --- | --- | --- |
+| 앱 장애 | `/api/health/live` 실패 또는 검사 수집 실패 | 1분 |
+| DB 장애 | 앱은 응답하지만 PostgreSQL `SELECT 1` 실패 | 1분 |
+| MinIO 장애 | 앱은 응답하지만 읽기·쓰기 정족수 검사 실패 | 1분 |
+| CPU 주의 | 최근 5분 평균 사용률 50% 이상·90% 미만 | 5분 |
+| 메모리 주의 | 사용률 50% 이상·90% 미만 | 5분 |
+| CPU 위험 | 최근 5분 평균 사용률 90% 이상 | 2분 |
+| 메모리 위험 | 사용률 90% 이상 | 2분 |
+| P95 지연 | 최근 5분 P95가 1초 초과 | 2분 |
+
+30초마다 평가하고 발송 전에 10초를 기다립니다. 정상 범위로 돌아오면 해소 알림을 보내고, 지속되는 알림은 4시간마다 반복합니다. 주의 조건은 90%에 도달하면 해소되고 위험 조건으로 전환됩니다. 앱 장애 중에는 DB·MinIO 상태를 독립적으로 판단할 수 없어 해당 두 장애 알림을 억제합니다. 자원 지표가 사라지거나 쿼리가 실패하면 Grafana의 별도 `DatasourceNoData` / `DatasourceError` 알림을 사용합니다. P95는 요청이 없을 때 정상으로 처리하며, 히스토그램 버킷을 이용한 추정치입니다. Grafana도 같은 인스턴스에서 실행되므로 인스턴스 전체가 꺼지거나 Grafana가 중단되면 여기서 Discord 알림을 보낼 수 없습니다. 이 경우까지 감지하려면 외부 모니터링이 필요합니다.
+
+Grafana 관리자 비밀번호를 나중에 바꿀 때는 Grafana UI에서 변경합니다. 운영 값 변경으로 컨테이너를 재생성해도 기존 Grafana 볼륨의 비밀번호는 자동 변경되지 않습니다.
