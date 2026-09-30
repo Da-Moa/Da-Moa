@@ -305,7 +305,7 @@ select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3
 .eyebrow { color: #657181; font-size: 13px; overflow-wrap: anywhere; }
 .section-heading { font-size: 20px; line-height: 1.4; margin: 12px 0 0; }
 .round-search-bar { align-items: center; background: #fff; border: 1px solid #ccd5df; border-radius: 14px; box-shadow: var(--control-shadow); display: flex; gap: 10px; min-height: 48px; padding: 0 14px; }
-.round-search-bar:focus-within { border-color: #5dc4fc; box-shadow: 0 0 0 2px rgba(93, 196, 252, .18); outline: 3px solid #5dc4fc; outline-offset: 3px; }
+.round-search-bar:focus-within { border-color: #5dc4fc; }
 .round-search-bar > svg { color: #657181; flex: 0 0 auto; }
 .round-search-bar input { background: transparent; border: 0; color: #191f28; min-height: 46px; min-width: 0; outline: 0; padding: 0; width: 100%; }
 .round-status-filters { display: flex; gap: 8px; overflow-x: auto; padding: 1px; scrollbar-width: none; }
@@ -375,6 +375,7 @@ select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3
 .bank-tile > img { height: 32px; object-fit: contain; width: 32px; }
 .bank-tile > img[src$='.png'] { width: 72px; }
 .bank-tile[aria-pressed='true'] { background: #e6f4ff; border-color: #146db0; color: #145e99; }
+.bank-tile:focus-visible { border-color: #146db0; outline: 0; }
 .currency-sheet .bank-sheet-header h2 { font-size: 16px; }
 .currency-sheet .bank-grid { display: flex; flex-direction: column; gap: 4px; padding: 0; }
 .currency-sheet .bank-tile { background: transparent; border-radius: 12px; color: #4e5968; flex-direction: row; font-size: 15px; font-weight: 500; gap: 16px; justify-content: flex-start; min-height: 56px; padding: 12px 10px; }

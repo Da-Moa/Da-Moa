@@ -120,7 +120,7 @@ async function user(label, number, onboarding = false) {
 }
 
 try {
-  await cdp('Page.enable'); await cdp('Runtime.enable'); await cdp('Network.enable')
+  await cdp('Page.enable'); await cdp('Page.bringToFront'); await cdp('Runtime.enable'); await cdp('Network.enable')
   await cdp('Fetch.enable', { patterns: [{ urlPattern: `${origin}/api/rounds/*/expenses`, requestStage: 'Response' }] })
   await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
   await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
@@ -143,6 +143,9 @@ try {
   assert.equal(await evaluate("document.querySelectorAll('.bank-tile').length"), BANKS.length)
   await waitFor("Array.from(document.querySelectorAll('.bank-tile img')).length > 0 && Array.from(document.querySelectorAll('.bank-tile img')).every(img => img.complete && img.naturalWidth > 0 && new URL(img.src).pathname.startsWith('/banks/'))", 'all bank logos loaded locally')
   assert.equal(await evaluate("document.querySelector('.bank-sheet').contains(document.activeElement)"), true)
+  await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 })
+  await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 })
+  assert.deepEqual(await evaluate("(() => { const focused = document.activeElement; const style = getComputedStyle(focused); return [focused.matches('.bank-tile:focus-visible'), style.outlineStyle, style.borderColor]; })()"), [true, 'none', 'rgb(20, 109, 176)'])
   await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
   const closingPositions = await evaluate("(() => { const sheet = document.querySelector('.bank-sheet'); const animation = sheet.getAnimations().find(animation => !(animation instanceof CSSAnimation)); animation.pause(); animation.currentTime = 0; const remainsOpen = sheet.open; const start = sheet.getBoundingClientRect().top; animation.currentTime = animation.effect.getTiming().duration - 1; const end = sheet.getBoundingClientRect().top; animation.play(); return [remainsOpen, start, end]; })()")
   assert.equal(closingPositions[0], true, 'dialog remains modal during its closing animation')
@@ -188,6 +191,9 @@ try {
       assert.deepEqual(await evaluate("[getComputedStyle(document.querySelector('.currency-sheet')).backgroundColor, getComputedStyle(document.querySelector('.currency-sheet .bank-grid')).flexDirection]"), ['rgb(255, 255, 255)', 'column'])
       assert.equal(await evaluate("document.querySelectorAll('.bank-tile svg').length"), 0)
       assert.equal(await evaluate("getComputedStyle(document.querySelector('.bank-tile[aria-pressed=true]')).backgroundColor"), 'rgb(230, 244, 255)')
+      await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 })
+      await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 })
+      assert.deepEqual(await evaluate("(() => { const selected = document.querySelector('.bank-tile[aria-pressed=true]'); selected.focus(); const style = getComputedStyle(selected); return [selected.matches(':focus-visible'), style.outlineStyle, style.backgroundColor, style.borderColor]; })()"), [true, 'none', 'rgb(230, 244, 255)', 'rgb(20, 109, 176)'])
       assert.equal(await evaluate("document.documentElement.scrollWidth <= innerWidth"), true)
       const shot = await cdp('Page.captureScreenshot', { format: 'png' })
       await writeFile(join(artifactDir, `currency-picker-${width}.png`), Buffer.from(shot.data, 'base64'))
@@ -239,8 +245,13 @@ try {
     assert.deepEqual(await evaluate("['bankCode', 'accountNumber', 'accountHolder'].map(name => document.querySelector(`[name=${name}]`).value)"), ['090', '3333-12-3456789', '수정 검증'])
     const shot = await cdp('Page.captureScreenshot', { format: 'png' })
     await writeFile(join(artifactDir, 'form-inputs.png'), Buffer.from(shot.data, 'base64'))
+    for (const [path, heading] of [['/home/groups', '새 모임 만들기'], ['/home/history', '정산 기록']]) {
+      await navigate(path, heading)
+      await waitFor(`location.pathname === ${JSON.stringify(path)} && Boolean(document.querySelector('.round-search-bar input'))`)
+      assert.deepEqual(await evaluate("(() => { const input = document.querySelector('.round-search-bar input'); const bar = input.parentElement; const shadow = getComputedStyle(bar).boxShadow; input.focus(); const style = getComputedStyle(bar); return [getComputedStyle(input).outlineStyle, style.outlineStyle, style.boxShadow === shadow, style.borderColor]; })()"), ['none', 'none', true, 'rgb(93, 196, 252)'])
+    }
     assert.deepEqual(exceptions, [])
-    console.log('PASS custom controls: required bank, Escape/focus, group/round creation, currency selection, account save, 320/390/1024px layouts')
+    console.log('PASS custom controls: required bank, Escape/focus, group/round creation, currency selection, account save, search focus, 320/390/1024px layouts')
     console.log(`Browser evidence: ${artifactDir}`)
     ws.close()
     process.exit(0)
