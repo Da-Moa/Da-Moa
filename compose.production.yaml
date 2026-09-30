@@ -27,7 +27,11 @@ services:
       timeout: 5s
       retries: 12
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - type: bind
+        source: /db/postgres
+        target: /var/lib/postgresql/data
+        bind:
+          create_host_path: false
   minio:
     image: quay.io/minio/aistor/minio@sha256:107cf2014a9583c74c11e3cdbd6903d89c2244355886b89ce532f4ecae9c23f3
     restart: unless-stopped
@@ -42,7 +46,11 @@ services:
       timeout: 5s
       retries: 12
     volumes:
-      - minio-data:/mnt/data
+      - type: bind
+        source: /db/minio
+        target: /mnt/data
+        bind:
+          create_host_path: false
       - type: bind
         source: /srv/da-moa/shared/minio.license
         target: /minio.license
@@ -105,7 +113,5 @@ services:
       - prometheus
 
 volumes:
-  postgres-data:
-  minio-data:
   prometheus-data:
   grafana-data:

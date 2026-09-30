@@ -1,6 +1,6 @@
 # OCI Ubuntu arm64 배포
 
-GitHub Actions는 PR에서 `npm test`와 `npm run build`를 실행합니다. `main` push 또는 수동 실행 시 검증을 통과한 커밋을 SSH로 전송합니다. 서버는 arm64 앱 이미지를 빌드하고 Compose에서 앱·PostgreSQL·MinIO·Prometheus·Blackbox Exporter·Node Exporter·Grafana를 실행합니다. PostgreSQL·MinIO·Prometheus·Grafana 데이터는 이름 있는 Docker 볼륨에 저장합니다. 첫 배포에서는 빈 DB에 스키마를 만들고, 앱 전환 후 `/api/health` 점검에 실패하면 이전 앱 이미지로 되돌립니다. 배포용 앱 환경 파일은 배포가 끝나면 서버에서 삭제합니다.
+GitHub Actions는 PR에서 `npm test`와 `npm run build`를 실행합니다. `main` push 또는 수동 실행 시 검증을 통과한 커밋을 SSH로 전송합니다. 서버는 arm64 앱 이미지를 빌드하고 Compose에서 앱·PostgreSQL·MinIO·Prometheus·Blackbox Exporter·Node Exporter·Grafana를 실행합니다. PostgreSQL과 MinIO 데이터는 `/db` 블록 볼륨의 `/db/postgres`와 `/db/minio`에 각각 저장하고, Prometheus·Grafana 데이터는 이름 있는 Docker 볼륨에 저장합니다. 첫 배포에서는 빈 DB에 스키마를 만들고, 앱 전환 후 `/api/health` 점검에 실패하면 이전 앱 이미지로 되돌립니다. 배포용 앱 환경 파일은 배포가 끝나면 서버에서 삭제합니다.
 
 ## 1. 공인 IP와 인스턴스 준비
 
@@ -90,6 +90,19 @@ sudo docker exec -it da-moa-postgres-1 psql -U da_moa -d da_moa
 
 ## 3. 저장소 컨테이너 첫 실행
 
+먼저 블록 볼륨이 `/db`에 마운트되어 있어야 합니다. `/etc/fstab`에는 장치 UUID와 `defaults,_netdev` 옵션을 사용하고, Docker가 볼륨 마운트 후 시작하도록 설정합니다. 기존 DB가 있다면 아래 디렉터리 준비와 첫 실행 전에 앱·DB를 중지하고 기존 데이터 전체를 소유권·권한을 유지해 `/db/postgres`로 복사해야 합니다. MinIO도 앱·MinIO를 중지한 상태에서 `.minio.sys`를 포함한 기존 `/mnt/data` 전체를 소유권·권한을 유지해 `/db/minio`로 복사합니다. 기존 Docker 데이터 볼륨은 복구용으로 보존하고, 컨테이너를 새 마운트로 재생성한 뒤 파일 무결성과 저장소 접근을 확인합니다. [OCI fstab 설정](https://docs.oracle.com/en-us/iaas/Content/Block/References/fstaboptions.htm), [PostgreSQL 파일 복사](https://www.postgresql.org/docs/17/backup-file.html)
+
+```bash
+sudo mountpoint -q /db
+sudo findmnt --verify
+sudo install -d -m 700 /db/postgres /db/minio
+sudo install -d -m 755 /etc/systemd/system/docker.service.d
+printf '[Unit]\nRequiresMountsFor=/db\n' | sudo tee /etc/systemd/system/docker.service.d/db-volume.conf >/dev/null
+sudo systemctl daemon-reload
+```
+
+Compose는 `/db/postgres`를 PostgreSQL의 `/var/lib/postgresql/data`에, `/db/minio`를 MinIO의 `/mnt/data`에 바인드하고, 누락된 디렉터리를 자동 생성하지 않습니다. 배포 스크립트는 `/db` 마운트와 기존 DB·MinIO 컨테이너의 저장 위치를 확인한 뒤 진행합니다. [Docker 바인드 마운트](https://docs.docker.com/engine/storage/bind-mounts/)
+
 첫 배포 전에 [compose.production.yaml](../compose.production.yaml)을 서버의 `/srv/da-moa/bootstrap/compose.production.yaml`로 복사합니다.
 
 ```bash
@@ -108,7 +121,7 @@ docker compose -p da-moa --env-file /srv/da-moa/shared/.env.production -f /srv/d
 docker volume ls --filter name=da-moa_
 ```
 
-같은 Compose 프로젝트명 `da-moa`를 이후 배포에서도 사용합니다. 첫 실행 시 `da-moa_postgres-data`와 `da-moa_minio-data` 볼륨이 생성됩니다. 앱 이미지를 다시 빌드하거나 컨테이너를 교체해도 이 볼륨은 유지됩니다. 배포 스크립트는 저장소 컨테이너에 `--no-recreate`를 적용하고 볼륨 삭제 명령을 실행하지 않습니다. [Docker의 Compose 볼륨 동작](https://docs.docker.com/reference/compose-file/volumes/)
+같은 Compose 프로젝트명 `da-moa`를 이후 배포에서도 사용합니다. 첫 실행 시 PostgreSQL은 `/db/postgres`를, MinIO는 `/db/minio`를 초기화합니다. 앱 이미지를 다시 빌드하거나 컨테이너를 교체해도 두 저장소는 유지됩니다. 이전한 `da-moa_postgres-data`와 `da-moa_minio-data` 볼륨은 자동 삭제하지 않습니다. 배포 스크립트는 저장소 컨테이너에 `--no-recreate`를 적용하고 볼륨 삭제 명령을 실행하지 않습니다. [Docker의 Compose 볼륨 동작](https://docs.docker.com/reference/compose-file/volumes/)
 
 이전 Compose 설정으로 먼저 실행해 `/srv/da-moa/shared/minio.license`가 디렉터리가 되었고 그 안에 `da-moa-minio.license`가 들어 있다면 다음처럼 복구합니다. `ubuntu` 계정에서도 실행할 수 있도록 절대 경로를 사용합니다. MinIO 컨테이너만 다시 만들며 저장 데이터 볼륨은 유지됩니다.
 
@@ -154,7 +167,7 @@ MinIO의 S3 API와 콘솔은 서버의 `127.0.0.1:9000`, `127.0.0.1:9001`에만 
 
 발급한 앱 전용 키를 GitHub `production` Environment Secret `OCI_PRODUCTION_ENV`의 `MINIO_ACCESS_KEY`·`MINIO_SECRET_KEY`에 넣습니다. 앱 컨테이너는 Compose 내부에서 `postgres:5432`와 `minio:9000`에 접속하며, Nginx는 호스트의 `127.0.0.1:3000`으로 프록시합니다. DB와 MinIO 포트는 OCI 보안 목록에 열지 않습니다.
 
-**`docker compose down -v`, `docker volume rm`, `docker volume prune`를 운영 데이터 볼륨에 실행하지 마세요.** 볼륨은 인스턴스 디스크에 있으므로 인스턴스나 디스크 자체의 장애에는 별도 백업이 필요합니다. PostgreSQL 덤프와 MinIO 객체를 정기적으로 인스턴스 밖에 백업하고 복원도 확인합니다. DB 백업 예시:
+**`docker compose down -v`, `docker volume rm`, `docker volume prune`를 운영 데이터 볼륨에 실행하지 마세요.** PostgreSQL의 `/db/postgres`와 MinIO의 `/db/minio`, Docker 데이터 볼륨에는 디스크 자체의 장애에 대비한 별도 백업이 필요합니다. PostgreSQL 덤프와 MinIO 객체를 정기적으로 인스턴스 밖에 백업하고 복원도 확인합니다. DB 백업 예시:
 
 ```bash
 docker exec -i da-moa-postgres-1 pg_dump -U da_moa -Fc da_moa > "$HOME/da-moa-$(date +%F).dump"
