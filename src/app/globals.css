@@ -499,9 +499,15 @@ summary { color: #526a82; cursor: pointer; font-size: 13px; line-height: 1.6; pa
 .account-profile .account-details { text-align: left; }
 .account-verification-note { margin-top: 8px; text-align: right; }
 .account-bank-toggle { margin-top: 18px; }
+.account-save-toast { animation: account-toast-slide 2.9s ease-in-out both; left: 50%; max-width: 440px; pointer-events: none; position: fixed; text-align: center; top: calc(16px + env(safe-area-inset-top)); transform: translateX(-50%); width: calc(100% - 40px); z-index: 20; }
+@keyframes account-toast-slide {
+  0%, 100% { opacity: 0; transform: translate(-50%, calc(-100% - 16px - env(safe-area-inset-top))); }
+  9%, 91% { opacity: 1; transform: translate(-50%, 0); }
+}
 .account-page .domain-card { scroll-margin-top: 20px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; }
+  .account-save-toast { animation: none; }
   .settlement-money-digit-disappearing, .settlement-money-symbol-disappearing { animation: none; }
   .settlement-money-digit-changing::before { display: none; }
   .settlement-money-digit-changing > span { visibility: visible; }

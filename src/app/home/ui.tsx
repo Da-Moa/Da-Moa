@@ -287,6 +287,16 @@ export function AccountPanel() {
     })
     return () => { active = false }
   }, [reloadAccount, action.setError])
+  useEffect(() => {
+    if (!saved) return
+    const timer = window.setTimeout(() => setSaved(false), 3000)
+    return () => window.clearTimeout(timer)
+  }, [saved])
+  useEffect(() => {
+    const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+    if (editingBank) bankForm.form.current?.parentElement?.scrollIntoView({ behavior, block: 'start' })
+    else window.scrollTo({ top: 0, behavior })
+  }, [editingBank, bankForm.form])
   async function reloadLatest() {
     bankForm.clear()
     const latest = await reloadAccount()
@@ -294,7 +304,7 @@ export function AccountPanel() {
   }
   function cancelBankEdit() {
     bankForm.clear(); action.setError(null); setSaved(false); setEditingBank(false)
-    bankToggle.current?.focus()
+    bankToggle.current?.focus({ preventScroll: true })
   }
   async function save(form: HTMLFormElement) {
     if (!ready) return
@@ -303,7 +313,7 @@ export function AccountPanel() {
     if (result) {
       bankForm.clear(); setReady(false)
       const latest = await reloadAccount()
-      if (latest) { setSaved(true); setDraftVersion(latest.bankVersion); setFormKey(key => key + 1); setReady(true) }
+      if (latest) { setDraftVersion(latest.bankVersion); setFormKey(key => key + 1); setReady(true); cancelBankEdit(); setSaved(true) }
       else action.setError(new Error('계좌를 저장했지만 최신 정보를 불러오지 못했어요. 저장된 계좌를 다시 불러와 주세요.'))
     }
   }
@@ -332,6 +342,7 @@ export function AccountPanel() {
     })
   }
   return <div className="stack account-page">
+    {saved && <p className="notice account-save-toast" role="status">계좌를 저장했어요.</p>}
     <header className="account-page-heading"><Link aria-label="전체로 돌아가기" className="icon-button back-button back-link" href="/home/all"><ChevronLeft aria-hidden="true" size={38} strokeWidth={2.5} /></Link><h1>내 정보</h1></header>
     <section className="domain-card account-profile" aria-labelledby="account-profile-heading">
       <span className="account-avatar">{account.profileImageUrl ? <img alt="" height={80} width={80} referrerPolicy="no-referrer" src={account.profileImageUrl} /> : <CircleUserRound size={40} />}</span>
@@ -344,7 +355,6 @@ export function AccountPanel() {
       <BankFields key={formKey} disabled={action.busy || !ready} error={action.error} account={account.bankAccount} />
       <button className="primary-button" disabled={action.busy || !ready} type="submit">{action.busy ? '계좌 저장 중…' : !ready ? '저장된 계좌 확인 중…' : '계좌 저장'}</button>
       <button className="secondary-button danger-outline-button" disabled={action.busy} onClick={cancelBankEdit} type="button">취소</button>
-      {saved && <p className="notice" role="status">계좌를 저장했어요.</p>}
     </form><ErrorNotice error={action.error} retry={!ready || action.error instanceof ApiError && action.error.code === 'bank_account_conflict' ? () => void reloadLatest() : undefined} />
     </section>}
     <section className="domain-card stack" aria-labelledby="account-management-heading"><h2 id="account-management-heading">계정 관리</h2>
