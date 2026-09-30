@@ -375,6 +375,12 @@ select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3
 .bank-tile > img { height: 32px; object-fit: contain; width: 32px; }
 .bank-tile > img[src$='.png'] { width: 72px; }
 .bank-tile[aria-pressed='true'] { background: #e6f4ff; border-color: #146db0; color: #145e99; }
+.currency-sheet .bank-sheet-header h2 { font-size: 16px; }
+.currency-sheet .bank-grid { display: flex; flex-direction: column; gap: 4px; padding: 0; }
+.currency-sheet .bank-tile { background: transparent; border-radius: 12px; color: #4e5968; flex-direction: row; font-size: 15px; font-weight: 500; gap: 16px; justify-content: flex-start; min-height: 56px; padding: 12px 10px; }
+.currency-sheet .bank-tile > img { border-radius: 2px; flex-shrink: 0; height: 18px; width: 24px; }
+.currency-sheet .bank-tile:hover { background: #e8edf2; }
+.currency-sheet .bank-tile[aria-pressed='true'] { background: #e6f4ff; border-color: #146db0; color: #145e99; }
 @media (prefers-reduced-motion: reduce) { .field.line-field > span, .bank-select > span { transition: none; } .bank-sheet[open] { animation: none; } }
 .bank-choice { gap: 8px; }
 .bank-choice > .help-text, .bank-candidates > .help-text { margin: 0; }

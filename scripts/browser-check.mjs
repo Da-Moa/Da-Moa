@@ -75,11 +75,11 @@ async function click(text) {
   await evaluate(`Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === ${JSON.stringify(text)} && !button.disabled && button.getClientRects().length > 0).click()`)
 }
 async function fill(selector, value) {
-  if (selector === '[name=bankCode]') {
+  if (selector === '[name=bankCode]' || selector === '[name=currency]') {
     await waitFor("Boolean(document.querySelector('.bank-select-trigger') && !document.querySelector('.bank-select-trigger').disabled)")
     await evaluate("document.querySelector('.bank-select-trigger').click()")
     await waitFor("Boolean(document.querySelector('.bank-sheet[open]'))")
-    await evaluate(`document.querySelector('[data-bank-code="${value}"]').click()`)
+    await evaluate(`document.querySelector('[data-value="${value}"]').click()`)
     await waitFor("!document.querySelector('.bank-sheet[open]')")
     return
   }
@@ -165,6 +165,49 @@ try {
     assert.deepEqual(await evaluate("(() => { const s = getComputedStyle(document.querySelector('[name=name]')); return [s.borderTopWidth, s.borderBottomWidth, s.borderRadius, s.boxShadow] })()"), ['0px', '2px', '0px', 'none'])
     await click('모임 만들기')
     await waitFor("location.pathname.startsWith('/home/groups/')")
+    await waitFor(hasText('새 회차 기록 시작'))
+    const customGroupId = (await evaluate('location.pathname')).split('/').at(-1)
+    assert.equal(await evaluate("document.querySelector('[name=name]').closest('.line-field') !== null"), true)
+    assert.equal(await evaluate("document.querySelector('button[type=submit]').disabled"), true)
+    await click('초대 링크 만들기')
+    await waitFor("Boolean(document.querySelector('input[aria-label=\"공유 링크\"]')?.value)")
+    assert.equal(await evaluate(hasText('링크를 받은 사람이 로그인 후 초대를 수락하면 모임에 참여해요.')), false)
+    assert.equal(await evaluate("document.querySelector('.copy-link button') !== null"), false)
+    const customInvitePath = new URL(await evaluate("document.querySelector('input[aria-label=\"공유 링크\"]').value")).pathname
+    const roundPartner = await user('회차 멤버', '00112233')
+    await api(roundPartner.session, `/api${customInvitePath}/accept`, 'POST', {})
+    await waitFor(hasText('현재 멤버 2명'))
+    await mkdir(artifactDir, { recursive: true })
+    for (const width of [320, 390, 1024]) {
+      await cdp('Emulation.setDeviceMetricsOverride', { width, height: 844, deviceScaleFactor: 1, mobile: width < 480 })
+      await evaluate("document.querySelector('.bank-select-trigger').click()")
+      await waitFor("Boolean(document.querySelector('.bank-sheet[open]'))")
+      await evaluate("Promise.all(document.querySelector('.bank-sheet').getAnimations().map(animation => animation.finished))")
+      assert.equal(await evaluate("document.querySelectorAll('.bank-tile').length"), 3)
+      await waitFor("Array.from(document.querySelectorAll('.currency-sheet img')).length === 3 && Array.from(document.querySelectorAll('.currency-sheet img')).every(img => img.complete && img.naturalWidth > 0)")
+      assert.deepEqual(await evaluate("[getComputedStyle(document.querySelector('.currency-sheet')).backgroundColor, getComputedStyle(document.querySelector('.currency-sheet .bank-grid')).flexDirection]"), ['rgb(255, 255, 255)', 'column'])
+      assert.equal(await evaluate("document.querySelectorAll('.bank-tile svg').length"), 0)
+      assert.equal(await evaluate("getComputedStyle(document.querySelector('.bank-tile[aria-pressed=true]')).backgroundColor"), 'rgb(230, 244, 255)')
+      assert.equal(await evaluate("document.documentElement.scrollWidth <= innerWidth"), true)
+      const shot = await cdp('Page.captureScreenshot', { format: 'png' })
+      await writeFile(join(artifactDir, `currency-picker-${width}.png`), Buffer.from(shot.data, 'base64'))
+      await evaluate("document.querySelector('.bank-sheet-header button').click()")
+      await waitFor("!document.querySelector('.bank-sheet[open]')")
+    }
+    for (const currency of ['JPY', 'KRW', 'USD']) {
+      await fill('[name=currency]', currency)
+      assert.equal(await evaluate("new FormData(document.querySelector('form')).get('currency')"), currency)
+    }
+    await evaluate("document.querySelector('form').requestSubmit()")
+    assert.equal(await evaluate('location.pathname'), `/home/groups/${customGroupId}`)
+    await fill('[name=name]', '통화 입력 검증')
+    await click('이 멤버로 기록 시작')
+    await waitFor("location.pathname.startsWith('/home/rounds/')")
+    const customRoundId = (await evaluate('location.pathname')).split('/').at(-1)
+    const customRound = await evaluate(`fetch('/api/rounds/${customRoundId}').then(response => response.json()).then(result => result.data)`)
+    assert.equal(customRound.name, '통화 입력 검증')
+    assert.equal(customRound.currency, 'USD')
+    await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
     await navigate('/home/account', '내 정보')
     await click('계좌 수정하기')
     assert.equal(await evaluate("document.querySelector('[name=accountNumber]').value"), formatAccountNumber('004', '0001234567'))
@@ -197,7 +240,7 @@ try {
     const shot = await cdp('Page.captureScreenshot', { format: 'png' })
     await writeFile(join(artifactDir, 'form-inputs.png'), Buffer.from(shot.data, 'base64'))
     assert.deepEqual(exceptions, [])
-    console.log('PASS custom controls: required bank, Escape/focus, group creation, account save, 320/390/1024px layouts')
+    console.log('PASS custom controls: required bank, Escape/focus, group/round creation, currency selection, account save, 320/390/1024px layouts')
     console.log(`Browser evidence: ${artifactDir}`)
     ws.close()
     process.exit(0)

@@ -95,7 +95,7 @@ export function ParticipantAvatar({ profileImageUrl }: { profileImageUrl: string
   </span>
 }
 
-export function CopyLink({ path, label = '링크 복사' }: { path: string; label?: string }) {
+export function CopyLink({ path, label = '링크 복사', hideButton = false }: { path: string; label?: string; hideButton?: boolean }) {
   const [message, setMessage] = useState('')
   const [url, setUrl] = useState('')
   const input = useRef<HTMLInputElement>(null)
@@ -104,9 +104,9 @@ export function CopyLink({ path, label = '링크 복사' }: { path: string; labe
     try { await navigator.clipboard.writeText(url); setMessage('링크를 복사했어요. 원하는 대화방에 붙여 넣어 주세요.') }
     catch { input.current?.select(); setMessage('자동 복사를 사용할 수 없어요. 아래 링크를 선택해 직접 복사해 주세요.') }
   }
-  return <div className="copy-link"><button className="primary-button" type="button" disabled={!url} onClick={() => void copy()}>{label}</button>
+  return <div className="copy-link">{!hideButton && <button className="primary-button" type="button" disabled={!url} onClick={() => void copy()}>{label}</button>}
     <label className="field"><span>공유 링크</span><input aria-label="공유 링크" onFocus={event => event.target.select()} readOnly ref={input} value={url} /></label>
-    {(message || path.startsWith('/invites/')) && <p className="help-text" role="status">{message || '링크를 받은 사람이 로그인 후 초대를 수락하면 모임에 참여해요.'}</p>}
+    {message && <p className="help-text" role="status">{message}</p>}
   </div>
 }
 
@@ -117,43 +117,65 @@ export function useAccount() {
   return value
 }
 
+export function SheetSelect({ label, name, title, value, onChange, options, disabled, sheetClassName }: {
+  label: string; name: string; title: string; value: string; onChange: (value: string) => void;
+  options: readonly { value: string; label: string; icon?: ReactNode }[]; disabled?: boolean; sheetClassName?: string;
+}) {
+  const id = useId()
+  const dialogRef = useRef<HTMLDialogElement>(null)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const closing = useRef(false)
+  const [opened, setOpened] = useState(false)
+  function open() {
+    if (disabled || closing.current) return
+    dialogRef.current?.showModal()
+    setOpened(true)
+    dialogRef.current?.querySelector<HTMLButtonElement>(`[data-value="${value || options[0].value}"]`)?.focus()
+  }
+  async function close() {
+    const dialog = dialogRef.current
+    if (!dialog?.open || closing.current) return
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { dialog.close(); return }
+    closing.current = true
+    const animation = dialog.animate([{ transform: getComputedStyle(dialog).transform }, { transform: 'translateY(100%)' }], { duration: 200, easing: 'ease-in', fill: 'forwards' })
+    try { await animation.finished } catch { /* A cancelled animation must still close the dialog. */ }
+    if (dialog.isConnected) dialog.close()
+    animation.cancel()
+    closing.current = false
+  }
+  function choose(next: string) {
+    if (closing.current) return
+    onChange(next)
+    void close()
+  }
+  return <>
+    <div className={`bank-select${value ? ' bank-select-filled' : ''}`}>
+      <span id={`${id}-label`}>{label}</span>
+      <button aria-controls={`${id}-sheet`} aria-expanded={opened} aria-haspopup="dialog" aria-labelledby={`${id}-label ${id}-value`} className="bank-select-trigger" disabled={disabled} onClick={open} ref={trigger} type="button"><span id={`${id}-value`}>{options.find(option => option.value === value)?.label}</span><ChevronDown aria-hidden="true" size={20} /></button>
+      <select aria-hidden="true" autoComplete="off" className="bank-select-native" disabled={disabled} name={name} onChange={event => choose(event.currentTarget.value)} onInvalid={event => { event.preventDefault(); open() }} required tabIndex={-1} value={value}>{!value && <option value="" disabled>{title}</option>}{options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+    </div>
+    <dialog aria-labelledby={`${id}-title`} className={`bank-sheet ${sheetClassName ?? ''}`} id={`${id}-sheet`} onCancel={event => { event.preventDefault(); void close() }} onClick={event => { if (event.target === event.currentTarget) void close() }} onClose={() => { setOpened(false); trigger.current?.focus() }} ref={dialogRef}>
+      <div className="bank-sheet-content"><div className="bank-sheet-handle" aria-hidden="true" /><header className="bank-sheet-header"><h2 id={`${id}-title`}>{title}</h2><button aria-label={`${label} 닫기`} className="icon-button" onClick={() => void close()} type="button"><X aria-hidden="true" size={20} /></button></header>
+        <div aria-label={`${label} 목록`} className="bank-grid" role="group">{options.map(option => <button aria-pressed={value === option.value} className="bank-tile" data-value={option.value} key={option.value} onClick={() => choose(option.value)} type="button">{option.icon}<span>{option.label}</span></button>)}</div>
+      </div>
+    </dialog>
+  </>
+}
+
 export function BankFields({ disabled, error, account }: { disabled?: boolean; error?: Error | null; account?: Account['bankAccount'] }) {
   const id = useId()
   const fields = useRef<HTMLDivElement>(null)
-  const bankDialog = useRef<HTMLDialogElement>(null)
-  const bankTrigger = useRef<HTMLButtonElement>(null)
-  const bankClosing = useRef(false)
-  const [bankOpen, setBankOpen] = useState(false)
   const [selectedBank, setSelectedBank] = useState(account?.bankCode ?? BANKS.find(bank => bank.name === account?.bankName)?.code ?? '')
   const [number, setNumber] = useState(account?.accountNumber ?? '')
   const [clipboardMessage, setClipboardMessage] = useState('')
   const [clipboardAccount, setClipboardAccount] = useState<ReturnType<typeof parseClipboardAccount>>(null)
   const clipboardReading = useRef(false)
   const candidates = suggestBanks(number)
-  function openBanks() {
-    if (disabled || !number || bankClosing.current) return
-    bankDialog.current?.showModal()
-    setBankOpen(true)
-    bankDialog.current?.querySelector<HTMLButtonElement>(`[data-bank-code="${selectedBank || BANKS[0].code}"]`)?.focus()
-  }
-  async function closeBanks() {
-    const dialog = bankDialog.current
-    if (!dialog?.open || bankClosing.current) return
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { dialog.close(); return }
-    bankClosing.current = true
-    const animation = dialog.animate([{ transform: getComputedStyle(dialog).transform }, { transform: 'translateY(100%)' }], { duration: 200, easing: 'ease-in', fill: 'forwards' })
-    try { await animation.finished } catch { /* A cancelled animation must still close the dialog. */ }
-    if (dialog.isConnected) dialog.close()
-    animation.cancel()
-    bankClosing.current = false
-  }
   function formatInput(input: HTMLInputElement, bank = selectedBank, partial = true) { input.value = formatAccountNumber(bank, input.value, partial) }
   function chooseBank(code: string) {
-    if (bankClosing.current) return
     setSelectedBank(code)
     const input = fields.current?.querySelector<HTMLInputElement>('[name="accountNumber"]')
     if (input) formatInput(input, code)
-    void closeBanks()
   }
   function pasteAccount(parsed: ReturnType<typeof parseClipboardAccount>, input: HTMLInputElement) {
     setClipboardAccount(null)
@@ -180,7 +202,7 @@ export function BankFields({ disabled, error, account }: { disabled?: boolean; e
   useEffect(() => {
     if (!(error instanceof ApiError)) return
     const detail = error.details as { field?: unknown } | undefined
-    if (detail?.field === 'bankCode') bankTrigger.current?.focus()
+    if (detail?.field === 'bankCode') fields.current?.querySelector<HTMLButtonElement>('.bank-select-trigger')?.focus()
     else if (typeof detail?.field === 'string' && ['accountNumber', 'accountHolder'].includes(detail.field)) fields.current?.querySelector<HTMLElement>(`[name="${detail.field}"]`)?.focus()
   }, [error])
   return <div className="stack" ref={fields}>
@@ -208,19 +230,10 @@ export function BankFields({ disabled, error, account }: { disabled?: boolean; e
     }} type="button">{BANKS.find(bank => bank.code === clipboardAccount.bankCode)?.name} {formatAccountNumber(clipboardAccount.bankCode, clipboardAccount.accountNumber)} 붙여넣기</button>}
     {clipboardMessage && <p className="help-text" role="status">{clipboardMessage}</p>}
     <div className="stack bank-choice">
-      <div className={`bank-select${selectedBank ? ' bank-select-filled' : ''}`}>
-        <span id={`${id}-bank-label`}>은행 선택</span>
-        <button aria-controls={`${id}-banks`} aria-expanded={bankOpen} aria-haspopup="dialog" aria-labelledby={`${id}-bank-label ${id}-bank-value`} className="bank-select-trigger" disabled={disabled || !number} onClick={openBanks} ref={bankTrigger} type="button"><span id={`${id}-bank-value`}>{BANKS.find(bank => bank.code === selectedBank)?.name}</span><ChevronDown aria-hidden="true" size={20} /></button>
-        <select aria-hidden="true" autoComplete="off" className="bank-select-native" disabled={disabled || !number} name="bankCode" onChange={event => chooseBank(event.currentTarget.value)} onInvalid={event => { event.preventDefault(); openBanks() }} required tabIndex={-1} value={selectedBank}><option value="" disabled>은행을 선택해 주세요</option>{BANKS.map(bank => <option key={bank.code} value={bank.code}>{bank.name}</option>)}</select>
-      </div>
+      <SheetSelect disabled={disabled || !number} label="은행 선택" name="bankCode" onChange={chooseBank} options={BANKS.map(bank => ({ value: bank.code, label: bank.name, icon: <img alt="" draggable={false} height={32} src={`/banks/${bank.code}.${bank.code === '227' ? 'png' : 'svg'}`} width={32} /> }))} title="은행을 선택해 주세요" value={selectedBank} />
       {number && (candidates.length > 0 ? <div className="bank-candidates" aria-label="계좌번호로 찾은 은행 후보"><div className="bank-candidate-list">{candidates.map(code => <button aria-pressed={selectedBank === code} className="bank-candidate" disabled={disabled} key={code} onClick={() => chooseBank(code)} type="button"><img alt="" draggable={false} height={20} src={`/banks/${code}.${code === '227' ? 'png' : 'svg'}`} width={20} />{BANKS.find(bank => bank.code === code)?.name}</button>)}</div></div> : <p className="help-text">은행을 직접 선택해 주세요.</p>)}
     </div>
     <label className="field line-field" htmlFor={`${id}-holder`}><span>예금주</span><input autoComplete="off" defaultValue={account?.accountHolder ?? ''} disabled={disabled} id={`${id}-holder`} maxLength={100} name="accountHolder" placeholder=" " required /></label>
-    <dialog aria-labelledby={`${id}-banks-title`} className="bank-sheet" id={`${id}-banks`} onCancel={event => { event.preventDefault(); void closeBanks() }} onClick={event => { if (event.target === event.currentTarget) void closeBanks() }} onClose={() => { setBankOpen(false); bankTrigger.current?.focus() }} ref={bankDialog}>
-      <div className="bank-sheet-content"><div className="bank-sheet-handle" aria-hidden="true" /><header className="bank-sheet-header"><h2 id={`${id}-banks-title`}>은행을 선택해 주세요</h2><button aria-label="은행 선택 닫기" className="icon-button" onClick={() => void closeBanks()} type="button"><X aria-hidden="true" size={20} /></button></header>
-        <div aria-label="은행 목록" className="bank-grid" role="group">{BANKS.map(bank => <button aria-pressed={selectedBank === bank.code} className="bank-tile" data-bank-code={bank.code} key={bank.code} onClick={() => chooseBank(bank.code)} type="button"><img alt="" draggable={false} height={32} src={`/banks/${bank.code}.${bank.code === '227' ? 'png' : 'svg'}`} width={32} /><span>{bank.name}</span></button>)}</div>
-      </div>
-    </dialog>
   </div>
 }
 export function bankValues(form: HTMLFormElement) {
