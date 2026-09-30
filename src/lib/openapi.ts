@@ -111,9 +111,10 @@ function operation(tag: string, summary: string, options: OperationOptions = {})
 const roundCommand = (summary: string, description: string) => operation('정산', summary, { mutation: true, request: versionBody, description })
 const healthCheck: Schema = { type: 'string', enum: ['ok', 'down'] }
 function healthOperation(summary: string, names: string[]) {
+  const dependencyCheck = names.some(name => name === 'database' || name === 'minio')
   const checks = object(Object.fromEntries(names.map(name => [name, name === 'application' ? { type: 'string', enum: ['ok'] } : healthCheck])), names)
-  const response = { content: { 'application/json': { schema: object({ status: names.includes('database') ? healthCheck : { type: 'string', enum: ['ok'] }, checks }, ['status', 'checks']) } } }
-  return { tags: ['상태'], summary, description: '인증 없이 조회합니다. 결과를 캐시하지 않으며 내부 오류·연결 정보는 반환하지 않습니다.', security: [], responses: { '200': { description: '모든 검사 정상', ...response }, ...(names.includes('database') ? { '503': { description: '하나 이상의 의존 서비스 장애', ...response } } : {}) } }
+  const response = { content: { 'application/json': { schema: object({ status: dependencyCheck ? healthCheck : { type: 'string', enum: ['ok'] }, checks }, ['status', 'checks']) } } }
+  return { tags: ['상태'], summary, description: '인증 없이 조회합니다. 결과를 캐시하지 않으며 내부 오류·연결 정보는 반환하지 않습니다.', security: [], responses: { '200': { description: '모든 검사 정상', ...response }, ...(dependencyCheck ? { '503': { description: '하나 이상의 의존 서비스 장애', ...response } } : {}) } }
 }
 const domainPaths = {
   '/api/me': { get: operation('계정', '본인 프로필·가입 상태·계좌 조회', { response: ref('Me'), description: 'app 또는 onboarding 목적의 활성 세션으로 본인 데이터만 조회합니다. 일반 기능은 가입 완료 app 세션이 필요합니다.' }) },
@@ -177,7 +178,7 @@ export const openApiDocument = {
   paths: {
     ...documentedDomainPaths,
     '/api/health/live': { get: healthOperation('애플리케이션 응답 확인', ['application']) },
-    '/api/health/database': { get: healthOperation('PostgreSQL 응답 확인', ['database']) },
+    '/api/health/database': { get: healthOperation('PostgreSQL 연결 확인', ['database']) },
     '/api/health/minio': { get: healthOperation('MinIO 저장소 읽기·쓰기 상태 확인', ['minio']) },
     '/api/health/dependencies': { get: healthOperation('PostgreSQL·MinIO 저장소 읽기·쓰기 상태 확인', ['database', 'minio']) },
     '/api/health': { get: healthOperation('전체 상태 확인', ['application', 'database', 'minio']) },
