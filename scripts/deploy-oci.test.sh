@@ -34,7 +34,6 @@ EOF
 cat > "$tmp/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 case " $* " in
-  *'http://127.0.0.1:9090/-/ready'*|*'http://127.0.0.1:3001/api/health'*) ;;
   *'http://127.0.0.1:3000/api/health'*) test ! -f "$TEST_HOME/fail-health" ;;
   *) exit 1 ;;
 esac
@@ -58,7 +57,10 @@ test ! -e "$root/shared/.env.production.backup.legacy"
 test ! -e "$TEST_HOME/da-moa-$sha.env.production"
 test ! -e "$TEST_HOME/da-moa-$sha.minio.env"
 grep -q 'up -d --force-recreate --no-deps app' "$DOCKER_LOG"
-grep -q 'up -d --wait prometheus grafana' "$DOCKER_LOG"
+if grep -Eq 'prometheus|grafana|blackbox|node-exporter' "$DOCKER_LOG"; then
+  echo 'Application deployment must not manage monitoring services' >&2
+  exit 1
+fi
 
 printf 'BAD=value\n' > "$TEST_HOME/da-moa-$sha.env.production"
 printf 'BAD_MINIO=value\n' > "$TEST_HOME/da-moa-$sha.minio.env"
