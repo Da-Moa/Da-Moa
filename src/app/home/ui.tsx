@@ -276,6 +276,7 @@ export function AccountPanel() {
   const [ready, setReady] = useState(false)
   const [saved, setSaved] = useState(false)
   const [editingBank, setEditingBank] = useState(false)
+  const bankToggle = useRef<HTMLButtonElement>(null)
   const [blockedRounds, setBlockedRounds] = useState<{ id: string; name: string; groupName?: string }[]>([])
   useEffect(() => {
     let active = true
@@ -290,6 +291,10 @@ export function AccountPanel() {
     bankForm.clear()
     const latest = await reloadAccount()
     if (latest) { setDraftVersion(latest.bankVersion); setFormKey(key => key + 1); setReady(true); action.setError(null); setSaved(false) }
+  }
+  function cancelBankEdit() {
+    bankForm.clear(); action.setError(null); setSaved(false); setEditingBank(false)
+    bankToggle.current?.focus()
   }
   async function save(form: HTMLFormElement) {
     if (!ready) return
@@ -332,14 +337,13 @@ export function AccountPanel() {
       <span className="account-avatar">{account.profileImageUrl ? <img alt="" height={80} width={80} referrerPolicy="no-referrer" src={account.profileImageUrl} /> : <CircleUserRound size={40} />}</span>
       <h2 id="account-profile-heading">{account.displayName ?? '카카오 사용자'}님의 정보</h2>
       <dl className="account-details"><div><dt>이름</dt><dd>{account.displayName ?? '카카오 사용자'}</dd></div>{account.email && <div><dt>이메일</dt><dd>{account.email}</dd></div>}<div><dt>계좌</dt><dd>{account.bankAccount ? `${account.bankAccount.bankName} · ${account.bankAccount.formattedAccountNumber ?? formatAccountNumber(account.bankAccount.bankCode ?? account.bankAccount.bankName, account.bankAccount.accountNumber)}` : '등록된 계좌가 없어요.'}</dd></div></dl>
-      <button aria-expanded={editingBank} className="secondary-button account-bank-toggle" disabled={action.busy} onClick={() => { if (editingBank) { bankForm.clear(); action.setError(null); setSaved(false) } else setDraftVersion(account.bankVersion); setEditingBank(!editingBank) }} type="button">{editingBank ? '계좌 수정 닫기' : '계좌 수정하기'}</button>
+      <button aria-expanded={editingBank} className="secondary-button account-bank-toggle" disabled={action.busy} onClick={() => { if (editingBank) cancelBankEdit(); else { setDraftVersion(account.bankVersion); setEditingBank(true) } }} ref={bankToggle} type="button">{editingBank ? '계좌 수정 닫기' : '계좌 수정하기'}</button>
     </section>
-    {editingBank && <section className="domain-card stack" id="bank-settings" aria-labelledby="bank-settings-heading"><h2 id="bank-settings-heading">계좌 설정</h2>
-    <h3>계좌 정보 변경</h3>
+    {editingBank && <section className="domain-card stack" id="bank-settings" aria-label="계좌 수정">
     <form aria-busy={action.busy} autoComplete="off" className="stack" ref={bankForm.form} onSubmit={event => { event.preventDefault(); void save(event.currentTarget) }}>
       <BankFields key={formKey} disabled={action.busy || !ready} error={action.error} account={account.bankAccount} />
       <button className="primary-button" disabled={action.busy || !ready} type="submit">{action.busy ? '계좌 저장 중…' : !ready ? '저장된 계좌 확인 중…' : '계좌 저장'}</button>
-      <button className="text-button" disabled={action.busy} onClick={() => void reloadLatest()} type="button">입력 취소하고 저장된 계좌 보기</button>
+      <button className="secondary-button danger-outline-button" disabled={action.busy} onClick={cancelBankEdit} type="button">취소</button>
       {saved && <p className="notice" role="status">계좌를 저장했어요.</p>}
     </form><ErrorNotice error={action.error} retry={!ready || action.error instanceof ApiError && action.error.code === 'bank_account_conflict' ? () => void reloadLatest() : undefined} />
     </section>}
