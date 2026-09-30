@@ -9,6 +9,7 @@ services:
       METRICS_PORT: "9464"
     ports:
       - "127.0.0.1:3000:3000"
+      - "127.0.0.1:9464:9464"
     depends_on:
       postgres:
         condition: service_healthy
@@ -27,7 +28,11 @@ services:
       timeout: 5s
       retries: 12
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - type: bind
+        source: /db/postgres
+        target: /var/lib/postgresql/data
+        bind:
+          create_host_path: false
   minio:
     image: quay.io/minio/aistor/minio@sha256:107cf2014a9583c74c11e3cdbd6903d89c2244355886b89ce532f4ecae9c23f3
     restart: unless-stopped
@@ -42,70 +47,14 @@ services:
       timeout: 5s
       retries: 12
     volumes:
-      - minio-data:/mnt/data
+      - type: bind
+        source: /db/minio
+        target: /mnt/data
+        bind:
+          create_host_path: false
       - type: bind
         source: /srv/da-moa/shared/minio.license
         target: /minio.license
         read_only: true
         bind:
           create_host_path: false
-  blackbox:
-    image: prom/blackbox-exporter:v0.28.0
-    restart: unless-stopped
-    command: ["--config.file=/etc/blackbox_exporter/config.yml"]
-    volumes:
-      - ./monitoring/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
-  node-exporter:
-    image: quay.io/prometheus/node-exporter:v1.12.1
-    restart: unless-stopped
-    read_only: true
-    command:
-      - --path.procfs=/host/proc
-      - --path.sysfs=/host/sys
-      - --collector.disable-defaults
-      - --collector.cpu
-      - --collector.meminfo
-    volumes:
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
-  prometheus:
-    image: prom/prometheus:v3.14.0
-    restart: unless-stopped
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      - --storage.tsdb.retention.time=15d
-      - --storage.tsdb.retention.size=2GB
-    ports:
-      - "127.0.0.1:9090:9090"
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/prometheus
-    depends_on:
-      - blackbox
-      - node-exporter
-  grafana:
-    image: grafana/grafana:13.1.6-slim
-    restart: unless-stopped
-    environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
-      GF_USERS_ALLOW_SIGN_UP: "false"
-      GF_AUTH_ANONYMOUS_ENABLED: "false"
-      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:?DISCORD_BOT_TOKEN is required}
-      DISCORD_DM_CHANNEL_ID: ${DISCORD_DM_CHANNEL_ID:?DISCORD_DM_CHANNEL_ID is required}
-    ports:
-      - "127.0.0.1:3001:3000"
-    volumes:
-      - grafana-data:/var/lib/grafana
-      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
-      - ./monitoring/grafana/alerting:/etc/grafana/provisioning/alerting:ro
-      - ./monitoring/grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/da-moa.yml:ro
-      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
-    depends_on:
-      - prometheus
-
-volumes:
-  postgres-data:
-  minio-data:
-  prometheus-data:
-  grafana-data:

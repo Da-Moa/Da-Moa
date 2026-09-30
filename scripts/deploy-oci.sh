@@ -38,10 +38,16 @@ fi
 
 export APP_VERSION="$sha"
 dc() { docker compose -p da-moa --env-file "$env_file" -f "$release/compose.production.yaml" "$@"; }
+mountpoint -q /db && test -d /db/postgres && test -d /db/minio || { echo '/db must be mounted and /db/postgres and /db/minio prepared' >&2; exit 1; }
+if docker container inspect da-moa-postgres-1 > /dev/null 2>&1; then
+  data_source=$(docker inspect da-moa-postgres-1 --format '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Source}}{{end}}{{end}}')
+  [ "$data_source" = /db/postgres ] || { echo 'Migrate the existing PostgreSQL data to /db/postgres before deploying' >&2; exit 1; }
+fi
+if docker container inspect da-moa-minio-1 > /dev/null 2>&1; then
+  data_source=$(docker inspect da-moa-minio-1 --format '{{range .Mounts}}{{if eq .Destination "/mnt/data"}}{{.Source}}{{end}}{{end}}')
+  [ "$data_source" = /db/minio ] || { echo 'Migrate the existing MinIO data to /db/minio before deploying' >&2; exit 1; }
+fi
 dc up -d --wait --no-recreate postgres minio
-dc up -d --wait prometheus grafana
-curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-max-time 60 --retry-all-errors --max-time 3 --output /dev/null http://127.0.0.1:9090/-/ready
-curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-max-time 60 --retry-all-errors --max-time 3 --output /dev/null http://127.0.0.1:3001/api/health
 if [ "$previous" != "$release" ]; then
   dc build app
 fi
