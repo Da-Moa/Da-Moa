@@ -117,15 +117,16 @@ export function useAccount() {
   return value
 }
 
-export function SheetSelect({ label, name, title, value, onChange, options, disabled, sheetClassName }: {
+export function SheetSelect({ label, name, title, value, onChange, options, disabled, sheetClassName, showSelectedIcon }: {
   label: string; name: string; title: string; value: string; onChange: (value: string) => void;
-  options: readonly { value: string; label: string; icon?: ReactNode }[]; disabled?: boolean; sheetClassName?: string;
+  options: readonly { value: string; label: string; icon?: ReactNode }[]; disabled?: boolean; sheetClassName?: string; showSelectedIcon?: boolean;
 }) {
   const id = useId()
   const dialogRef = useRef<HTMLDialogElement>(null)
   const trigger = useRef<HTMLButtonElement>(null)
   const closing = useRef(false)
   const [opened, setOpened] = useState(false)
+  const selected = options.find(option => option.value === value)
   function open() {
     if (disabled || closing.current) return
     dialogRef.current?.showModal()
@@ -151,7 +152,7 @@ export function SheetSelect({ label, name, title, value, onChange, options, disa
   return <>
     <div className={`bank-select${value ? ' bank-select-filled' : ''}`}>
       <span id={`${id}-label`}>{label}</span>
-      <button aria-controls={`${id}-sheet`} aria-expanded={opened} aria-haspopup="dialog" aria-labelledby={`${id}-label ${id}-value`} className="bank-select-trigger" disabled={disabled} onClick={open} ref={trigger} type="button"><span id={`${id}-value`}>{options.find(option => option.value === value)?.label}</span><ChevronDown aria-hidden="true" size={20} /></button>
+      <button aria-controls={`${id}-sheet`} aria-expanded={opened} aria-haspopup="dialog" aria-labelledby={`${id}-label ${id}-value`} className="bank-select-trigger" disabled={disabled} onClick={open} ref={trigger} type="button"><span className="bank-select-value" id={`${id}-value`}>{showSelectedIcon && selected?.icon}{selected?.label}</span><ChevronDown aria-hidden="true" size={20} /></button>
       <select aria-hidden="true" autoComplete="off" className="bank-select-native" disabled={disabled} name={name} onChange={event => choose(event.currentTarget.value)} onInvalid={event => { event.preventDefault(); open() }} required tabIndex={-1} value={value}>{!value && <option value="" disabled>{title}</option>}{options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
     </div>
     <dialog aria-labelledby={`${id}-title`} className={`bank-sheet ${sheetClassName ?? ''}`} id={`${id}-sheet`} onCancel={event => { event.preventDefault(); void close() }} onClick={event => { if (event.target === event.currentTarget) void close() }} onClose={() => { setOpened(false); trigger.current?.focus() }} ref={dialogRef}>

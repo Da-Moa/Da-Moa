@@ -75,7 +75,7 @@ async function click(text) {
   await evaluate(`Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === ${JSON.stringify(text)} && !button.disabled && button.getClientRects().length > 0).click()`)
 }
 async function fill(selector, value) {
-  if (selector === '[name=bankCode]' || selector === '[name=currency]') {
+  if (selector === '[name=bankCode]' || selector === '[name=currency]' || selector === '[name=payerId]') {
     await waitFor("Boolean(document.querySelector('.bank-select-trigger') && !document.querySelector('.bank-select-trigger').disabled)")
     await evaluate("document.querySelector('.bank-select-trigger').click()")
     await waitFor("Boolean(document.querySelector('.bank-sheet[open]'))")
@@ -101,9 +101,9 @@ async function api(session, path, method = 'GET', body) {
 }
 const runId = randomUUID()
 const settlementAmountMinor = 13593n
-async function user(label, number, onboarding = false) {
+async function user(label, number, onboarding = false, profileImageUrl = null) {
   const subject = `browser-${runId}-${label}`
-  const profile = { displayName: `검증 ${label}`, email: null, profileImageUrl: null }
+  const profile = { displayName: `검증 ${label}`, email: null, profileImageUrl }
   const limited = await signInKakao(subject, profile)
   if (onboarding) return { subject, session: limited }
   // The TEST_DATABASE_URL guard above confines this legacy fixture to the isolated test database.
@@ -177,7 +177,7 @@ try {
     assert.equal(await evaluate(hasText('링크를 받은 사람이 로그인 후 초대를 수락하면 모임에 참여해요.')), false)
     assert.equal(await evaluate("document.querySelector('.copy-link button') !== null"), false)
     const customInvitePath = new URL(await evaluate("document.querySelector('input[aria-label=\"공유 링크\"]').value")).pathname
-    const roundPartner = await user('회차 멤버', '00112233')
+    const roundPartner = await user('회차 멤버', '00112233', false, `${origin}/logo/da-moa-128px.png`)
     await api(roundPartner.session, `/api${customInvitePath}/accept`, 'POST', {})
     await waitFor(hasText('현재 멤버 2명'))
     await mkdir(artifactDir, { recursive: true })
@@ -213,6 +213,54 @@ try {
     const customRound = await evaluate(`fetch('/api/rounds/${customRoundId}').then(response => response.json()).then(result => result.data)`)
     assert.equal(customRound.name, '통화 입력 검증')
     assert.equal(customRound.currency, 'USD')
+    await click('지출 추가')
+    await fill('[name=description]', '지출 입력 검증')
+    await fill('[name=amount]', '10.05')
+    await evaluate("document.querySelector('input[type=radio][value=CUSTOM]').click()")
+    await evaluate("document.querySelectorAll('#expense-editor input[name=participantIds]').forEach(input => input.click())")
+    await fill(`[name="customAmount:${newcomer.session.userId}"]`, '4.01')
+    await fill(`[name="customAmount:${roundPartner.session.userId}"]`, '6.03')
+    assert.equal(await evaluate("document.querySelectorAll('#expense-editor .line-field input').length"), 4)
+    assert.equal(await evaluate("Array.from(document.querySelectorAll('#expense-editor .line-field input')).every(input => { const style = getComputedStyle(input); return style.borderTopWidth === '0px' && style.borderBottomWidth === '2px' && style.borderRadius === '0px' && style.boxShadow === 'none'; })"), true)
+    assert.equal(await evaluate(hasText('부담할 사람을 선택하고 각자의 부담금을 입력해 주세요. 부담금 합계는 총 금액과 같아야 해요.')), false)
+    for (const width of [320, 390, 1024]) {
+      await cdp('Emulation.setDeviceMetricsOverride', { width, height: 844, deviceScaleFactor: 1, mobile: width < 480 })
+      await evaluate("document.querySelector('.bank-select-trigger').click()")
+      await waitFor("Boolean(document.querySelector('.bank-sheet[open]'))")
+      await evaluate("Promise.all(document.querySelector('.bank-sheet').getAnimations().map(animation => animation.finished))")
+      assert.equal(await evaluate("document.querySelectorAll('.bank-tile .participant-avatar').length"), 2)
+      await waitFor(`Boolean(document.querySelector('[data-value="${roundPartner.session.userId}"] img')?.naturalWidth)`)
+      assert.equal(await evaluate(`document.querySelector('[data-value="${roundPartner.session.userId}"] img').src`), `${origin}/logo/da-moa-128px.png`)
+      assert.equal(await evaluate("document.documentElement.scrollWidth <= innerWidth && document.querySelector('.bank-sheet').scrollWidth <= document.querySelector('.bank-sheet').clientWidth"), true)
+      const shot = await cdp('Page.captureScreenshot', { format: 'png' })
+      await writeFile(join(artifactDir, `payer-picker-${width}.png`), Buffer.from(shot.data, 'base64'))
+      await evaluate("document.querySelector('.bank-sheet-header button').click()")
+      await waitFor("!document.querySelector('.bank-sheet[open]')")
+    }
+    await fill('[name=payerId]', roundPartner.session.userId)
+    await waitFor("Boolean(document.querySelector('.bank-select-value img')?.naturalWidth)")
+    assert.equal(await evaluate("document.querySelector('.bank-select-value img').src"), `${origin}/logo/da-moa-128px.png`)
+    await click('지출 저장')
+    await waitFor(hasText('부담금 합계가 총 금액과 일치해야 해요'))
+    await fill(`[name="customAmount:${roundPartner.session.userId}"]`, '6.04')
+    await click('지출 저장')
+    await waitFor("!document.querySelector('#expense-editor')")
+    const savedExpense = await evaluate(`fetch('/api/rounds/${customRoundId}').then(response => response.json()).then(result => result.data.expenses[0])`)
+    assert.equal(savedExpense.description, '지출 입력 검증')
+    assert.equal(savedExpense.amountMinor, '1005')
+    assert.equal(savedExpense.payerId, roundPartner.session.userId)
+    assert.equal(savedExpense.splitMode, 'CUSTOM')
+    assert.deepEqual(savedExpense.shares.map(share => share.assignedAmountMinor).sort(), ['401', '604'])
+    assert.equal(await evaluate(hasText('지금까지 기록한 지출 내역을 기반으로 한 예상치예요')), false)
+    await click('수정')
+    await waitFor("Boolean(document.querySelector('#expense-editor [name=payerId]'))")
+    assert.equal(await evaluate("document.querySelector('[name=payerId]').value"), roundPartner.session.userId)
+    assert.equal(await evaluate("document.querySelector('[name=amount]').value"), '10.05')
+    await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
+    await evaluate("document.querySelector('#expense-editor').scrollIntoView({ block: 'start' })")
+    const expenseShot = await cdp('Page.captureScreenshot', { format: 'png' })
+    await writeFile(join(artifactDir, 'expense-inputs.png'), Buffer.from(expenseShot.data, 'base64'))
+    await click('닫기')
     await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
     await navigate('/home/account', '내 정보')
     await click('계좌 수정하기')
@@ -251,7 +299,7 @@ try {
       assert.deepEqual(await evaluate("(() => { const input = document.querySelector('.round-search-bar input'); const bar = input.parentElement; const shadow = getComputedStyle(bar).boxShadow; input.focus(); const style = getComputedStyle(bar); return [getComputedStyle(input).outlineStyle, style.outlineStyle, style.boxShadow === shadow, style.borderColor]; })()"), ['none', 'none', true, 'rgb(93, 196, 252)'])
     }
     assert.deepEqual(exceptions, [])
-    console.log('PASS custom controls: required bank, Escape/focus, group/round creation, currency selection, account save, search focus, 320/390/1024px layouts')
+    console.log('PASS custom controls: required bank, Escape/focus, group/round creation, currency/payer selection, expense validation/save/edit, account save, search focus, 320/390/1024px layouts')
     console.log(`Browser evidence: ${artifactDir}`)
     ws.close()
     process.exit(0)

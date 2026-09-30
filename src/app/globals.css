@@ -360,6 +360,8 @@ select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3
 .bank-select-trigger { align-items: center; background: transparent; border: 0; border-bottom: 2px solid var(--box-border-color); border-radius: 0; color: #191f28; display: flex; font-size: 16px; gap: 12px; height: 64px; justify-content: space-between; padding: 25px 0 10px; text-align: left; width: 100%; }
 .bank-select-trigger:not(:disabled):hover { background: transparent; border-bottom-color: #6b7684; }
 .bank-select-trigger svg { color: #6b7684; flex-shrink: 0; }
+.bank-select-value { align-items: center; display: flex; gap: 10px; }
+.bank-select-value .participant-avatar { height: 24px; width: 24px; }
 .bank-select-native { height: 1px; opacity: 0; overflow: hidden; pointer-events: none; position: absolute; width: 1px; }
 .bank-sheet { background: #fff; border: 0; border-radius: 24px 24px 0 0; bottom: 0; box-shadow: var(--box-shadow); color: #191f28; inset-inline: 0; margin: auto auto 0; max-height: min(80dvh, 720px); max-width: 480px; overflow: hidden; padding: 0; width: 100%; }
 .bank-sheet[open] { animation: bank-sheet-rise .24s cubic-bezier(.2, .8, .2, 1); }
