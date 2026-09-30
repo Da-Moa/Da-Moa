@@ -19,7 +19,7 @@ const origin = 'http://localhost:3087'
 
 async function session(name: string) {
   const signup = await signInKakao(`routes-test:${randomUUID()}`, { displayName: name, email: null, profileImageUrl: null })
-  return completeOnboarding(readAccessToken(signup.accessToken), { bankName: '검증은행', accountNumber: '0001234', accountHolder: name })
+  return completeOnboarding(readAccessToken(signup.accessToken), { bankName: '검증은행', accountNumber: '12340312345678', accountHolder: name })
 }
 
 async function request(path: string, token: string | null, method = 'GET', body?: unknown, extraHeaders?: Record<string, string>) {
@@ -43,7 +43,7 @@ test('Route Handler contracts enforce cookies, origin, idempotency, normalized i
     assert.equal((await request('groups', a.accessToken, 'POST', { name: '금지' }, { origin: 'https://attacker.example' })).status, 403)
     const account = await me(new NextRequest(`${origin}/api/me`, { headers: { cookie: `${ACCESS_TOKEN_COOKIE_NAME}=${a.accessToken}` } }))
     assert.equal(account.headers.get('cache-control'), 'private, no-store')
-    assert.equal((await account.json()).data.bankAccount.accountNumber, '0001234')
+    assert.equal((await account.json()).data.bankAccount.accountNumber, '12340312345678')
     const groupResult = await request('groups', a.accessToken, 'POST', { name: 'HTTP 계약' })
     assert.equal(groupResult.status, 200, await groupResult.clone().text())
     const groupId = (await groupResult.json()).data.id
@@ -149,7 +149,7 @@ test('Route Handler contracts enforce cookies, origin, idempotency, normalized i
     const result = (await settlement.json()).data
     assert.equal(result.balanceMinor, '3000')
     assert.equal(result.outgoing[0].receiverId, b.userId)
-    assert.equal(result.outgoing[0].account.accountNumber, '0001234')
+    assert.equal(result.outgoing[0].account.accountNumber, '12340312345678')
     assert.equal(result.incoming.length, 0)
     assert.equal(result.sharePath, `/settlements/${roundId}`)
     assert.equal((await request(`rounds/${roundId}/settlement-check`, a.accessToken, 'POST', { expectedVersion: locked.version, checked: 'yes' })).status, 400)

@@ -24,7 +24,7 @@ const png = await sharp({ create: { width: 2, height: 2, channels: 3, background
 
 async function member(): Promise<AccessToken> {
   const limited = await signInKakao(`concurrency-test:${key()}`, { displayName: '경합 검증 사용자', email: null, profileImageUrl: null })
-  const full = await completeOnboarding(readAccessToken(limited.accessToken), { bankName: '테스트 은행', accountHolder: '경합 검증 사용자', accountNumber: '00012345678' })
+  const full = await completeOnboarding(readAccessToken(limited.accessToken), { bankName: '테스트 은행', accountHolder: '경합 검증 사용자', accountNumber: '12340312345678' })
   return readAccessToken(full.accessToken)!
 }
 

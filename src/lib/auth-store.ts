@@ -14,7 +14,7 @@ import { requireAccount, type Account } from './authorization'
 import { withWriteTransaction, type Database } from './db'
 import { AppError } from './errors'
 import { objectBody, replayMutation, saveMutation } from './mutations'
-import { testAccountForKey } from './test-accounts'
+import { TEST_ONBOARDING_KEY, testAccountForKey } from './test-accounts'
 import { normalizeBankAccountInput, type BankAccountInput } from './bank-account'
 
 export type UserAccount = Pick<Account, 'displayName' | 'email' | 'profileImageUrl'>
@@ -77,10 +77,18 @@ export function signInKakao(providerSubject: string, profile: KakaoProfile) {
 
 export function signInTestAccount(key: unknown) {
   const fixture = testAccountForKey(key)
-  if (process.env.NODE_ENV === 'production' || !fixture) {
+  if (process.env.NODE_ENV === 'production' || !fixture && key !== TEST_ONBOARDING_KEY) {
     throw new AppError(404, 'not_found', '테스트 계정을 찾을 수 없습니다')
   }
   return withWriteTransaction(async (client) => {
+    if (!fixture) {
+      const id = randomUUID(), now = currentTimestamp()
+      await client.query(`
+        INSERT INTO users(id, provider, provider_subject, display_name, created_at, updated_at)
+        VALUES ($1, 'test', $2, '민지', $3, $3)
+      `, [id, `da-moa:test-only:onboarding:${id}`, now])
+      return issueSession(client, id, 'onboarding', now)
+    }
     const { rows } = await client.query(`
       SELECT id FROM users
       WHERE id = $1 AND provider = 'test' AND provider_subject = $2
@@ -111,9 +119,10 @@ export async function completeOnboarding(access: AccessToken | null, input: unkn
     await client.query(`
       UPDATE users SET bank_name = $2, account_number = $3, account_holder = $4,
         bank_updated_at = $5, deleted_at = NULL, onboarding_completed_at = $5, updated_at = $5,
-        bank_code = $6, bank_verified_at = NULL, bank_verification_tran_id = NULL, bank_version = bank_version + 1
+        bank_code = $6, account_number_formatted = $7,
+        bank_verified_at = NULL, bank_verification_tran_id = NULL, bank_version = bank_version + 1
       WHERE id = $1
-    `, [account.id, bank.bankName, bank.accountNumber, bank.accountHolder, now, bank.bankCode])
+    `, [account.id, bank.bankName, bank.accountNumber, bank.accountHolder, now, bank.bankCode, bank.formattedAccountNumber])
     await client.query('UPDATE refresh_sessions SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL', [account.id, now])
     // Memberships deliberately stay inactive after rejoining.
     return issueSession(client, account.id, 'app', now)
@@ -141,11 +150,11 @@ export async function updateBankAccount(access: AccessToken | null, requestKey: 
     assertBankVersion(current, bank.expectedBankVersion)
     const now = currentTimestamp()
     await client.query(`UPDATE users SET bank_name = $2, account_number = $3, account_holder = $4,
-      bank_updated_at = $5, updated_at = $5, bank_code = $6,
+      bank_updated_at = $5, updated_at = $5, bank_code = $6, account_number_formatted = $7,
       bank_verified_at = CASE WHEN bank_code=$6 AND account_number=$3 AND account_holder=$4 THEN bank_verified_at ELSE NULL END,
       bank_verification_tran_id = CASE WHEN bank_code=$6 AND account_number=$3 AND account_holder=$4 THEN bank_verification_tran_id ELSE NULL END,
       bank_version = bank_version + 1 WHERE id = $1`,
-    [current.id, bank.bankName, bank.accountNumber, bank.accountHolder, now, bank.bankCode])
+    [current.id, bank.bankName, bank.accountNumber, bank.accountHolder, now, bank.bankCode, bank.formattedAccountNumber])
     const result = { id: current.id, bankVersion: bank.expectedBankVersion + 1 }
     await saveMutation(client, current.id, operation, requestKey, prior.digest, current.id, result)
     return result

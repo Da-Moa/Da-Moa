@@ -22,7 +22,7 @@ const code = (expected: string) => (error: unknown) => (error as { code?: string
 
 async function member(name: string): Promise<AccessToken> {
   const session = await signInKakao(`settlement-test:${key()}`, { displayName: name, email: null, profileImageUrl: null })
-  const full = await completeOnboarding(readAccessToken(session.accessToken), { bankName: `${name}은행`, accountHolder: name, accountNumber: '00123456789' })
+  const full = await completeOnboarding(readAccessToken(session.accessToken), { bankName: `${name}은행`, accountHolder: name, accountNumber: '12340312345678' })
   return readAccessToken(full.accessToken)!
 }
 
@@ -221,14 +221,16 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       }
       await command(r.id, 'force-complete')
       for (const action of ['reopen', 'cancel', 'confirm', 'send']) await assert.rejects(command(r.id, action), code('invalid_round_state'))
-      await updateBankAccount(b, key(), { bankName: '최신 은행', accountNumber: '00009999', accountHolder: 'B 최신' })
+      await updateBankAccount(b, key(), { bankName: '최신 은행', accountNumber: '12340312345679', accountHolder: 'B 최신' })
       const newest = await getSettlement(a, r.id)
-      assert.equal(newest.outgoing[0].account?.accountNumber, '00009999')
+      assert.equal(newest.outgoing[0].account?.accountNumber, '12340312345679')
+      assert.equal(newest.outgoing[0].account?.formattedAccountNumber, '123403-12-345679')
       assert.equal(newest.outgoing[0].amountMinor, '3000')
       const current = await getAccount(b)
-      await saveBankAccount(b, key(), { bankCode: '004', accountNumber: '00008888', accountHolder: 'B 최신', expectedBankVersion: current.bankVersion })
+      await saveBankAccount(b, key(), { bankCode: '004', accountNumber: '12340312345670', accountHolder: 'B 최신', expectedBankVersion: current.bankVersion })
       const unverified = await getSettlement(a, r.id)
-      assert.equal(unverified.outgoing[0].account?.accountNumber, '00008888')
+      assert.equal(unverified.outgoing[0].account?.accountNumber, '12340312345670')
+      assert.equal(unverified.outgoing[0].account?.formattedAccountNumber, '123403-12-345670')
       assert.equal(unverified.outgoing[0].account?.verifiedAt, null)
       assert.equal(unverified.outgoing[0].amountMinor, '3000')
       assert.equal((await get(r.id)).expenses[0].amountMinor, '9000')
@@ -620,7 +622,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       const subject = `settlement-profile:${key()}`
       const profileImageUrl = 'https://profiles.example.test/active.png'
       const signup = await signInKakao(subject, { displayName: '탈퇴 프로필', email: null, profileImageUrl })
-      const registered = await completeOnboarding(readAccessToken(signup.accessToken), { bankName: '프로필은행', accountHolder: '탈퇴 프로필', accountNumber: '00123456789' })
+      const registered = await completeOnboarding(readAccessToken(signup.accessToken), { bankName: '프로필은행', accountHolder: '탈퇴 프로필', accountNumber: '12340312345678' })
       const departed = readAccessToken(registered.accessToken)!
       const profileGroup = await createGroup(a, key(), { name: '프로필 표시 검증' })
       const profileInvite = await createInvite(a, key(), profileGroup.id, {})

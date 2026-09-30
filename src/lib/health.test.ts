@@ -20,6 +20,14 @@ test('liveness skips dependencies and overall health reports each failure', asyn
   assert.equal(dependencies.status, 503)
   assert.deepEqual(await dependencies.json(), { status: 'down', checks: { database: 'ok', minio: 'down' } })
 
+  const database = await healthResponse('database', probes)
+  assert.equal(database.status, 200)
+  assert.deepEqual(await database.json(), { status: 'ok', checks: { database: 'ok' } })
+  const minio = await healthResponse('minio', probes)
+  assert.equal(minio.status, 503)
+  assert.deepEqual(await minio.json(), { status: 'down', checks: { minio: 'down' } })
+  assert.equal(databaseChecks, 2)
+
   minioUp = true
   const overall = await healthResponse('overall', probes)
   assert.equal(overall.status, 200)
@@ -45,6 +53,8 @@ test('health routes require MinIO read and write quorum', async () => {
     }
     await checkMinio()
     assert.deepEqual(paths.sort(), ['http://127.0.0.1:9000/minio/health/cluster', 'http://127.0.0.1:9000/minio/health/cluster/read'])
+    const minio = await GET(new Request('http://localhost/api/health/minio'), { params: Promise.resolve({ check: ['minio'] }) })
+    assert.deepEqual(await minio.json(), { status: 'ok', checks: { minio: 'ok' } })
     for (const failedPath of paths) {
       globalThis.fetch = async input => new Response(null, { status: String(input) === failedPath ? 503 : 200 })
       await assert.rejects(checkMinio, /not ready/)

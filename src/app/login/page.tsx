@@ -2,7 +2,7 @@ import { Check, ChevronLeft, MessageCircle } from 'lucide-react'
 import Link from 'next/link'
 import { getLoginMessage } from '../../lib/login-message'
 import { safeReturnTo } from '../../lib/auth'
-import { TEST_ACCOUNTS } from '../../lib/test-accounts'
+import { TEST_ACCOUNTS, TEST_ONBOARDING_KEY } from '../../lib/test-accounts'
 
 export default async function LoginPage({
   searchParams,
@@ -34,6 +34,11 @@ export default async function LoginPage({
         </a>
         {process.env.NODE_ENV !== 'production' && <div className="test-account-list stack">
           <p className="help-text">개발 테스트 계정</p>
+          <form action="/api/auth/test-login" method="post">
+            <input name="key" type="hidden" value={TEST_ONBOARDING_KEY} />
+            <input name="returnTo" type="hidden" value="/onboarding" />
+            <button className="secondary-button" type="submit">첫 가입 온보딩 보기</button>
+          </form>
           {TEST_ACCOUNTS.map(account => <form action="/api/auth/test-login" method="post" key={account.key}>
             <input name="key" type="hidden" value={account.key} />
             <input name="returnTo" type="hidden" value={safeReturnTo(returnTo)} />
