@@ -111,9 +111,10 @@ export async function completeOnboarding(access: AccessToken | null, input: unkn
     await client.query(`
       UPDATE users SET bank_name = $2, account_number = $3, account_holder = $4,
         bank_updated_at = $5, deleted_at = NULL, onboarding_completed_at = $5, updated_at = $5,
-        bank_code = $6, bank_verified_at = NULL, bank_verification_tran_id = NULL, bank_version = bank_version + 1
+        bank_code = $6, account_number_formatted = $7,
+        bank_verified_at = NULL, bank_verification_tran_id = NULL, bank_version = bank_version + 1
       WHERE id = $1
-    `, [account.id, bank.bankName, bank.accountNumber, bank.accountHolder, now, bank.bankCode])
+    `, [account.id, bank.bankName, bank.accountNumber, bank.accountHolder, now, bank.bankCode, bank.formattedAccountNumber])
     await client.query('UPDATE refresh_sessions SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL', [account.id, now])
     // Memberships deliberately stay inactive after rejoining.
     return issueSession(client, account.id, 'app', now)
@@ -141,11 +142,11 @@ export async function updateBankAccount(access: AccessToken | null, requestKey: 
     assertBankVersion(current, bank.expectedBankVersion)
     const now = currentTimestamp()
     await client.query(`UPDATE users SET bank_name = $2, account_number = $3, account_holder = $4,
-      bank_updated_at = $5, updated_at = $5, bank_code = $6,
+      bank_updated_at = $5, updated_at = $5, bank_code = $6, account_number_formatted = $7,
       bank_verified_at = CASE WHEN bank_code=$6 AND account_number=$3 AND account_holder=$4 THEN bank_verified_at ELSE NULL END,
       bank_verification_tran_id = CASE WHEN bank_code=$6 AND account_number=$3 AND account_holder=$4 THEN bank_verification_tran_id ELSE NULL END,
       bank_version = bank_version + 1 WHERE id = $1`,
-    [current.id, bank.bankName, bank.accountNumber, bank.accountHolder, now, bank.bankCode])
+    [current.id, bank.bankName, bank.accountNumber, bank.accountHolder, now, bank.bankCode, bank.formattedAccountNumber])
     const result = { id: current.id, bankVersion: bank.expectedBankVersion + 1 }
     await saveMutation(client, current.id, operation, requestKey, prior.digest, current.id, result)
     return result

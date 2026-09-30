@@ -348,6 +348,14 @@ select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3
 .field input[type='file'] { font-size: 12px !important; }
 .field small { color: #657181; font-size: 12px; line-height: 1.5; }
 .field select { cursor: pointer; }
+.bank-choice { gap: 8px; }
+.bank-choice > .help-text, .bank-candidates > .help-text { margin: 0; }
+.bank-candidates { display: grid; gap: 8px; }
+.bank-candidate-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.bank-candidate { background: #f2f7fc; border: 1px solid #d8e7f5; border-radius: 999px; color: #245579; cursor: pointer; font: inherit; font-size: 13px; min-height: 36px; padding: 6px 12px; }
+.bank-candidate[aria-pressed='true'] { background: #e6f4ff; border-color: #146db0; color: #145e99; font-weight: 700; }
+.bank-candidate:focus-visible { outline: 2px solid #146db0; outline-offset: 2px; }
+.bank-choice-error { color: #b42318; }
 .member-picker { border: 1px solid #dce2e9; border-radius: 12px; box-shadow: var(--control-shadow); margin: 0; min-width: 0; padding: 10px 13px; }
 .member-picker legend { color: #465568; font-size: 13px; font-weight: 700; padding: 0 5px; }
 .check-row { align-items: center; display: flex; gap: 10px; line-height: 1.5; min-height: 43px; padding: 4px 0; }

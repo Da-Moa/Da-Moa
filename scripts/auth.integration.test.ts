@@ -22,7 +22,7 @@ if (!testUrl || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(testUrl).h
 process.env.DATABASE_URL = testUrl
 process.env.AUTH_JWT_SECRET = 'isolated-auth-integration-test-secret-at-least-32-bytes'
 
-const bank = { bankName: '테스트 은행', accountNumber: '00-123 456', accountHolder: '테스트 사용자' }
+const bank = { bankName: '테스트 은행', accountNumber: '1234-03-12345678', accountHolder: '테스트 사용자' }
 const profile = { displayName: '검증 사용자', email: null, profileImageUrl: null }
 const accessOf = (session: AuthSession): AccessToken => {
   const access = readAccessToken(session.accessToken)
@@ -127,16 +127,16 @@ test('onboarding purpose, bank normalization, request replay, logout, and one-ti
   const app = await completeOnboarding(limitedAccess, bank)
   const access = accessOf(app)
   assert.equal(app.userId, limited.userId)
-  assert.equal((await getAccount(access)).accountNumber, '00123456')
+  assert.equal((await getAccount(access)).accountNumber, '12340312345678')
   await assert.rejects(getAccount(limitedAccess, true), codeIs('unauthorized'))
   await assert.rejects(completeOnboarding(limitedAccess, bank), codeIs('unauthorized'))
 
   const key = randomUUID()
-  const nextBank = { ...bank, accountNumber: '000987' }
+  const nextBank = { ...bank, accountNumber: '12340312345679' }
   const result = await updateBankAccount(access, key, nextBank)
   assert.deepEqual(await updateBankAccount(access, key, nextBank), result)
-  await assert.rejects(updateBankAccount(access, key, { ...nextBank, accountNumber: '123' }), codeIs('idempotency_conflict'))
-  assert.equal((await getAccount(access)).accountNumber, '000987')
+  await assert.rejects(updateBankAccount(access, key, { ...nextBank, accountNumber: '12340312345670' }), codeIs('idempotency_conflict'))
+  assert.equal((await getAccount(access)).accountNumber, '12340312345679')
   const mutation = await withReadTransaction(async client => client.query('SELECT response_metadata FROM mutation_requests WHERE actor_id=$1 AND request_key=$2', [app.userId, key]))
   assert.deepEqual(mutation.rows.map(row => row.response_metadata), [{ id: app.userId, bankVersion: 2 }])
 
@@ -170,9 +170,9 @@ test('withdrawal checks all unfinished history including excluded members; rejoi
       }
     }
   })
-  const replacedDuringSettlement = await updateBankAccount(participant.access, randomUUID(), { ...bank, accountNumber: '000777' })
+  const replacedDuringSettlement = await updateBankAccount(participant.access, randomUUID(), { ...bank, accountNumber: '12340312345670' })
   assert.equal(replacedDuringSettlement.bankVersion, 2, 'unfinished settlement blocks withdrawal but permits verified representative account replacement')
-  assert.equal((await getAccount(participant.access)).accountNumber, '000777')
+  assert.equal((await getAccount(participant.access)).accountNumber, '12340312345670')
   await assert.rejects(withdrawAccount(participant.access), error => {
     assert.ok(error instanceof AppError)
     assert.equal(error.code, 'unfinished_rounds')

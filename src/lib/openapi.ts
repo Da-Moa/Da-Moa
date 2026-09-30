@@ -13,11 +13,11 @@ const status: Schema = { type: 'string', enum: ['RECORDING', 'CONFIRMED', 'LOCKE
 const timestamp: Schema = { type: 'integer', format: 'int64', description: 'UTC epoch seconds' }
 const nullableTimestamp: Schema = { ...timestamp, nullable: true }
 const profileImage: Schema = { type: 'string', format: 'uri', nullable: true, description: '활성 회원의 최신 카카오 프로필 이미지 URL. 탈퇴했거나 이미지가 없으면 null.' }
-const bankFields = { bankName: { type: 'string', minLength: 1, maxLength: 100 }, accountNumber: { type: 'string', minLength: 1, maxLength: 100, description: '숫자·공백·하이픈 입력. 구분자를 제거한 숫자 1~64자와 선행 0을 보존합니다.' }, accountHolder: { type: 'string', minLength: 1, maxLength: 100 } }
+const bankFields = { bankName: { type: 'string', minLength: 1, maxLength: 100 }, accountNumber: { type: 'string', minLength: 1, maxLength: 100, description: '구분자 없는 원본 계좌번호. 선행 0을 보존합니다.' }, formattedAccountNumber: { type: 'string', nullable: true, description: '선택 은행의 규칙으로 저장한 표시용 계좌번호. 이전에 등록한 계좌는 null일 수 있습니다.' }, accountHolder: { type: 'string', minLength: 1, maxLength: 100 } }
 const bankVersion: Schema = { type: 'integer', minimum: 0 }
 const bankInputFields = {
   bankCode: { type: 'string', pattern: '^\\d{3}$', description: '지원 금융기관의 표준 코드' },
-  accountNumber: { type: 'string', maxLength: 64, description: '숫자·ASCII 공백·하이픈. 정규화 후 숫자 1~16자리, 선행 0 보존.' },
+  accountNumber: { type: 'string', maxLength: 64, description: '숫자·ASCII 공백·하이픈. 정규화 후 숫자 1~16자리이며 선택 은행의 알려진 규칙과 일치해야 합니다.' },
   accountHolder: { type: 'string', minLength: 1, maxLength: 100, description: 'NFC·앞뒤 공백 정리 후 1~40자. 계좌실명조회 응답과 정확히 비교합니다.' },
   expectedBankVersion: bankVersion,
 }
@@ -65,7 +65,7 @@ const domainSchemas = {
     details: { type: 'object', additionalProperties: true, description: '현재 버전, 제외 차단 관련 지출 또는 탈퇴를 막는 회차 등. 계좌·인증 토큰은 포함하지 않음.' },
   }, ['error', 'message']),
   BankAccount: { ...object(bankInputFields, bankInputRequired), additionalProperties: false },
-  CurrentBankAccount: object({ bankName: { type: 'string', nullable: true }, accountNumber: { type: 'string', nullable: true }, accountHolder: { type: 'string', nullable: true }, verifiedAt: { ...nullableTimestamp, description: 'null이면 계좌번호와 함께 “확인되지 않은 계좌입니다.”를 표시합니다.' } }, ['bankName', 'accountNumber', 'accountHolder', 'verifiedAt']),
+  CurrentBankAccount: object({ bankName: { type: 'string', nullable: true }, accountNumber: { type: 'string', nullable: true }, formattedAccountNumber: { type: 'string', nullable: true, description: '저장된 표시용 번호. 이전에 등록한 계좌는 null일 수 있습니다.' }, accountHolder: { type: 'string', nullable: true }, verifiedAt: { ...nullableTimestamp, description: 'null이면 계좌번호와 함께 “확인되지 않은 계좌입니다.”를 표시합니다.' } }, ['bankName', 'accountNumber', 'formattedAccountNumber', 'accountHolder', 'verifiedAt']),
   Me: object({ id, displayName: { type: 'string', nullable: true }, email: { type: 'string', nullable: true }, profileImageUrl: profileImage, purpose: { type: 'string', enum: ['app', 'onboarding'] }, deletedAt: nullableTimestamp, onboardingCompletedAt: nullableTimestamp, bankVersion, bankAccount: { type: 'object', nullable: true, properties: { ...bankFields, bankCode: { type: 'string', nullable: true }, verifiedAt: nullableTimestamp }, description: '본인의 현재 대표 계좌. verifiedAt=null이면 “확인되지 않은 계좌입니다.”를 표시합니다. 계좌는 직접 입력하며 자동 확인을 제공하지 않습니다.' } }, ['id', 'displayName', 'email', 'profileImageUrl', 'purpose', 'deletedAt', 'onboardingCompletedAt', 'bankAccount', 'bankVersion']),
   Group: object(groupFields, Object.keys(groupFields)),
   GroupListItem: object({ ...groupFields, memberCount: { type: 'integer', minimum: 1, maximum: MAX_GROUP_MEMBERS }, memberPreview: { ...array(object({ userId: id, displayName: string, profileImageUrl: profileImage }, ['userId', 'displayName', 'profileImageUrl'])), maxItems: 5 } }, [...Object.keys(groupFields), 'memberCount', 'memberPreview']),
@@ -177,6 +177,8 @@ export const openApiDocument = {
   paths: {
     ...documentedDomainPaths,
     '/api/health/live': { get: healthOperation('애플리케이션 응답 확인', ['application']) },
+    '/api/health/database': { get: healthOperation('PostgreSQL 응답 확인', ['database']) },
+    '/api/health/minio': { get: healthOperation('MinIO 저장소 읽기·쓰기 상태 확인', ['minio']) },
     '/api/health/dependencies': { get: healthOperation('PostgreSQL·MinIO 저장소 읽기·쓰기 상태 확인', ['database', 'minio']) },
     '/api/health': { get: healthOperation('전체 상태 확인', ['application', 'database', 'minio']) },
     '/api/auth/kakao': {

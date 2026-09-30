@@ -10,6 +10,7 @@ export type Account = {
   profileImageUrl: string | null
   bankName: string | null
   accountNumber: string | null
+  formattedAccountNumber: string | null
   accountHolder: string | null
   bankCode: string | null
   bankVerifiedAt: number | null
@@ -23,7 +24,7 @@ export async function requireAccount(client: Database, access: AccessToken | nul
   if (!access) throw new AppError(401, 'unauthorized', '로그인이 필요합니다')
   const { rows } = await client.query(`
     SELECT u.id, u.display_name, u.email, u.profile_image_url,
-           u.bank_name, u.account_number, u.account_holder, u.bank_code, u.bank_verified_at, u.bank_version,
+           u.bank_name, u.account_number, u.account_number_formatted, u.account_holder, u.bank_code, u.bank_verified_at, u.bank_version,
            u.deleted_at, u.onboarding_completed_at, s.purpose
     FROM refresh_sessions s JOIN users u ON u.id = s.user_id
     WHERE s.id = $1 AND s.user_id = $2 AND s.revoked_at IS NULL AND s.expires_at > $3
@@ -42,6 +43,7 @@ export async function requireAccount(client: Database, access: AccessToken | nul
     profileImageUrl: row.profile_image_url,
     bankName: row.bank_name,
     accountNumber: row.account_number,
+    formattedAccountNumber: row.account_number_formatted,
     accountHolder: row.account_holder,
     bankCode: row.bank_code,
     bankVerifiedAt: row.bank_verified_at === null ? null : Number(row.bank_verified_at),
