@@ -380,7 +380,8 @@ select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3
 .bank-choice > .help-text, .bank-candidates > .help-text { margin: 0; }
 .bank-candidates { display: grid; gap: 8px; }
 .bank-candidate-list { display: flex; flex-wrap: wrap; gap: 8px; }
-.bank-candidate { background: #f2f7fc; border: 1px solid #d8e7f5; border-radius: 999px; color: #245579; cursor: pointer; font: inherit; font-size: 13px; min-height: 36px; padding: 6px 12px; }
+.bank-candidate { align-items: center; background: #f2f7fc; border: 1px solid #d8e7f5; border-radius: 999px; color: #245579; cursor: pointer; display: inline-flex; font: inherit; font-size: 13px; gap: 6px; min-height: 36px; padding: 6px 12px; }
+.bank-candidate img { flex-shrink: 0; height: 20px; object-fit: contain; width: 20px; }
 .bank-candidate[aria-pressed='true'] { background: #e6f4ff; border-color: #146db0; color: #145e99; font-weight: 700; }
 .bank-candidate:focus-visible { outline: 2px solid #146db0; outline-offset: 2px; }
 .bank-choice-error { color: #b42318; }
