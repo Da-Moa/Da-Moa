@@ -8,7 +8,7 @@ import { AnimatedMoney } from '../animated-money'
 import { ApiError, apiRequest } from '../../lib/api-client'
 import type { ExclusionCheck, Expense, MutationResult, Receipt, RoundDetail } from '../../lib/domain-types'
 import { expenseInputMaximum, formatAmountInput, formatMoney, parseAmount } from '../../lib/money'
-import { ErrorNotice, Loading, ParticipantAvatar, StatusBadge, useAccount, useAction, useResource } from './ui'
+import { ErrorNotice, Loading, ParticipantAvatar, SheetSelect, StatusBadge, useAccount, useAction, useResource } from './ui'
 
 const expenseDayFormatter = new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' })
 function expenseDay(createdAt: number) {
@@ -23,6 +23,7 @@ function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: Rou
   const expectedVersion = useRef(round.version)
   const [mode, setMode] = useState<Expense['splitMode']>(expense?.splitMode ?? 'ALL')
   const [participants, setParticipants] = useState(expense?.participantIds ?? [])
+  const [payerId, setPayerId] = useState(expense?.payerId ?? account.id)
   const maximumMinor = expenseInputMaximum(round.totalMinor, expense?.amountMinor, round.currency)
   function minorToInput(minor: string) {
     const amount = minor && round.currency === 'USD' ? `${minor.padStart(3, '0').slice(0, -2)}.${minor.padStart(3, '0').slice(-2)}` : minor
@@ -81,18 +82,17 @@ function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: Rou
   }
   return <form className="domain-card expense-form stack" id="expense-editor" onSubmit={event => { event.preventDefault(); void save(event.currentTarget) }}>
     <h2>{expense ? '지출 수정' : '지출 기록'}</h2>
-    <label className="field"><span>지출 내용</span><input autoFocus defaultValue={expense?.description ?? ''} name="description" maxLength={200} placeholder="예: 저녁 식사" required /></label>
-    <label className="field"><span>총 금액 ({round.currency})</span><input value={amountInput} onChange={event => changeAmount(event.currentTarget)} name="amount" inputMode={round.currency === 'USD' ? 'decimal' : 'numeric'} type="text" pattern={round.currency === 'USD' ? '[0-9]{1,3}(,[0-9]{3})*([.][0-9]{1,2})?' : '[0-9]{1,3}(,[0-9]{3})*'} placeholder={round.currency === 'USD' ? '0.00' : '0'} required /></label>
-    <label className="field"><span>실제로 결제한 사람</span><select defaultValue={expense?.payerId ?? account.id} name="payerId" required>{round.members.filter(member => !member.excludedAt || member.userId === expense?.payerId).map(member => <option key={member.userId} value={member.userId}>{member.displayName}{member.excludedAt ? ' (제외됨 · 기존 결제 유지)' : ''}</option>)}</select></label>
+    <label className="field line-field"><span>지출 내용</span><input autoFocus defaultValue={expense?.description ?? ''} name="description" maxLength={200} placeholder=" " required /></label>
+    <label className="field line-field"><span>총 금액 ({round.currency})</span><input value={amountInput} onChange={event => changeAmount(event.currentTarget)} name="amount" inputMode={round.currency === 'USD' ? 'decimal' : 'numeric'} type="text" pattern={round.currency === 'USD' ? '[0-9]{1,3}(,[0-9]{3})*([.][0-9]{1,2})?' : '[0-9]{1,3}(,[0-9]{3})*'} placeholder=" " required /></label>
+    <SheetSelect disabled={action.busy} label="실제로 결제한 사람" name="payerId" onChange={setPayerId} options={round.members.filter(member => !member.excludedAt || member.userId === expense?.payerId).map(member => ({ value: member.userId, label: `${member.displayName}${member.excludedAt ? ' (제외됨 · 기존 결제 유지)' : ''}`, icon: <ParticipantAvatar profileImageUrl={member.profileImageUrl} /> }))} sheetClassName="currency-sheet" showSelectedIcon title="결제한 사람을 선택해 주세요" value={payerId} />
     <fieldset className="member-picker"><legend>부담할 사람</legend>
       <label className="check-row"><input type="radio" name="splitMode" value="ALL" checked={mode === 'ALL'} onChange={() => setMode('ALL')} /><span>전체 참여자 균등 분배</span></label>
       <label className="check-row"><input type="radio" name="splitMode" value="SELECTED" checked={mode === 'SELECTED'} onChange={() => setMode('SELECTED')} /><span>특정 사용자 균등 분배</span></label>
       <label className="check-row"><input type="radio" name="splitMode" value="CUSTOM" checked={mode === 'CUSTOM'} onChange={() => setMode('CUSTOM')} /><span>개별 항목 분배</span></label>
       {mode !== 'ALL' && <div className="selected-members">{round.members.filter(member => !member.excludedAt).map(member => <div className={mode === 'CUSTOM' ? 'custom-share-row' : undefined} key={member.userId}>
         <label className="check-row"><input checked={participants.includes(member.userId)} onChange={event => setParticipants(current => event.target.checked ? [...current, member.userId] : current.filter(id => id !== member.userId))} name="participantIds" type="checkbox" value={member.userId} /><span>{member.displayName}</span></label>
-        {mode === 'CUSTOM' && participants.includes(member.userId) && <label className="field"><span>부담금 ({round.currency})</span><input aria-label={`${member.displayName} 부담금 (${round.currency})`} value={customAmounts[member.userId] ?? ''} onChange={event => changeAmount(event.currentTarget, member.userId)} name={`customAmount:${member.userId}`} inputMode={round.currency === 'USD' ? 'decimal' : 'numeric'} type="text" pattern={round.currency === 'USD' ? '[0-9]{1,3}(,[0-9]{3})*([.][0-9]{1,2})?' : '[0-9]{1,3}(,[0-9]{3})*'} placeholder={round.currency === 'USD' ? '0.00' : '0'} required /></label>}
+        {mode === 'CUSTOM' && participants.includes(member.userId) && <label className="field line-field"><span>부담금 ({round.currency})</span><input aria-label={`${member.displayName} 부담금 (${round.currency})`} value={customAmounts[member.userId] ?? ''} onChange={event => changeAmount(event.currentTarget, member.userId)} name={`customAmount:${member.userId}`} inputMode={round.currency === 'USD' ? 'decimal' : 'numeric'} type="text" pattern={round.currency === 'USD' ? '[0-9]{1,3}(,[0-9]{3})*([.][0-9]{1,2})?' : '[0-9]{1,3}(,[0-9]{3})*'} placeholder=" " required /></label>}
       </div>)}</div>}
-      {mode === 'CUSTOM' && <p className="help-text">부담할 사람을 선택하고 각자의 부담금을 입력해 주세요. 부담금 합계는 총 금액과 같아야 해요.</p>}
     </fieldset>
     {round.status !== 'RECORDING' && <p className="notice notice-warning">다른 변경으로 기록 단계가 끝났어요. 입력을 확인한 뒤 창을 닫고 최신 상태를 확인해 주세요.</p>}
     <ErrorNotice error={action.error} />
@@ -260,7 +260,6 @@ export default function RoundClient({ roundId }: { roundId: string }) {
     <ErrorNotice error={resource.error} retry={() => void refresh()} />
     {!data ? resource.loading && <Loading /> : <div className="stack">
       <section className="tab-heading compact"><p>{data.groupName}</p><h1>{data.name}</h1><div className="heading-status round-heading-status"><StatusBadge status={data.status} /><button className="text-button" disabled={resource.loading} onClick={() => void refresh()} type="button">새로고침</button></div></section>
-      {data.status === 'CONFIRMED' && <p className="notice">지출을 확정했어요. 수정하려면 회차 생성자가 기록 단계를 다시 열어 주세요. 전송 후에는 수정할 수 없어요.</p>}
       {(data.status === 'LOCKED' || data.status === 'COMPLETED') && <div className="notice"><p>{data.status === 'COMPLETED' ? '종료된 회차예요. 모든 정산 기록은 읽기 전용이에요.' : data.finalizedAt ? '기록이 잠겼어요. 본인의 최종 정산 안내를 확인해 주세요.' : '기록이 잠겼어요. 회차 생성자가 나머지를 한 번 추첨하면 최종 금액을 확인할 수 있어요.'}</p><Link className="primary-button" href={`/settlements/${roundId}`} prefetch={false}>내 정산 안내 보기</Link></div>}
       <section className="domain-card"><div className="row-between"><div><span>전체 지출</span><p className="help-text">{data.memberCount}명 참여 · {data.currency}</p></div><AnimatedMoney amountMinor={data.totalMinor} className="large-money round-total-money" currency={data.currency} key={`${data.id}:total`} /></div></section>
       <section className="domain-card stack participant-section"><div><h2>회차 참여자</h2></div>
@@ -279,7 +278,6 @@ export default function RoundClient({ roundId }: { roundId: string }) {
               <span className={`transfer-person${transfer.receiverId === account.id ? ' transfer-me' : ''}`}><ParticipantAvatar profileImageUrl={profileOf(transfer.receiverId)} /><small>받는 사람</small><strong>{receiver}{transfer.receiverId === account.id ? ' (나)' : ''}</strong></span>
             </li>
           })}</ul>}
-          {!finalized && hasExpenses && <p className="help-text" role="status">지금까지 기록한 지출 내역을 기반으로 한 예상치예요</p>}
         </div>
       </section>
       <dialog aria-labelledby="exclusion-dialog-heading" className="account-dialog" id="participant-exclusion-dialog" ref={exclusionDialog} onCancel={() => setCheck(null)} onClick={event => { if (event.target === event.currentTarget) { event.currentTarget.close(); setCheck(null) } }}>

@@ -1,4 +1,4 @@
-// Settlement UI regression only: legacy account fixtures in an isolated local DB.
+// UI regression in an isolated local DB; --forms-only checks custom input and bank controls.
 // Run with a dev server using that same test DB and Chrome --remote-debugging-port=9223.
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
@@ -9,6 +9,7 @@ import sharp from 'sharp'
 import { signInKakao } from '../src/lib/auth-store.ts'
 import { ACCESS_TOKEN_COOKIE_NAME, REFRESH_TOKEN_COOKIE_NAME } from '../src/lib/auth.ts'
 import { withWriteTransaction } from '../src/lib/db.ts'
+import { BANKS, formatAccountNumber } from '../src/lib/bank-account.ts'
 
 const database = process.env.TEST_DATABASE_URL
 assert.ok(database && ['localhost', '127.0.0.1', '[::1]'].includes(new URL(database).hostname), 'TEST_DATABASE_URL must point to an isolated local PostgreSQL database')
@@ -52,8 +53,8 @@ ws.addEventListener('message', event => {
     } else void cdp('Fetch.continueResponse', { requestId: paused.requestId })
   }
 })
-async function evaluate(expression) {
-  const result = await cdp('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })
+async function evaluate(expression, userGesture = false) {
+  const result = await cdp('Runtime.evaluate', { expression, userGesture, awaitPromise: true, returnByValue: true })
     .catch(error => { throw new Error(`${error.message}: ${expression.slice(0, 180)}`) })
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text)
   return result.result.value
@@ -74,7 +75,15 @@ async function click(text) {
   await evaluate(`Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === ${JSON.stringify(text)} && !button.disabled && button.getClientRects().length > 0).click()`)
 }
 async function fill(selector, value) {
-  await waitFor(`Array.from(document.querySelectorAll(${JSON.stringify(selector)})).some(element => ['INPUT', 'SELECT', 'TEXTAREA'].includes(element.tagName) && element.getClientRects().length > 0)`, `input ${selector}`)
+  if (selector === '[name=bankCode]' || selector === '[name=currency]' || selector === '[name=payerId]') {
+    await waitFor("Boolean(document.querySelector('.bank-select-trigger') && !document.querySelector('.bank-select-trigger').disabled)")
+    await evaluate("document.querySelector('.bank-select-trigger').click()")
+    await waitFor("Boolean(document.querySelector('.bank-sheet[open]'))")
+    await evaluate(`document.querySelector('[data-value="${value}"]').click()`)
+    await waitFor("!document.querySelector('.bank-sheet[open]')")
+    return
+  }
+  await waitFor(`Array.from(document.querySelectorAll(${JSON.stringify(selector)})).some(element => ['INPUT', 'SELECT', 'TEXTAREA'].includes(element.tagName) && !element.disabled && element.getClientRects().length > 0)`, `input ${selector}`)
   await evaluate(`(() => { const element = Array.from(document.querySelectorAll(${JSON.stringify(selector)})).find(element => ['INPUT', 'SELECT', 'TEXTAREA'].includes(element.tagName) && element.getClientRects().length > 0); if (!element) throw new Error('Input missing'); const setter = Object.getOwnPropertyDescriptor(element.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value').set; setter.call(element, ${JSON.stringify(value)}); element.dispatchEvent(new Event('input', {bubbles:true})); element.dispatchEvent(new Event('change', {bubbles:true})); })()`)
 }
 async function setSession(session) {
@@ -92,9 +101,9 @@ async function api(session, path, method = 'GET', body) {
 }
 const runId = randomUUID()
 const settlementAmountMinor = 13593n
-async function user(label, number, onboarding = false) {
+async function user(label, number, onboarding = false, profileImageUrl = null) {
   const subject = `browser-${runId}-${label}`
-  const profile = { displayName: `검증 ${label}`, email: null, profileImageUrl: null }
+  const profile = { displayName: `검증 ${label}`, email: null, profileImageUrl }
   const limited = await signInKakao(subject, profile)
   if (onboarding) return { subject, session: limited }
   // The TEST_DATABASE_URL guard above confines this legacy fixture to the isolated test database.
@@ -111,33 +120,234 @@ async function user(label, number, onboarding = false) {
 }
 
 try {
-  await cdp('Page.enable'); await cdp('Runtime.enable'); await cdp('Network.enable')
+  await cdp('Page.enable'); await cdp('Page.bringToFront'); await cdp('Runtime.enable'); await cdp('Network.enable')
   await cdp('Fetch.enable', { patterns: [{ urlPattern: `${origin}/api/rounds/*/expenses`, requestStage: 'Response' }] })
   await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
   await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
   const newcomer = await user('신규', '', true)
-  const owner = await user('A', '001111')
-  const payer = await user('B', '002222')
-  const participant = await user('C', '003333')
-  const extraD = await user('D', '004444')
-  const extraE = await user('E', '005555')
   await setSession(newcomer.session)
   await navigate('/onboarding', '검증 신규님, 반가워요')
-  assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.onboarding-page button')).map(button => button.textContent.trim())"), ['저장하기', '다른 카카오 계정으로 로그인', '뒤로가기'])
+  assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.onboarding-page button')).filter(button => button.getClientRects().length && !button.classList.contains('bank-select-trigger')).map(button => button.textContent.trim())"), ['저장하기', '다른 카카오 계정으로 로그인', '뒤로가기'])
   await waitFor("Boolean(document.querySelector('[name=bankCode]'))")
   assert.equal(await evaluate("document.querySelectorAll('[name=bankCode], [name=accountNumber], [name=accountHolder]').length"), 3)
   assert.equal(await evaluate("Boolean(document.querySelector('[name=birthDate]'))"), false)
   const newcomerAccount = await api(newcomer.session, '/api/me')
   assert.equal(newcomerAccount.purpose, 'onboarding')
   assert.equal(newcomerAccount.bankAccount, null)
-  await fill('[name=bankCode]', '004')
+  assert.equal(await evaluate("document.querySelector('.bank-select-trigger').disabled"), true)
   await fill('[name=accountNumber]', '0001234567')
   await fill('[name=accountHolder]', '신규')
+  const openingPositions = await evaluate("(() => { document.querySelector('form').requestSubmit(); const sheet = document.querySelector('.bank-sheet'); const animation = sheet.getAnimations()[0]; animation.pause(); animation.currentTime = 0; const start = sheet.getBoundingClientRect().top; animation.finish(); return [start, sheet.getBoundingClientRect().top]; })()", true)
+  assert.ok(openingPositions[0] > openingPositions[1], 'bank sheet rises from below the viewport')
+  await waitFor("Boolean(document.querySelector('.bank-sheet[open]'))")
+  assert.equal(await evaluate("document.querySelectorAll('.bank-tile').length"), BANKS.length)
+  await waitFor("Array.from(document.querySelectorAll('.bank-tile img')).length > 0 && Array.from(document.querySelectorAll('.bank-tile img')).every(img => img.complete && img.naturalWidth > 0 && new URL(img.src).pathname.startsWith('/banks/'))", 'all bank logos loaded locally')
+  assert.equal(await evaluate("document.querySelector('.bank-sheet').contains(document.activeElement)"), true)
+  await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 })
+  await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 })
+  assert.deepEqual(await evaluate("(() => { const focused = document.activeElement; const style = getComputedStyle(focused); return [focused.matches('.bank-tile:focus-visible'), style.outlineStyle, style.borderColor]; })()"), [true, 'none', 'rgb(20, 109, 176)'])
+  await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  const closingPositions = await evaluate("(() => { const sheet = document.querySelector('.bank-sheet'); const animation = sheet.getAnimations().find(animation => !(animation instanceof CSSAnimation)); animation.pause(); animation.currentTime = 0; const remainsOpen = sheet.open; const start = sheet.getBoundingClientRect().top; animation.currentTime = animation.effect.getTiming().duration - 1; const end = sheet.getBoundingClientRect().top; animation.play(); return [remainsOpen, start, end]; })()")
+  assert.equal(closingPositions[0], true, 'dialog remains modal during its closing animation')
+  assert.ok(closingPositions[2] > closingPositions[1], 'bank sheet descends before closing')
+  await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await waitFor("!document.querySelector('.bank-sheet[open]')")
+  await waitFor("document.activeElement === document.querySelector('.bank-select-trigger')", 'bank trigger focus restored')
+  await fill('[name=bankCode]', '004')
+  assert.equal(await evaluate("document.querySelector('.bank-select-trigger').textContent"), 'KB국민은행')
+  assert.equal(await evaluate("new FormData(document.querySelector('form')).get('bankCode')"), '004')
   await evaluate("document.querySelector('form').requestSubmit()")
   await waitFor("location.pathname.startsWith('/home')")
   const savedAccount = await evaluate("fetch('/api/me').then(response => response.json()).then(result => ({ purpose: result.data.purpose, verifiedAt: result.data.bankAccount.verifiedAt }))")
   assert.deepEqual(savedAccount, { purpose: 'app', verifiedAt: null })
   console.log('PASS onboarding saves a manually entered account')
+  if (process.argv.includes('--forms-only')) {
+    await navigate('/home/groups', '새 모임 만들기')
+    await fill('[name=name]', `입력 검증 ${runId}`)
+    assert.equal(await evaluate("document.querySelector('[name=name]').closest('.line-field') !== null"), true)
+    assert.deepEqual(await evaluate("(() => { const s = getComputedStyle(document.querySelector('[name=name]')); return [s.borderTopWidth, s.borderBottomWidth, s.borderRadius, s.boxShadow] })()"), ['0px', '2px', '0px', 'none'])
+    await click('모임 만들기')
+    await waitFor("location.pathname.startsWith('/home/groups/')")
+    await waitFor(hasText('새 회차 기록 시작'))
+    const customGroupId = (await evaluate('location.pathname')).split('/').at(-1)
+    assert.equal(await evaluate("document.querySelector('[name=name]').closest('.line-field') !== null"), true)
+    assert.equal(await evaluate("document.querySelector('button[type=submit]').disabled"), true)
+    await click('초대 링크 만들기')
+    await waitFor("Boolean(document.querySelector('input[aria-label=\"공유 링크\"]')?.value)")
+    assert.equal(await evaluate(hasText('링크를 받은 사람이 로그인 후 초대를 수락하면 모임에 참여해요.')), false)
+    assert.equal(await evaluate("document.querySelector('.copy-link button') !== null"), false)
+    const customInvitePath = new URL(await evaluate("document.querySelector('input[aria-label=\"공유 링크\"]').value")).pathname
+    const roundPartner = await user('회차 멤버', '00112233', false, `${origin}/logo/da-moa-128px.png`)
+    await api(roundPartner.session, `/api${customInvitePath}/accept`, 'POST', {})
+    await waitFor(hasText('현재 멤버 2명'))
+    await mkdir(artifactDir, { recursive: true })
+    for (const width of [320, 390, 1024]) {
+      await cdp('Emulation.setDeviceMetricsOverride', { width, height: 844, deviceScaleFactor: 1, mobile: width < 480 })
+      await evaluate("document.querySelector('.bank-select-trigger').click()")
+      await waitFor("Boolean(document.querySelector('.bank-sheet[open]'))")
+      await evaluate("Promise.all(document.querySelector('.bank-sheet').getAnimations().map(animation => animation.finished))")
+      assert.equal(await evaluate("document.querySelectorAll('.bank-tile').length"), 3)
+      await waitFor("Array.from(document.querySelectorAll('.currency-sheet img')).length === 3 && Array.from(document.querySelectorAll('.currency-sheet img')).every(img => img.complete && img.naturalWidth > 0)")
+      assert.deepEqual(await evaluate("[getComputedStyle(document.querySelector('.currency-sheet')).backgroundColor, getComputedStyle(document.querySelector('.currency-sheet .bank-grid')).flexDirection]"), ['rgb(255, 255, 255)', 'column'])
+      assert.equal(await evaluate("document.querySelectorAll('.bank-tile svg').length"), 0)
+      assert.equal(await evaluate("getComputedStyle(document.querySelector('.bank-tile[aria-pressed=true]')).backgroundColor"), 'rgb(230, 244, 255)')
+      await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 })
+      await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 })
+      assert.deepEqual(await evaluate("(() => { const selected = document.querySelector('.bank-tile[aria-pressed=true]'); selected.focus(); const style = getComputedStyle(selected); return [selected.matches(':focus-visible'), style.outlineStyle, style.backgroundColor, style.borderColor]; })()"), [true, 'none', 'rgb(230, 244, 255)', 'rgb(20, 109, 176)'])
+      assert.equal(await evaluate("document.documentElement.scrollWidth <= innerWidth"), true)
+      const shot = await cdp('Page.captureScreenshot', { format: 'png' })
+      await writeFile(join(artifactDir, `currency-picker-${width}.png`), Buffer.from(shot.data, 'base64'))
+      await evaluate("document.querySelector('.bank-sheet-header button').click()")
+      await waitFor("!document.querySelector('.bank-sheet[open]')")
+    }
+    for (const currency of ['JPY', 'KRW', 'USD']) {
+      await fill('[name=currency]', currency)
+      assert.equal(await evaluate("new FormData(document.querySelector('form')).get('currency')"), currency)
+    }
+    await evaluate("document.querySelector('form').requestSubmit()")
+    assert.equal(await evaluate('location.pathname'), `/home/groups/${customGroupId}`)
+    await fill('[name=name]', '통화 입력 검증')
+    await click('이 멤버로 기록 시작')
+    await waitFor("location.pathname.startsWith('/home/rounds/')")
+    const customRoundId = (await evaluate('location.pathname')).split('/').at(-1)
+    const customRound = await evaluate(`fetch('/api/rounds/${customRoundId}').then(response => response.json()).then(result => result.data)`)
+    assert.equal(customRound.name, '통화 입력 검증')
+    assert.equal(customRound.currency, 'USD')
+    await click('지출 추가')
+    await fill('[name=description]', '지출 입력 검증')
+    await fill('[name=amount]', '10.05')
+    await evaluate("document.querySelector('input[type=radio][value=CUSTOM]').click()")
+    await evaluate("document.querySelectorAll('#expense-editor input[name=participantIds]').forEach(input => input.click())")
+    await fill(`[name="customAmount:${newcomer.session.userId}"]`, '4.01')
+    await fill(`[name="customAmount:${roundPartner.session.userId}"]`, '6.03')
+    assert.equal(await evaluate("document.querySelectorAll('#expense-editor .line-field input').length"), 4)
+    assert.equal(await evaluate("Array.from(document.querySelectorAll('#expense-editor .line-field input')).every(input => { const style = getComputedStyle(input); return style.borderTopWidth === '0px' && style.borderBottomWidth === '2px' && style.borderRadius === '0px' && style.boxShadow === 'none'; })"), true)
+    assert.equal(await evaluate(hasText('부담할 사람을 선택하고 각자의 부담금을 입력해 주세요. 부담금 합계는 총 금액과 같아야 해요.')), false)
+    for (const width of [320, 390, 1024]) {
+      await cdp('Emulation.setDeviceMetricsOverride', { width, height: 844, deviceScaleFactor: 1, mobile: width < 480 })
+      await evaluate("document.querySelector('.bank-select-trigger').click()")
+      await waitFor("Boolean(document.querySelector('.bank-sheet[open]'))")
+      await evaluate("Promise.all(document.querySelector('.bank-sheet').getAnimations().map(animation => animation.finished))")
+      assert.equal(await evaluate("document.querySelectorAll('.bank-tile .participant-avatar').length"), 2)
+      await waitFor(`Boolean(document.querySelector('[data-value="${roundPartner.session.userId}"] img')?.naturalWidth)`)
+      assert.equal(await evaluate(`document.querySelector('[data-value="${roundPartner.session.userId}"] img').src`), `${origin}/logo/da-moa-128px.png`)
+      assert.equal(await evaluate("document.documentElement.scrollWidth <= innerWidth && document.querySelector('.bank-sheet').scrollWidth <= document.querySelector('.bank-sheet').clientWidth"), true)
+      const shot = await cdp('Page.captureScreenshot', { format: 'png' })
+      await writeFile(join(artifactDir, `payer-picker-${width}.png`), Buffer.from(shot.data, 'base64'))
+      await evaluate("document.querySelector('.bank-sheet-header button').click()")
+      await waitFor("!document.querySelector('.bank-sheet[open]')")
+    }
+    await fill('[name=payerId]', roundPartner.session.userId)
+    await waitFor("Boolean(document.querySelector('.bank-select-value img')?.naturalWidth)")
+    assert.equal(await evaluate("document.querySelector('.bank-select-value img').src"), `${origin}/logo/da-moa-128px.png`)
+    await click('지출 저장')
+    await waitFor(hasText('부담금 합계가 총 금액과 일치해야 해요'))
+    await fill(`[name="customAmount:${roundPartner.session.userId}"]`, '6.04')
+    await click('지출 저장')
+    await waitFor("!document.querySelector('#expense-editor')")
+    const savedExpense = await evaluate(`fetch('/api/rounds/${customRoundId}').then(response => response.json()).then(result => result.data.expenses[0])`)
+    assert.equal(savedExpense.description, '지출 입력 검증')
+    assert.equal(savedExpense.amountMinor, '1005')
+    assert.equal(savedExpense.payerId, roundPartner.session.userId)
+    assert.equal(savedExpense.splitMode, 'CUSTOM')
+    assert.deepEqual(savedExpense.shares.map(share => share.assignedAmountMinor).sort(), ['401', '604'])
+    assert.equal(await evaluate(hasText('지금까지 기록한 지출 내역을 기반으로 한 예상치예요')), false)
+    await click('수정')
+    await waitFor("Boolean(document.querySelector('#expense-editor [name=payerId]'))")
+    assert.equal(await evaluate("document.querySelector('[name=payerId]').value"), roundPartner.session.userId)
+    assert.equal(await evaluate("document.querySelector('[name=amount]').value"), '10.05')
+    await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
+    await evaluate("document.querySelector('#expense-editor').scrollIntoView({ block: 'start' })")
+    const expenseShot = await cdp('Page.captureScreenshot', { format: 'png' })
+    await writeFile(join(artifactDir, 'expense-inputs.png'), Buffer.from(expenseShot.data, 'base64'))
+    await click('닫기')
+    await click('정산 확정')
+    await click('전송 안내 확인')
+    await waitFor("Boolean(document.querySelector('.copy-link input')?.value)")
+    assert.equal(await evaluate("document.querySelector('.copy-link input').value"), `${origin}/settlements/${customRoundId}`)
+    assert.equal(await evaluate("Boolean(document.querySelector('.copy-link button'))"), false)
+    assert.equal(await evaluate(hasText('본인의 최종 안내예요. 실제 송금은 직접 진행해 주세요.')), false)
+    assert.equal(await evaluate(hasText('링크를 통해 접속하면 자신이 보낼 금액과 계좌번호, 자신이 받을 금액을 볼 수 있어요.')), false)
+    assert.equal(await evaluate("(() => { const input = document.querySelector('.copy-link input'); input.focus(); return input.selectionStart === 0 && input.selectionEnd === input.value.length; })()"), true)
+    const secondReceiver = await user('두 번째 수취인', '00112244')
+    await api(secondReceiver.session, `/api${customInvitePath}/accept`, 'POST', {})
+    const senderId = newcomer.session.userId
+    const pendingRound = await api(roundPartner.session, `/api/groups/${customGroupId}/rounds`, 'POST', { name: '남은 송금 금액 검증', currency: 'USD', participantIds: [senderId, roundPartner.session.userId, secondReceiver.session.userId] })
+    const pendingRoundId = pendingRound.roundId
+    let pendingVersion = pendingRound.version
+    for (const [receiver, amount] of [[roundPartner, '6.00'], [secondReceiver, '4.00']]) {
+      const result = await api(roundPartner.session, `/api/rounds/${pendingRoundId}/expenses`, 'POST', { description: '수취인별 지출', amount, payerId: receiver.session.userId, splitMode: 'CUSTOM', customShares: [{ userId: senderId, amount }], expectedVersion: pendingVersion })
+      pendingVersion = result.version
+    }
+    for (const command of ['confirm', 'send']) {
+      const result = await api(roundPartner.session, `/api/rounds/${pendingRoundId}/${command}`, 'POST', { expectedVersion: pendingVersion })
+      pendingVersion = result.version
+    }
+    await navigate(`/settlements/${pendingRoundId}`, '내가 보낼 금액')
+    const sendingAmount = "document.querySelector('.settlement-animated-money')?.getAttribute('aria-label')?.replace(/\\D/g, '')"
+    await waitFor(`${sendingAmount} === '1000'`)
+    // Receiver updates must change the sender's open screen through realtime invalidation.
+    await api(roundPartner.session, `/api/rounds/${pendingRoundId}/settlement-check`, 'POST', { checked: true, senderId, expectedVersion: pendingVersion })
+    await waitFor(`${sendingAmount} === '400'`, 'one recipient confirmation subtracts only that transfer')
+    assert.equal(await evaluate("document.querySelectorAll('section.stack > article.domain-card').length"), 1)
+    await api(roundPartner.session, `/api/rounds/${pendingRoundId}/settlement-check`, 'POST', { checked: false, senderId, expectedVersion: pendingVersion })
+    await waitFor(`${sendingAmount} === '1000'`, 'confirmation reversal restores the sending amount')
+    assert.equal(await evaluate("document.querySelectorAll('section.stack > article.domain-card').length"), 2)
+    await api(roundPartner.session, `/api/rounds/${pendingRoundId}/settlement-check`, 'POST', { checked: true, expectedVersion: pendingVersion })
+    await api(secondReceiver.session, `/api/rounds/${pendingRoundId}/settlement-check`, 'POST', { checked: true, expectedVersion: pendingVersion })
+    await waitFor(`${sendingAmount} === '000'`, 'all confirmations leave zero to send')
+    assert.equal(await evaluate("document.querySelectorAll('section.stack > article.domain-card').length"), 0)
+    await navigate(`/settlements/${pendingRoundId}`, '내가 보낼 금액')
+    await waitFor(`${sendingAmount} === '000'`, 'confirmed amount remains zero after reload')
+    assert.equal(await evaluate(`fetch('/api/rounds/${pendingRoundId}/settlement').then(response => response.json()).then(result => result.data.balanceMinor)`), '1000')
+    await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
+    await navigate('/home/account', '내 정보')
+    await click('계좌 수정하기')
+    assert.equal(await evaluate("document.querySelector('[name=accountNumber]').value"), formatAccountNumber('004', '0001234567'))
+    await fill('[name=accountNumber]', '3333123456789')
+    await fill('[name=bankCode]', '090')
+    assert.equal(await evaluate("document.querySelector('[name=accountNumber]').value"), '3333-12-3456789')
+    await fill('[name=accountHolder]', '수정 검증')
+    await mkdir(artifactDir, { recursive: true })
+    for (const width of [320, 390, 1024]) {
+      await cdp('Emulation.setDeviceMetricsOverride', { width, height: 844, deviceScaleFactor: 1, mobile: width < 480 })
+      assert.equal(await evaluate("document.documentElement.scrollWidth <= innerWidth"), true)
+      await evaluate("document.querySelector('.bank-select-trigger').click()")
+      await waitFor("Boolean(document.querySelector('.bank-sheet[open]'))")
+      await evaluate("Promise.all(document.querySelector('.bank-sheet').getAnimations().map(animation => animation.finished))")
+      assert.equal(await evaluate("getComputedStyle(document.querySelector('.bank-grid')).gridTemplateColumns.split(' ').length"), 3)
+      assert.equal(await evaluate("document.querySelector('.bank-sheet').scrollWidth <= document.querySelector('.bank-sheet').clientWidth"), true)
+      assert.equal(await evaluate("document.querySelector('.bank-sheet-header').getBoundingClientRect().top >= document.querySelector('.bank-sheet').getBoundingClientRect().top"), true)
+      const shot = await cdp('Page.captureScreenshot', { format: 'png' })
+      await writeFile(join(artifactDir, `bank-picker-${width}.png`), Buffer.from(shot.data, 'base64'))
+      await evaluate("document.querySelector('.bank-sheet-header button').click()")
+      await waitFor("!document.querySelector('.bank-sheet[open]')")
+    }
+    await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
+    assert.deepEqual(await evaluate("(() => { document.querySelector('.bank-select-trigger').click(); const sheet = document.querySelector('.bank-sheet'); const count = sheet.getAnimations().length; document.querySelector('.bank-sheet-header button').click(); return [count, sheet.open]; })()"), [0, false])
+    await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
+    await click('계좌 저장')
+    await waitFor(hasText('계좌를 저장했어요.'))
+    await click('계좌 수정하기')
+    assert.deepEqual(await evaluate("['bankCode', 'accountNumber', 'accountHolder'].map(name => document.querySelector(`[name=${name}]`).value)"), ['090', '3333-12-3456789', '수정 검증'])
+    const shot = await cdp('Page.captureScreenshot', { format: 'png' })
+    await writeFile(join(artifactDir, 'form-inputs.png'), Buffer.from(shot.data, 'base64'))
+    for (const [path, heading] of [['/home/groups', '새 모임 만들기'], ['/home/history', '정산 기록']]) {
+      await navigate(path, heading)
+      await waitFor(`location.pathname === ${JSON.stringify(path)} && Boolean(document.querySelector('.round-search-bar input'))`)
+      assert.deepEqual(await evaluate("(() => { const input = document.querySelector('.round-search-bar input'); const bar = input.parentElement; const shadow = getComputedStyle(bar).boxShadow; input.focus(); const style = getComputedStyle(bar); return [getComputedStyle(input).outlineStyle, style.outlineStyle, style.boxShadow === shadow, style.borderColor]; })()"), ['none', 'none', true, 'rgb(93, 196, 252)'])
+    }
+    assert.deepEqual(exceptions, [])
+    console.log('PASS custom controls: required bank, Escape/focus, group/round creation, currency/payer selection, expense validation/save/edit, settlement sharing/remaining outgoing amounts, account save, search focus, 320/390/1024px layouts')
+    console.log(`Browser evidence: ${artifactDir}`)
+    ws.close()
+    process.exit(0)
+  }
+  const owner = await user('A', '001111')
+  const payer = await user('B', '002222')
+  const participant = await user('C', '003333')
+  const extraD = await user('D', '004444')
+  const extraE = await user('E', '005555')
   await setSession(owner.session)
   await navigate('/home', '함께 쓴 돈, 함께 정리해요')
   console.log('SETUP settlement regression uses legacy account fixtures seeded only in TEST_DATABASE_URL')
@@ -366,7 +576,8 @@ try {
   await waitFor(hasText('랜덤 돌리기'))
   assert.equal(await evaluate("Boolean(document.querySelector('input[aria-label=\"공유 링크\"]'))"), false)
   await click('랜덤 돌리기')
-  await waitFor(hasText('정산 안내 링크 복사'))
+  await waitFor("Boolean(document.querySelector('.copy-link input')?.value)")
+  assert.equal(await evaluate("Boolean(document.querySelector('.copy-link button'))"), false)
   assert.equal(await evaluate("document.querySelector('.bank-details').textContent.includes('002222')"), true)
   assert.equal(await evaluate("Array.from(document.querySelectorAll('.bank-details')).some(dl => dl.textContent.includes('003333'))"), false)
   await withWriteTransaction(async client => {
@@ -381,8 +592,7 @@ try {
   await mkdir(artifactDir, { recursive: true })
   const screenshot = await cdp('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true })
   await writeFile(join(artifactDir, 'settlement.png'), Buffer.from(screenshot.data, 'base64'))
-  await click('정산 안내 링크 복사')
-  await waitFor("document.querySelector('.copy-link [role=status]')?.textContent.length > 0")
+  assert.equal(await evaluate("(() => { const input = document.querySelector('.copy-link input'); input.focus(); return input.selectionStart === 0 && input.selectionEnd === input.value.length; })()"), true)
   const settlementVersion = (await api(owner.session, `/api/rounds/${roundId}/settlement`)).version
   await setSession(payer.session)
   await navigate(`/settlements/${roundId}`, '이 사람에게 받아요')
@@ -474,15 +684,15 @@ try {
   assert.equal(payer.session.purpose, 'onboarding')
   await setSession(payer.session)
   await navigate('/onboarding', '검증 B님, 다시 만나 반가워요')
-  assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.onboarding-page button')).map(button => button.textContent.trim())"), ['재가입하기', '다른 카카오 계정으로 로그인', '뒤로가기'])
+  assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.onboarding-page button')).filter(button => button.getClientRects().length && !button.classList.contains('bank-select-trigger')).map(button => button.textContent.trim())"), ['재가입하기', '다른 카카오 계정으로 로그인', '뒤로가기'])
   await waitFor("Boolean(document.querySelector('[name=bankCode]'))")
   assert.equal(await evaluate("document.querySelectorAll('[name=bankCode], [name=accountNumber], [name=accountHolder]').length"), 3)
   assert.equal(await evaluate("Boolean(document.querySelector('[name=birthDate]'))"), false)
   const rejoining = await api(payer.session, '/api/me')
   assert.equal(rejoining.purpose, 'onboarding')
   assert.notEqual(rejoining.deletedAt, null)
-  await fill('[name=bankCode]', '004')
   await fill('[name=accountNumber]', '0002223333')
+  await fill('[name=bankCode]', '004')
   await fill('[name=accountHolder]', '검증 B')
   assert.equal(await evaluate("document.querySelector('form').checkValidity()"), true)
   await click('재가입하기')
