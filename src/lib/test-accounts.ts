@@ -1,3 +1,5 @@
+export const TEST_ONBOARDING_KEY = 'onboarding'
+
 export const TEST_ACCOUNTS = [
   {
     key: 'member-a',

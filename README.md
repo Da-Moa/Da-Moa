@@ -123,6 +123,8 @@ npm run db:seed:test-accounts
 
 시드는 `테스트 민지`, `테스트 준호`, `테스트 서연`, `테스트 지우`, `테스트 현우`와 서로 다른 테스트 계좌를 생성하고 목록을 출력합니다. 이 회원들은 `provider='test'`와 고정 `provider_subject`를 사용하므로 실제 카카오 로그인과 연결되지 않습니다. 개발 서버를 로컬 주소로 실행하면 `/login`에 다섯 계정의 로그인 버튼이 표시되고, 선택한 계정의 테스트 세션을 발급합니다. 운영 빌드에서는 버튼이 사라지고 `/api/auth/test-login`도 404를 반환합니다.
 
+`첫 가입 온보딩 보기` 버튼은 별도 시드 없이 매번 새 테스트 계정과 가입 전 세션을 만들어 `/onboarding`을 엽니다. 계좌를 저장하면 실제 가입 완료 흐름도 확인할 수 있습니다. 기존 테스트 계정과 정산 기록은 변경하지 않습니다.
+
 ## 배포
 
 Ubuntu arm64 오라클 인스턴스의 IP HTTPS, Docker Compose 앱·PostgreSQL·MinIO 설정과 GitHub Actions 배포 절차는 [OCI 배포 가이드](docs/oci-deploy.md)를 따릅니다. PostgreSQL과 MinIO 데이터는 각각 이름 있는 Docker 볼륨에 저장하고, 배포 시 기존 저장소 컨테이너와 볼륨을 유지하면서 앱만 교체합니다. `main`에 반영하면 테스트·빌드가 통과한 커밋으로 앱 이미지를 서버에서 빌드하고, 빈 운영 DB에 스키마를 만든 뒤 컨테이너를 전환합니다. 개발·운영 DB와 MinIO 버킷은 분리합니다. 운영 API의 변경 요청과 WebSocket 연결은 `KAKAO_REDIRECT_URI`의 공개 주소에서 온 요청만 허용합니다. 같은 IP를 유지하면 기존 세션을 유지할 수 있도록 `AUTH_JWT_SECRET`도 유지하고, 공개 주소가 바뀌면 카카오 콘솔의 Redirect URI와 `KAKAO_REDIRECT_URI`를 함께 변경합니다.

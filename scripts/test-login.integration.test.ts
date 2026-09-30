@@ -4,8 +4,9 @@ import { NextRequest } from 'next/server'
 import { POST } from '../src/app/api/auth/test-login/route.ts'
 import { ACCESS_TOKEN_COOKIE_NAME, readAccessToken, REFRESH_TOKEN_COOKIE_NAME } from '../src/lib/auth.ts'
 import { getAccount } from '../src/lib/authorization.ts'
+import { completeOnboarding, signInTestAccount } from '../src/lib/auth-store.ts'
 import { createDatabaseClient } from '../src/lib/db.ts'
-import { TEST_ACCOUNTS } from '../src/lib/test-accounts.ts'
+import { TEST_ACCOUNTS, TEST_ONBOARDING_KEY } from '../src/lib/test-accounts.ts'
 import { applyMigrations } from './migrations.mjs'
 
 const testUrl = process.env.TEST_DATABASE_URL
@@ -55,4 +56,42 @@ test('local development test login issues an authenticated cookie pair and rejec
   assert.equal((await POST(loginRequest('unknown'))).status, 404)
   assert.equal((await POST(loginRequest(TEST_ACCOUNTS[0].key, 'https://evil.test'))).status, 403)
   assert.equal((await POST(loginRequest(TEST_ACCOUNTS[0].key, 'http://localhost', '&extra=1'))).status, 400)
+})
+
+test('onboarding preview creates a fresh limited test session on every click and completes registration', async () => {
+  const ids = new Set<string>()
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const response = await POST(loginRequest(TEST_ONBOARDING_KEY))
+    assert.equal(response.status, 303)
+    const accessCookie = response.headers.getSetCookie().find(cookie => cookie.startsWith(`${ACCESS_TOKEN_COOKIE_NAME}=`))
+    const access = readAccessToken(accessCookie?.slice(ACCESS_TOKEN_COOKIE_NAME.length + 1).split(';')[0])
+    assert.ok(access)
+    const account = await getAccount(access, true)
+    assert.equal(account.purpose, 'onboarding')
+    assert.equal(account.onboardingCompletedAt, null)
+    assert.equal(account.deletedAt, null)
+    assert.equal(account.accountNumber, null)
+    assert.equal(account.bankVersion, 0)
+    ids.add(account.id)
+    await assert.rejects(getAccount(access), { code: 'onboarding_required' })
+    const session = await completeOnboarding(access, {
+      bankCode: '090', accountNumber: '3333123456789', accountHolder: '첫 가입 테스트', expectedBankVersion: 0,
+    })
+    const completed = await getAccount(readAccessToken(session.accessToken))
+    assert.equal(completed.id, account.id)
+    assert.equal(completed.purpose, 'app')
+  }
+  assert.equal(ids.size, 2)
+  assert.equal((await POST(loginRequest(TEST_ONBOARDING_KEY, 'https://evil.test'))).status, 403)
+  const previousEnv = { NODE_ENV: process.env.NODE_ENV, KAKAO_REDIRECT_URI: process.env.KAKAO_REDIRECT_URI }
+  try {
+    Object.assign(process.env, { NODE_ENV: 'production', KAKAO_REDIRECT_URI: 'http://localhost/auth/v1/kakao' })
+    assert.equal((await POST(loginRequest(TEST_ONBOARDING_KEY))).status, 404)
+    assert.throws(() => signInTestAccount(TEST_ONBOARDING_KEY), { code: 'not_found' })
+  } finally {
+    for (const [name, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+  }
 })

@@ -14,7 +14,7 @@ import { requireAccount, type Account } from './authorization'
 import { withWriteTransaction, type Database } from './db'
 import { AppError } from './errors'
 import { objectBody, replayMutation, saveMutation } from './mutations'
-import { testAccountForKey } from './test-accounts'
+import { TEST_ONBOARDING_KEY, testAccountForKey } from './test-accounts'
 import { normalizeBankAccountInput, type BankAccountInput } from './bank-account'
 
 export type UserAccount = Pick<Account, 'displayName' | 'email' | 'profileImageUrl'>
@@ -77,10 +77,18 @@ export function signInKakao(providerSubject: string, profile: KakaoProfile) {
 
 export function signInTestAccount(key: unknown) {
   const fixture = testAccountForKey(key)
-  if (process.env.NODE_ENV === 'production' || !fixture) {
+  if (process.env.NODE_ENV === 'production' || !fixture && key !== TEST_ONBOARDING_KEY) {
     throw new AppError(404, 'not_found', '테스트 계정을 찾을 수 없습니다')
   }
   return withWriteTransaction(async (client) => {
+    if (!fixture) {
+      const id = randomUUID(), now = currentTimestamp()
+      await client.query(`
+        INSERT INTO users(id, provider, provider_subject, display_name, created_at, updated_at)
+        VALUES ($1, 'test', $2, '첫 가입 테스트', $3, $3)
+      `, [id, `da-moa:test-only:onboarding:${id}`, now])
+      return issueSession(client, id, 'onboarding', now)
+    }
     const { rows } = await client.query(`
       SELECT id FROM users
       WHERE id = $1 AND provider = 'test' AND provider_subject = $2
