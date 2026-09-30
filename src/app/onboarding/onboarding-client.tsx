@@ -11,7 +11,7 @@ export default function OnboardingClient() {
     if (account?.purpose === 'app' && account.onboardingCompletedAt && !account.deletedAt) window.location.replace('/home')
   }, [account])
   return <main className="app-shell onboarding-page">
-    <section className="tab-heading">{!account?.deletedAt && <p>{account?.displayName ?? '다모아에 오신 것을 환영해요'}</p>}<h1>{account?.deletedAt ? '다시 만나 반가워요' : '정산받을 계좌를 등록해요'}</h1></section>
+    <section className="tab-heading"><h1>{account ? `${account.displayName}님, ${account.deletedAt ? '다시 만나 반가워요' : '반가워요'}` : '다모아에 오신 것을 환영해요'}</h1></section>
     <ErrorNotice error={me.error} retry={() => void me.reload()} />
     {!account ? me.loading && <Loading /> : <OnboardingForm account={account} reload={me.reload} />}
   </main>
@@ -44,11 +44,10 @@ function OnboardingForm({ account, reload }: { account: Account; reload: () => P
   return <section className="domain-card stack">
       <form aria-busy={action.busy} autoComplete="off" className="stack" ref={bankForm.form} onSubmit={event => { event.preventDefault(); void register(event.currentTarget) }}>
         <BankFields key={formKey} disabled={action.busy} error={action.error} />
-        <button className="primary-button" disabled={action.busy} type="submit">{action.busy ? '계좌 저장 중…' : account.deletedAt ? '재가입' : '계좌 저장하고 시작하기'}</button>
-        {!account.deletedAt && <button className="text-button" disabled={action.busy} onClick={() => void reloadLatest()} type="button">입력 지우고 다시 확인</button>}
+        <button className="primary-button" disabled={action.busy} type="submit">{action.busy ? '계좌 저장 중…' : account.deletedAt ? '재가입하기' : '저장하기'}</button>
       </form>
       <ErrorNotice error={action.error} retry={action.error instanceof ApiError && action.error.code === 'bank_account_conflict' ? () => void reloadLatest() : undefined} />
       <button className="text-button" disabled={action.busy} onClick={() => void logout()} type="button">다른 카카오 계정으로 로그인</button>
-      {account.deletedAt && <button className="text-button" disabled={action.busy} onClick={goBack} type="button">뒤로가기</button>}
+      <button className="text-button" disabled={action.busy} onClick={goBack} type="button">뒤로가기</button>
     </section>
 }

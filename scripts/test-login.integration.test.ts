@@ -67,6 +67,7 @@ test('onboarding preview creates a fresh limited test session on every click and
     const access = readAccessToken(accessCookie?.slice(ACCESS_TOKEN_COOKIE_NAME.length + 1).split(';')[0])
     assert.ok(access)
     const account = await getAccount(access, true)
+    assert.equal(account.displayName, '민지')
     assert.equal(account.purpose, 'onboarding')
     assert.equal(account.onboardingCompletedAt, null)
     assert.equal(account.deletedAt, null)
@@ -75,7 +76,7 @@ test('onboarding preview creates a fresh limited test session on every click and
     ids.add(account.id)
     await assert.rejects(getAccount(access), { code: 'onboarding_required' })
     const session = await completeOnboarding(access, {
-      bankCode: '090', accountNumber: '3333123456789', accountHolder: '첫 가입 테스트', expectedBankVersion: 0,
+      bankCode: '090', accountNumber: '3333123456789', accountHolder: '민지', expectedBankVersion: 0,
     })
     const completed = await getAccount(readAccessToken(session.accessToken))
     assert.equal(completed.id, account.id)

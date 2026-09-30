@@ -85,7 +85,7 @@ export function signInTestAccount(key: unknown) {
       const id = randomUUID(), now = currentTimestamp()
       await client.query(`
         INSERT INTO users(id, provider, provider_subject, display_name, created_at, updated_at)
-        VALUES ($1, 'test', $2, '첫 가입 테스트', $3, $3)
+        VALUES ($1, 'test', $2, '민지', $3, $3)
       `, [id, `da-moa:test-only:onboarding:${id}`, now])
       return issueSession(client, id, 'onboarding', now)
     }
