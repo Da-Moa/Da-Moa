@@ -261,6 +261,45 @@ try {
     const expenseShot = await cdp('Page.captureScreenshot', { format: 'png' })
     await writeFile(join(artifactDir, 'expense-inputs.png'), Buffer.from(expenseShot.data, 'base64'))
     await click('닫기')
+    await click('정산 확정')
+    await click('전송 안내 확인')
+    await waitFor("Boolean(document.querySelector('.copy-link input')?.value)")
+    assert.equal(await evaluate("document.querySelector('.copy-link input').value"), `${origin}/settlements/${customRoundId}`)
+    assert.equal(await evaluate("Boolean(document.querySelector('.copy-link button'))"), false)
+    assert.equal(await evaluate(hasText('본인의 최종 안내예요. 실제 송금은 직접 진행해 주세요.')), false)
+    assert.equal(await evaluate(hasText('링크를 통해 접속하면 자신이 보낼 금액과 계좌번호, 자신이 받을 금액을 볼 수 있어요.')), false)
+    assert.equal(await evaluate("(() => { const input = document.querySelector('.copy-link input'); input.focus(); return input.selectionStart === 0 && input.selectionEnd === input.value.length; })()"), true)
+    const secondReceiver = await user('두 번째 수취인', '00112244')
+    await api(secondReceiver.session, `/api${customInvitePath}/accept`, 'POST', {})
+    const senderId = newcomer.session.userId
+    const pendingRound = await api(roundPartner.session, `/api/groups/${customGroupId}/rounds`, 'POST', { name: '남은 송금 금액 검증', currency: 'USD', participantIds: [senderId, roundPartner.session.userId, secondReceiver.session.userId] })
+    const pendingRoundId = pendingRound.roundId
+    let pendingVersion = pendingRound.version
+    for (const [receiver, amount] of [[roundPartner, '6.00'], [secondReceiver, '4.00']]) {
+      const result = await api(roundPartner.session, `/api/rounds/${pendingRoundId}/expenses`, 'POST', { description: '수취인별 지출', amount, payerId: receiver.session.userId, splitMode: 'CUSTOM', customShares: [{ userId: senderId, amount }], expectedVersion: pendingVersion })
+      pendingVersion = result.version
+    }
+    for (const command of ['confirm', 'send']) {
+      const result = await api(roundPartner.session, `/api/rounds/${pendingRoundId}/${command}`, 'POST', { expectedVersion: pendingVersion })
+      pendingVersion = result.version
+    }
+    await navigate(`/settlements/${pendingRoundId}`, '내가 보낼 금액')
+    const sendingAmount = "document.querySelector('.settlement-animated-money')?.getAttribute('aria-label')?.replace(/\\D/g, '')"
+    await waitFor(`${sendingAmount} === '1000'`)
+    // Receiver updates must change the sender's open screen through realtime invalidation.
+    await api(roundPartner.session, `/api/rounds/${pendingRoundId}/settlement-check`, 'POST', { checked: true, senderId, expectedVersion: pendingVersion })
+    await waitFor(`${sendingAmount} === '400'`, 'one recipient confirmation subtracts only that transfer')
+    assert.equal(await evaluate("document.querySelectorAll('section.stack > article.domain-card').length"), 1)
+    await api(roundPartner.session, `/api/rounds/${pendingRoundId}/settlement-check`, 'POST', { checked: false, senderId, expectedVersion: pendingVersion })
+    await waitFor(`${sendingAmount} === '1000'`, 'confirmation reversal restores the sending amount')
+    assert.equal(await evaluate("document.querySelectorAll('section.stack > article.domain-card').length"), 2)
+    await api(roundPartner.session, `/api/rounds/${pendingRoundId}/settlement-check`, 'POST', { checked: true, expectedVersion: pendingVersion })
+    await api(secondReceiver.session, `/api/rounds/${pendingRoundId}/settlement-check`, 'POST', { checked: true, expectedVersion: pendingVersion })
+    await waitFor(`${sendingAmount} === '000'`, 'all confirmations leave zero to send')
+    assert.equal(await evaluate("document.querySelectorAll('section.stack > article.domain-card').length"), 0)
+    await navigate(`/settlements/${pendingRoundId}`, '내가 보낼 금액')
+    await waitFor(`${sendingAmount} === '000'`, 'confirmed amount remains zero after reload')
+    assert.equal(await evaluate(`fetch('/api/rounds/${pendingRoundId}/settlement').then(response => response.json()).then(result => result.data.balanceMinor)`), '1000')
     await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
     await navigate('/home/account', '내 정보')
     await click('계좌 수정하기')
@@ -299,7 +338,7 @@ try {
       assert.deepEqual(await evaluate("(() => { const input = document.querySelector('.round-search-bar input'); const bar = input.parentElement; const shadow = getComputedStyle(bar).boxShadow; input.focus(); const style = getComputedStyle(bar); return [getComputedStyle(input).outlineStyle, style.outlineStyle, style.boxShadow === shadow, style.borderColor]; })()"), ['none', 'none', true, 'rgb(93, 196, 252)'])
     }
     assert.deepEqual(exceptions, [])
-    console.log('PASS custom controls: required bank, Escape/focus, group/round creation, currency/payer selection, expense validation/save/edit, account save, search focus, 320/390/1024px layouts')
+    console.log('PASS custom controls: required bank, Escape/focus, group/round creation, currency/payer selection, expense validation/save/edit, settlement sharing/remaining outgoing amounts, account save, search focus, 320/390/1024px layouts')
     console.log(`Browser evidence: ${artifactDir}`)
     ws.close()
     process.exit(0)
@@ -537,7 +576,8 @@ try {
   await waitFor(hasText('랜덤 돌리기'))
   assert.equal(await evaluate("Boolean(document.querySelector('input[aria-label=\"공유 링크\"]'))"), false)
   await click('랜덤 돌리기')
-  await waitFor(hasText('정산 안내 링크 복사'))
+  await waitFor("Boolean(document.querySelector('.copy-link input')?.value)")
+  assert.equal(await evaluate("Boolean(document.querySelector('.copy-link button'))"), false)
   assert.equal(await evaluate("document.querySelector('.bank-details').textContent.includes('002222')"), true)
   assert.equal(await evaluate("Array.from(document.querySelectorAll('.bank-details')).some(dl => dl.textContent.includes('003333'))"), false)
   await withWriteTransaction(async client => {
@@ -552,8 +592,7 @@ try {
   await mkdir(artifactDir, { recursive: true })
   const screenshot = await cdp('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true })
   await writeFile(join(artifactDir, 'settlement.png'), Buffer.from(screenshot.data, 'base64'))
-  await click('정산 안내 링크 복사')
-  await waitFor("document.querySelector('.copy-link [role=status]')?.textContent.length > 0")
+  assert.equal(await evaluate("(() => { const input = document.querySelector('.copy-link input'); input.focus(); return input.selectionStart === 0 && input.selectionEnd === input.value.length; })()"), true)
   const settlementVersion = (await api(owner.session, `/api/rounds/${roundId}/settlement`)).version
   await setSession(payer.session)
   await navigate(`/settlements/${roundId}`, '이 사람에게 받아요')
