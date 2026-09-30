@@ -160,7 +160,7 @@ export function BankFields({ disabled, error, account }: { disabled?: boolean; e
     if (typeof detail?.field === 'string' && ['bankCode', 'accountNumber', 'accountHolder'].includes(detail.field)) fields.current?.querySelector<HTMLElement>(`[name="${detail.field}"]`)?.focus()
   }, [error])
   return <div className="stack" ref={fields}>
-    <label className="field" htmlFor={`${id}-number`}><span>전체 계좌번호</span><input autoComplete="off" defaultValue={account ? account.formattedAccountNumber ?? formatAccountNumber(account.bankCode ?? account.bankName, account.accountNumber) : ''} disabled={disabled} id={`${id}-number`} inputMode="numeric" maxLength={64} name="accountNumber" onBlur={event => formatInput(event.currentTarget, selectedBank, false)} onFocus={event => void readClipboard(event.currentTarget)} onPaste={event => {
+    <label className="field" htmlFor={`${id}-number`}><span>계좌번호</span><input autoComplete="off" defaultValue={account ? account.formattedAccountNumber ?? formatAccountNumber(account.bankCode ?? account.bankName, account.accountNumber) : ''} disabled={disabled} id={`${id}-number`} inputMode="numeric" maxLength={64} name="accountNumber" onBlur={event => formatInput(event.currentTarget, selectedBank, false)} onFocus={event => void readClipboard(event.currentTarget)} onPaste={event => {
       const text = event.clipboardData.getData('text')
       if (pasteAccount(parseClipboardAccount(text, selectedBank), event.currentTarget) || !/^[0-9 -]+$/.test(text) || text.replace(/[ -]/g, '').length >= 7) event.preventDefault()
     }} onInput={event => {
