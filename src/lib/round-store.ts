@@ -513,7 +513,10 @@ export async function getReceipt(access: Identity, receiptId: string) {
     const { rows } = await client.query(`SELECT r.mime_type,r.object_key FROM expense_receipts r JOIN expenses e ON e.id=r.expense_id
       JOIN round_members m ON m.round_id=e.round_id AND m.user_id=$2 WHERE r.id=$1`, [receiptId, account.id])
     if (!rows[0]) throw missing()
-    return { mimeType: rows[0].mime_type as string, objectKey: rows[0].object_key as string }
+    const mimeType = rows[0].mime_type as string
+    if (rows[0].object_key) return { mimeType, objectKey: rows[0].object_key as string, content: null }
+    const { rows: legacy } = await client.query('SELECT content FROM expense_receipts WHERE id=$1', [receiptId])
+    return { mimeType, objectKey: null, content: legacy[0].content as Uint8Array }
   })
-  return { mimeType: stored.mimeType, content: await readReceipt(stored.objectKey) }
+  return { mimeType: stored.mimeType, content: stored.content ?? await readReceipt(stored.objectKey!) }
 }

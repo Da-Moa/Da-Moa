@@ -32,9 +32,11 @@ npm run db:seed:test-accounts
 npm run dev
 ```
 
-`npm run db:local:down`은 컨테이너만 중지하고 DB 데이터는 Docker volume에 유지합니다. `da_moa_dev_test`를 담던 기존 `postgres-data` 볼륨은 보존하고 개발 DB는 별도 `postgres-dev-data` 볼륨에 생성합니다. `.env.local`은 Git 배포에 포함되지 않습니다.
+`npm run db:local:up`은 PostgreSQL과 MinIO를 함께 실행하고 비공개 `da-moa-receipts-dev` 버킷을 생성합니다. MinIO API는 `http://127.0.0.1:9000`, 콘솔은 `http://127.0.0.1:9001`이며, 로컬 전용 로그인은 `da_moa_local` / `da_moa_minio_local`입니다. 로컬 MinIO는 [Community 소스 빌드 이미지](https://github.com/coollabsio/minio)를 고정 버전으로 사용합니다.
 
-이전 버전으로 이미 만든 로컬 DB에는 영수증 `content` 컬럼이 남아 있을 수 있습니다. 이번 초기 스키마는 빈 DB를 대상으로 하므로 기존 로컬 데이터를 계속 쓸 경우 별도 이행이 필요합니다. 운영 첫 배포에는 영향이 없습니다.
+`npm run db:local:down`은 컨테이너만 중지하고 DB·영수증 데이터는 각각 `postgres-dev-data`·`minio-dev-data` Docker volume에 유지합니다. `da_moa_dev_test`를 담던 기존 `postgres-data` 볼륨은 보존하고 개발 DB는 별도 `postgres-dev-data` 볼륨에 생성합니다. `.env.local`은 Git 배포에 포함되지 않습니다.
+
+이전 버전의 로컬 DB에 영수증 `content` 컬럼이 남아 있어도 `npm run db:migrate`로 기존 데이터를 보존하며 업그레이드할 수 있습니다. 기존 영수증은 계속 조회할 수 있고, 새 영수증은 MinIO에 저장합니다.
 
 [http://localhost:3000](http://localhost:3000)에서 시작합니다. API 문서는 `/api/docs`, OpenAPI JSON은 `/api/openapi.json`에서 확인할 수 있습니다. [정산기능-intent.md](intent/정산기능-intent.md)는 정책 결정 기록, [정산기능-spec.md](spec/정산기능-spec.md)는 요구사항·상태·권한·인수 기준입니다. 금액 부호는 최신 명세를 따라 **부담액 − 결제액**, 양수는 보낼 돈·음수는 받을 돈입니다.
 

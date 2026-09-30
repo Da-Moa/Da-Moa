@@ -7,7 +7,7 @@
   },
   "type": "module",
   "scripts": {
-    "db:local:up": "docker compose up -d --wait postgres",
+    "db:local:up": "docker compose up -d --wait postgres minio && docker compose exec -T minio sh -c 'mc alias set local http://127.0.0.1:9000 \"$MINIO_ROOT_USER\" \"$MINIO_ROOT_PASSWORD\" >/dev/null && mc mb --ignore-existing local/da-moa-receipts-dev'",
     "db:local:down": "docker compose down",
     "db:migrate": "node --import tsx scripts/migrate-auth.mjs",
     "db:seed:test-accounts": "node --import tsx scripts/seed-test-accounts.mjs",
