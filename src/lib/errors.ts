@@ -1,11 +1,6 @@
 import { channel } from 'node:diagnostics_channel'
-
-export class AppError extends Error {
-  constructor(public status: number, public code: string, message: string, public details?: unknown) {
-    super(message)
-    this.name = 'AppError'
-  }
-}
+import { AppError } from './app-error'
+export { AppError } from './app-error'
 
 export function badInput(code = 'invalid_input', message = '입력값을 확인해 주세요'): never {
   throw new AppError(400, code, message)

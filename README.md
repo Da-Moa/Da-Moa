@@ -20,6 +20,7 @@ cp .env.example .env.local
 | `KAKAO_CLIENT_SECRET` | 카카오 콘솔에서 Client Secret을 사용하는 경우만 설정 |
 | `AUTH_JWT_SECRET` | 32바이트 이상의 임의 비밀 문자열 |
 | `DATABASE_URL` | 로컬은 `postgresql://da_moa:da_moa_local@127.0.0.1:55432/da_moa_dev`, OCI 앱 컨테이너는 Compose의 `postgres:5432` 연결 문자열 |
+| `DB_QUERY_LOG` | `true`이면 모든 DB 쿼리를 줄바꿈·들여쓰기하여 출력. 기본값은 비활성화 |
 | `MINIO_ENDPOINT` | MinIO S3 API 주소. 운영 앱 컨테이너는 `http://minio:9000` |
 | `MINIO_BUCKET` | 비공개 영수증 버킷 이름 |
 | `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` | 해당 버킷에 읽기·쓰기·삭제 권한이 있는 전용 사용자 키 |
@@ -71,6 +72,8 @@ npm run dev
 개인별 물리 정산 테이블을 만들지 않습니다. 회차의 분담·개인 잔액과 공통 `보내는 사람 → 받는 사람` 송금 행을 하나의 DB 트랜잭션으로 저장합니다. 변경 요청은 `Idempotency-Key`를 사용하고 회차 변경은 `expectedVersion`도 요구합니다. 응답이 유실되면 같은 키·본문으로 재시도하며 이미 성공한 작업을 다시 적용하지 않습니다. 지출 저장의 버전 충돌은 최신 회차를 자동 조회한 뒤 같은 입력으로 한 번 재저장합니다.
 
 DB 연결은 `pg` 드라이버의 공용 커넥션 풀을 사용합니다. 같은 연결 문자열의 풀은 프로세스 내에서 재사용하며 최대 10개 연결, 연결·풀 대기 제한 10초, 유휴 연결 정리 30초를 적용합니다. 트랜잭션이 끝나면 연결을 반환하고 롤백에 실패한 연결은 폐기합니다. DB 용량 모니터링은 풀 포화 시에도 상태를 확인할 수 있도록 별도 연결을 사용하며, 마이그레이션·시드 스크립트도 작업 후 종료하는 개별 연결을 사용합니다.
+
+쿼리 전수 조사는 `DB_QUERY_LOG=true npm run dev` 또는 운영 환경의 `DB_QUERY_LOG=true` 설정 후 앱 컨테이너 재생성으로 활성화합니다. stdout에 쿼리마다 `SQL:` 아래 SQL을 줄바꿈하고 들여쓰기하여 출력합니다. Hibernate의 `format_sql: true`처럼 `SELECT` 컬럼, `FROM`, `JOIN`, `WHERE` 등을 여러 줄로 표시하며, SQL의 `$1` 등은 그대로 남깁니다. 바인딩 값·결과 행·오류 메시지·DB 연결 문자열은 기록하지 않습니다. `BEGIN`·`SET LOCAL`·`COMMIT`·`ROLLBACK`, 모니터링, 마이그레이션·시드의 쿼리도 모두 기록합니다. 포매터가 처리하지 못하는 SQL은 원문을 출력하며 DB에는 항상 원래 SQL을 전달합니다. 이 로그는 공통 DB 연결 코드를 통한 `query()` 호출 기준이며 DB 내부 실행이나 다른 도구의 쿼리는 포함하지 않습니다. 전수 로그 출력 자체가 부하에 영향을 주므로 조사 후 비활성화합니다. 로그 파일은 `DB_QUERY_LOG=true npm run dev > /tmp/da-moa-db-query.log 2>&1`, 운영 로그는 `docker compose -f compose.production.yaml logs -f app`으로 확인할 수 있습니다.
 
 초기 쓰기는 공통 PostgreSQL advisory transaction lock으로 직렬화합니다. 읽기는 별도 스냅샷을 사용합니다. 영수증 객체는 MinIO에 저장하고 DB는 객체 키를 관리합니다. 업로드 후 DB 저장이 실패하거나 DB 커밋 뒤 객체 삭제가 실패하면 참조되지 않은 객체가 남을 수 있으므로 저장소를 점검해야 합니다.
 

@@ -1,4 +1,4 @@
-import { AppError } from './errors.ts'
+import { AppError } from './app-error'
 import { detect, formatAccount, institutions } from 'korean-account'
 
 export const BANKS: ReadonlyArray<{ code: string; name: string }> = [

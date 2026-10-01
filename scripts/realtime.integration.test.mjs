@@ -42,6 +42,8 @@ test('authenticated WebSocket receives only its own committed invalidations', as
   const connections = []
   try {
     await ready
+    const home = await fetch(`${origin}/home`)
+    assert.equal(home.status, 200, 'Home must compile in Turbopack development mode without server-only imports')
     async function connect(key) {
       const login = await fetch(`${origin}/api/auth/test-login`, { method: 'POST', redirect: 'manual', headers: { origin, 'content-type': 'application/x-www-form-urlencoded' }, body: `key=${key}` })
       assert.equal(login.status, 303)
