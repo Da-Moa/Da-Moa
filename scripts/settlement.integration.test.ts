@@ -9,6 +9,7 @@ import { createDatabaseClient } from '../src/lib/db.ts'
 import { acceptInvite, createGroup, createInvite, getGroup, getInvite, leaveGroup, listGroups } from '../src/lib/group-store.ts'
 import { addReceipt, checkExclusion, createRound, deleteExpense, excludeMember, getReceipt, getRound, getSettlement, listRounds, removeReceipt, roundCommand, saveExpense, setSettlementCheck } from '../src/lib/round-store.ts'
 import type { MutationResult } from '../src/lib/domain-types.ts'
+import { CURRENCY_CODES } from '../src/lib/money.ts'
 import { applyMigrations } from './migrations.mjs'
 import { completeTestOnboarding as completeOnboarding, updateTestBankAccount as updateBankAccount } from './bank-test-support.ts'
 
@@ -576,23 +577,24 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       }
     })
 
-    await t.test('one group has independent immutable round currencies, exact USD cents and no cross-round offset', async () => {
+    await t.test('all supported currencies persist exact amounts, immutable rounds and KRW-only accounts without cross-round offset', async () => {
       const participants = [a.userId, b.userId]
       await assert.rejects(createGroup(a, key(), { name: '모임 통화 없음', currency: 'KRW' }), code('invalid_input'))
-      for (const currency of [undefined, null, '', 'EUR', 'usd']) {
+      for (const currency of [undefined, null, '', 'XXX', 'usd']) {
         await assert.rejects(createRound(a, key(), g.id, { name: '잘못된 통화', participantIds: participants, ...(currency === undefined ? {} : { currency }) }), code('unsupported_currency'))
       }
-      const currencies = ['KRW', 'USD', 'JPY'] as const
+      const currencies = CURRENCY_CODES
       const rounds = await Promise.all(currencies.map(currency => createRound(a, key(), g.id, { name: `${currency} 회차`, currency, participantIds: participants })))
       const settled: { id: string; currency: string; balanceMinor: string }[] = []
       for (const [index, currency] of currencies.entries()) {
         const r = rounds[index]
-        const amount = currency === 'USD' ? '12345678.01' : '12345678'
+        const wholeUnits = ['KRW', 'JPY', 'VND'].includes(currency)
+        const amount = wholeUnits ? '12345678' : '12345678.01'
         const e = await expense(r.id, a, b.userId, amount)
         assert.equal((await get(r.id)).groupId, g.id)
         assert.equal((await get(r.id)).currency, currency)
-        assert.equal((await get(r.id)).expenses[0].amountMinor, currency === 'USD' ? '1234567801' : '12345678')
-        await assert.rejects(saveExpense(a, key(), r.id, { amount: currency === 'USD' ? '1.001' : '1.5', expectedVersion: e.version }, e.id), code('invalid_amount'))
+        assert.equal((await get(r.id)).expenses[0].amountMinor, wholeUnits ? '12345678' : '1234567801')
+        await assert.rejects(saveExpense(a, key(), r.id, { amount: wholeUnits ? '1.5' : '1.001', expectedVersion: e.version }, e.id), code('invalid_amount'))
         await assert.rejects(saveExpense(a, key(), r.id, { currency: 'KRW', expectedVersion: e.version }, e.id), code('invalid_input'))
         await command(r.id, 'confirm')
         await command(r.id, 'reopen')

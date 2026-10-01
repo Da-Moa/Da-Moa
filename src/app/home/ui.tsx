@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { ChevronDown, ChevronLeft, CircleUserRound, History, House, Menu, Users, X } from 'lucide-react'
+import { ChevronDown, ChevronLeft, CircleUserRound, History, House, Menu, Search, Users, X } from 'lucide-react'
 import { ApiError, apiRequest, discardBankAccountRequests, discardPendingRequest } from '../../lib/api-client'
 import { BANKS, formatAccountNumber, parseClipboardAccount, suggestBanks } from '../../lib/bank-account'
 import type { RoundStatus } from '../../lib/domain-types'
@@ -117,18 +117,21 @@ export function useAccount() {
   return value
 }
 
-export function SheetSelect({ label, name, title, value, onChange, options, disabled, sheetClassName, showSelectedIcon }: {
+export function SheetSelect({ label, name, title, value, onChange, options, disabled, sheetClassName, showSelectedIcon, searchPlaceholder }: {
   label: string; name: string; title: string; value: string; onChange: (value: string) => void;
-  options: readonly { value: string; label: string; icon?: ReactNode }[]; disabled?: boolean; sheetClassName?: string; showSelectedIcon?: boolean;
+  options: readonly { value: string; label: string; icon?: ReactNode; searchText?: string }[]; disabled?: boolean; sheetClassName?: string; showSelectedIcon?: boolean; searchPlaceholder?: string;
 }) {
   const id = useId()
   const dialogRef = useRef<HTMLDialogElement>(null)
   const trigger = useRef<HTMLButtonElement>(null)
   const closing = useRef(false)
   const [opened, setOpened] = useState(false)
+  const [search, setSearch] = useState('')
+  const filtered = options.filter(option => `${option.label} ${option.searchText ?? ''}`.toLocaleLowerCase('ko-KR').includes(search.trim().toLocaleLowerCase('ko-KR')))
   const selected = options.find(option => option.value === value)
   function open() {
     if (disabled || closing.current) return
+    setSearch('')
     dialogRef.current?.showModal()
     setOpened(true)
     dialogRef.current?.querySelector<HTMLButtonElement>(`[data-value="${value || options[0].value}"]`)?.focus()
@@ -157,7 +160,9 @@ export function SheetSelect({ label, name, title, value, onChange, options, disa
     </div>
     <dialog aria-labelledby={`${id}-title`} className={`bank-sheet ${sheetClassName ?? ''}`} id={`${id}-sheet`} onCancel={event => { event.preventDefault(); void close() }} onClick={event => { if (event.target === event.currentTarget) void close() }} onClose={() => { setOpened(false); trigger.current?.focus() }} ref={dialogRef}>
       <div className="bank-sheet-content"><div className="bank-sheet-handle" aria-hidden="true" /><header className="bank-sheet-header"><h2 id={`${id}-title`}>{title}</h2><button aria-label={`${label} 닫기`} className="icon-button" onClick={() => void close()} type="button"><X aria-hidden="true" size={20} /></button></header>
-        <div aria-label={`${label} 목록`} className="bank-grid" role="group">{options.map(option => <button aria-pressed={value === option.value} className="bank-tile" data-value={option.value} key={option.value} onClick={() => choose(option.value)} type="button">{option.icon}<span>{option.label}</span></button>)}</div>
+        {searchPlaceholder && <div className="round-search-bar currency-search"><Search aria-hidden="true" size={21} /><input aria-label={searchPlaceholder} autoComplete="off" maxLength={100} onChange={event => setSearch(event.target.value)} placeholder={searchPlaceholder} type="search" value={search} /></div>}
+        <div aria-label={`${label} 목록`} className="bank-grid" role="group">{filtered.map(option => <button aria-pressed={value === option.value} className="bank-tile" data-value={option.value} key={option.value} onClick={() => choose(option.value)} type="button">{option.icon}<span>{option.label}</span></button>)}</div>
+        {filtered.length === 0 && <p className="help-text" role="status">검색 결과가 없어요.</p>}
       </div>
     </dialog>
   </>

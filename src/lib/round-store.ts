@@ -143,7 +143,7 @@ export async function createRound(access: Identity, key: string, groupId: string
   onlyKeys(body, ['name', 'currency', 'participantIds'])
   const name = textInput(body.name, 100), ids = idsInput(body.participantIds)
   let currency: Currency
-  try { currency = requireCurrency(body.currency) } catch { badInput('unsupported_currency', 'USD, KRW, JPY 중 선택해 주세요') }
+  try { currency = requireCurrency(body.currency) } catch { badInput('unsupported_currency', '지원하는 회차 통화를 선택해 주세요') }
   return domainMutation(access, key, 'round.create', { groupId, ...body }, async (client, userId) => {
     await ownerGroup(client, groupId, userId, false)
     if (ids.length < 2 || !ids.includes(userId)) throw new AppError(409, 'minimum_participants', '회차 생성자를 포함해 최소 2명을 선택해 주세요')

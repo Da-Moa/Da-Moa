@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { expenseInputMaximum, formatAmountInput, formatMoney, parseAmount, requireCurrency } from './money.ts'
+import { amountInputPattern, CURRENCY_CODES, expenseInputMaximum, formatAmountInput, formatMoney, minorLimit, minorToAmount, parseAmount, requireCurrency } from './money.ts'
 
 test('amount input adds thousands separators while preserving partial USD decimals', () => {
   assert.equal(formatAmountInput('1234567', 'KRW'), '1,234,567')
@@ -51,7 +51,7 @@ test('currency decimals and amounts beyond Number precision remain exact', () =>
 })
 
 test('money boundaries reject invalid input instead of rounding or coercing', () => {
-  for (const currency of ['KRW', 'JPY', 'USD'] as const) {
+  for (const currency of CURRENCY_CODES) {
     for (const value of [0, 6000, NaN, Infinity, null, undefined, {}, '', ' ', ' 1', '1 ', '1\n', '1\r', '\t1', '0', '000', '-1', '+1', 'NaN', 'Infinity', '1e3', '1,000', '.01', '1.']) {
       assert.throws(() => parseAmount(value, currency), /invalid_amount/)
     }
@@ -61,6 +61,36 @@ test('money boundaries reject invalid input instead of rounding or coercing', ()
     assert.throws(() => parseAmount(value, 'JPY'), /invalid_amount/)
   }
   for (const value of ['1.001', '0.000', '0.00']) assert.throws(() => parseAmount(value, 'USD'), /invalid_amount/)
-  for (const value of ['EUR', 'krw', '', null]) assert.throws(() => requireCurrency(value), /unsupported_currency/)
+  for (const value of ['XXX', 'krw', '', null, {}, 'constructor', 'toString', '__proto__']) assert.throws(() => requireCurrency(value), /unsupported_currency/)
   for (const value of ['1.5', 'NaN', 'Infinity', '', '1e3']) assert.throws(() => formatMoney(value, 'USD'), /invalid_amount/)
+})
+
+test('every supported currency preserves its ISO minor units through entry, limits and editing', () => {
+  for (const currency of CURRENCY_CODES) {
+    const wholeUnits = ['KRW', 'JPY', 'VND'].includes(currency)
+    const amount = wholeUnits ? '9007199254740993' : '9007199254740993.01'
+    const expected = wholeUnits ? 9007199254740993n : 900719925474099301n
+    assert.equal(requireCurrency(currency), currency)
+    assert.equal(parseAmount(amount, currency), expected)
+    assert.equal(minorToAmount(expected.toString(), currency), amount)
+    assert.equal(minorToAmount((-expected).toString(), currency), `-${amount}`)
+    assert.equal(minorLimit(1n, currency), wholeUnits ? 1n : 100n)
+    const input = formatAmountInput(amount, currency)!
+    assert.ok(new RegExp(`^(?:${amountInputPattern(currency)})$`).test(input), currency)
+    assert.equal(parseAmount(input.replace(/,/g, ''), currency), expected)
+    assert.equal(formatAmountInput('1.', currency), wholeUnits ? null : '1.')
+    assert.throws(() => parseAmount(wholeUnits ? '1.01' : '1.001', currency), /invalid_amount/)
+    const maximum = expenseInputMaximum('0', null, currency)
+    assert.equal(maximum, wholeUnits ? 100_000_000n : 10_000_000_000n)
+    assert.equal(formatAmountInput(amount, currency, maximum), wholeUnits ? '100,000,000' : '100,000,000.00')
+    const roundMaximum = wholeUnits ? 1_000_000_000n : 100_000_000_000n
+    assert.equal(expenseInputMaximum((roundMaximum - 1n).toString(), '5', currency), 6n)
+    assert.equal(formatAmountInput(amount, currency, 1n), wholeUnits ? '1' : '0.01')
+    assert.equal(formatAmountInput('1', currency, 0n), wholeUnits ? '0' : '0.00')
+    assert.equal(parseAmount(wholeUnits ? '1' : '0.01', currency), 1n)
+    if (!['KRW', 'USD', 'JPY'].includes(currency)) {
+      assert.equal(formatMoney(expected.toString(), currency), `${wholeUnits ? '9,007,199,254,740,993' : '9,007,199,254,740,993.01'} ${currency}`)
+      assert.equal(formatMoney('-1', currency), `${wholeUnits ? '-1' : '-0.01'} ${currency}`)
+    }
+  }
 })

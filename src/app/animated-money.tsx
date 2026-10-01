@@ -13,9 +13,9 @@ function placedCharacters(value: string) {
   })
 }
 
-function moneyParts(value: string, currency: Currency) {
-  if (currency === 'USD') return { prefix: '$', body: value.slice(1), suffix: '' }
-  return { prefix: '', body: value.slice(0, -1), suffix: value.slice(-1) }
+function moneyParts(value: string) {
+  const [, prefix, body, suffix] = /^(\D*)([\d,.]+)(.*)$/.exec(value)!
+  return { prefix, body, suffix }
 }
 
 export function AnimatedMoney({ amountMinor, currency, className = 'large-money', prefix = '', announce = true }: {
@@ -38,8 +38,8 @@ export function AnimatedMoney({ amountMinor, currency, className = 'large-money'
     motion.addEventListener('change', finish)
     return () => motion.removeEventListener('change', finish)
   }, [])
-  const from = moneyParts(transition.from, currency)
-  const to = moneyParts(transition.to, currency)
+  const from = moneyParts(transition.from)
+  const to = moneyParts(transition.to)
   const previousCharacters = placedCharacters(from.body)
   const currentCharacters = placedCharacters(to.body)
   const previousDigits = new Map(previousCharacters.flatMap(item => item.place === null ? [] : [[item.place, item.character] as const]))

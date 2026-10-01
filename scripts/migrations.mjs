@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 
-export const migrationFiles = ['001-auth-lifecycle.sql', '002-groups-settlement.sql', '003-round-cascade-constraints.sql', '004-round-currency.sql', '005-round-creator.sql', '006-receipt-avif.sql', '007-settlement-check.sql', '008-transfer-receipt-check.sql', '009-openbanking.sql', '010-custom-expense-shares.sql', '011-formatted-account-number.sql', '012-correct-account-number-format.sql', '013-bank-display-groups.sql', '014-legacy-receipt-storage.sql']
+export const migrationFiles = ['001-auth-lifecycle.sql', '002-groups-settlement.sql', '003-round-cascade-constraints.sql', '004-round-currency.sql', '005-round-creator.sql', '006-receipt-avif.sql', '007-settlement-check.sql', '008-transfer-receipt-check.sql', '009-openbanking.sql', '010-custom-expense-shares.sql', '011-formatted-account-number.sql', '012-correct-account-number-format.sql', '013-bank-display-groups.sql', '014-legacy-receipt-storage.sql', '015-expanded-round-currencies.sql']
 
 // Accepts a connected PostgreSQL client; tests can use their isolated database.
 export async function applyMigrations(client) {

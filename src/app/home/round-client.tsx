@@ -7,7 +7,7 @@ import { ArrowRight, ChevronDown, ChevronLeft, ImagePlus, Pencil, Plus, Trash2, 
 import { AnimatedMoney } from '../animated-money'
 import { ApiError, apiRequest } from '../../lib/api-client'
 import type { ExclusionCheck, Expense, MutationResult, Receipt, RoundDetail } from '../../lib/domain-types'
-import { expenseInputMaximum, formatAmountInput, formatMoney, parseAmount } from '../../lib/money'
+import { amountInputPattern, currencyDecimals, expenseInputMaximum, formatAmountInput, formatMoney, minorToAmount, parseAmount } from '../../lib/money'
 import { ErrorNotice, Loading, ParticipantAvatar, SheetSelect, StatusBadge, useAccount, useAction, useResource } from './ui'
 
 const expenseDayFormatter = new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' })
@@ -26,7 +26,7 @@ function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: Rou
   const [payerId, setPayerId] = useState(expense?.payerId ?? account.id)
   const maximumMinor = expenseInputMaximum(round.totalMinor, expense?.amountMinor, round.currency)
   function minorToInput(minor: string) {
-    const amount = minor && round.currency === 'USD' ? `${minor.padStart(3, '0').slice(0, -2)}.${minor.padStart(3, '0').slice(-2)}` : minor
+    const amount = minor ? minorToAmount(minor, round.currency) : ''
     return formatAmountInput(amount, round.currency) ?? amount
   }
   const [amountInput, setAmountInput] = useState(() => minorToInput(expense?.amountMinor ?? ''))
@@ -83,7 +83,7 @@ function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: Rou
   return <form className="domain-card expense-form stack" id="expense-editor" onSubmit={event => { event.preventDefault(); void save(event.currentTarget) }}>
     <h2>{expense ? '지출 수정' : '지출 기록'}</h2>
     <label className="field line-field"><span>지출 내용</span><input autoFocus defaultValue={expense?.description ?? ''} name="description" maxLength={200} placeholder=" " required /></label>
-    <label className="field line-field"><span>총 금액 ({round.currency})</span><input value={amountInput} onChange={event => changeAmount(event.currentTarget)} name="amount" inputMode={round.currency === 'USD' ? 'decimal' : 'numeric'} type="text" pattern={round.currency === 'USD' ? '[0-9]{1,3}(,[0-9]{3})*([.][0-9]{1,2})?' : '[0-9]{1,3}(,[0-9]{3})*'} placeholder=" " required /></label>
+    <label className="field line-field"><span>총 금액 ({round.currency})</span><input value={amountInput} onChange={event => changeAmount(event.currentTarget)} name="amount" inputMode={currencyDecimals(round.currency) ? 'decimal' : 'numeric'} type="text" pattern={amountInputPattern(round.currency)} placeholder=" " required /></label>
     <SheetSelect disabled={action.busy} label="실제로 결제한 사람" name="payerId" onChange={setPayerId} options={round.members.filter(member => !member.excludedAt || member.userId === expense?.payerId).map(member => ({ value: member.userId, label: `${member.displayName}${member.excludedAt ? ' (제외됨 · 기존 결제 유지)' : ''}`, icon: <ParticipantAvatar profileImageUrl={member.profileImageUrl} /> }))} sheetClassName="currency-sheet" showSelectedIcon title="결제한 사람을 선택해 주세요" value={payerId} />
     <fieldset className="member-picker"><legend>부담할 사람</legend>
       <label className="check-row"><input type="radio" name="splitMode" value="ALL" checked={mode === 'ALL'} onChange={() => setMode('ALL')} /><span>전체 참여자 균등 분배</span></label>
@@ -91,7 +91,7 @@ function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: Rou
       <label className="check-row"><input type="radio" name="splitMode" value="CUSTOM" checked={mode === 'CUSTOM'} onChange={() => setMode('CUSTOM')} /><span>개별 항목 분배</span></label>
       {mode !== 'ALL' && <div className="selected-members">{round.members.filter(member => !member.excludedAt).map(member => <div className={mode === 'CUSTOM' ? 'custom-share-row' : undefined} key={member.userId}>
         <label className="check-row"><input checked={participants.includes(member.userId)} onChange={event => setParticipants(current => event.target.checked ? [...current, member.userId] : current.filter(id => id !== member.userId))} name="participantIds" type="checkbox" value={member.userId} /><span>{member.displayName}</span></label>
-        {mode === 'CUSTOM' && participants.includes(member.userId) && <label className="field line-field"><span>부담금 ({round.currency})</span><input aria-label={`${member.displayName} 부담금 (${round.currency})`} value={customAmounts[member.userId] ?? ''} onChange={event => changeAmount(event.currentTarget, member.userId)} name={`customAmount:${member.userId}`} inputMode={round.currency === 'USD' ? 'decimal' : 'numeric'} type="text" pattern={round.currency === 'USD' ? '[0-9]{1,3}(,[0-9]{3})*([.][0-9]{1,2})?' : '[0-9]{1,3}(,[0-9]{3})*'} placeholder=" " required /></label>}
+        {mode === 'CUSTOM' && participants.includes(member.userId) && <label className="field line-field"><span>부담금 ({round.currency})</span><input aria-label={`${member.displayName} 부담금 (${round.currency})`} value={customAmounts[member.userId] ?? ''} onChange={event => changeAmount(event.currentTarget, member.userId)} name={`customAmount:${member.userId}`} inputMode={currencyDecimals(round.currency) ? 'decimal' : 'numeric'} type="text" pattern={amountInputPattern(round.currency)} placeholder=" " required /></label>}
       </div>)}</div>}
     </fieldset>
     {round.status !== 'RECORDING' && <p className="notice notice-warning">다른 변경으로 기록 단계가 끝났어요. 입력을 확인한 뒤 창을 닫고 최신 상태를 확인해 주세요.</p>}

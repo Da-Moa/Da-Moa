@@ -1,3 +1,4 @@
+import { CURRENCY_CODES } from './money'
 import { MAX_GROUP_MEMBERS } from './domain-types'
 
 type Schema = Record<string, unknown>
@@ -7,8 +8,8 @@ const array = (items: Schema): Schema => ({ type: 'array', items })
 const string: Schema = { type: 'string' }
 const integer: Schema = { type: 'integer', minimum: 1 }
 const id: Schema = { type: 'string', format: 'uuid' }
-const minor: Schema = { type: 'string', pattern: '^\\d+$', description: '통화 최소 단위의 정확한 정수 문자열. USD는 센트, KRW·JPY는 원·엔.' }
-const currency: Schema = { type: 'string', enum: ['KRW', 'JPY', 'USD'] }
+const minor: Schema = { type: 'string', pattern: '^\\d+$', description: '통화 최소 단위의 정확한 정수 문자열. KRW·JPY·VND는 주 단위, 나머지 지원 통화는 주 단위의 1/100.' }
+const currency: Schema = { type: 'string', enum: CURRENCY_CODES }
 const status: Schema = { type: 'string', enum: ['RECORDING', 'CONFIRMED', 'LOCKED', 'COMPLETED'] }
 const timestamp: Schema = { type: 'integer', format: 'int64', description: 'UTC epoch seconds' }
 const nullableTimestamp: Schema = { ...timestamp, nullable: true }
@@ -26,11 +27,11 @@ const versionBody = object({ expectedVersion: integer }, ['expectedVersion'])
 const settlementCheckBody = object({ expectedVersion: integer, checked: { type: 'boolean' }, senderId: { ...id, description: '생략하면 본인의 모든 수취 건, 지정하면 해당 송금자의 한 건만 변경합니다.' } }, ['expectedVersion', 'checked'])
 const expenseFields = {
   description: string,
-  amount: { type: 'string', pattern: '^\\d+(\\.\\d{1,2})?$', description: '양의 십진 문자열. KRW·JPY는 정수, USD는 소수 최대 2자리. 통화의 주 단위 기준 지출 한 건 최대 100,000,000. 숫자·지수표기·쉼표·환불 금액은 거부.' },
+  amount: { type: 'string', pattern: '^\\d+(\\.\\d{1,2})?$', description: '양의 십진 문자열. KRW·JPY·VND는 정수, 나머지 지원 통화는 소수 최대 2자리. 통화의 주 단위 기준 지출 한 건 최대 100,000,000. 숫자·지수표기·쉼표·환불 금액은 거부.' },
   payerId: id,
   splitMode: { type: 'string', enum: ['ALL', 'SELECTED', 'CUSTOM'] },
   participantIds: { type: 'array', items: id, minItems: 1, uniqueItems: true, description: 'SELECTED 생성 시 필수이며 수정 시 생략하면 이전 부담자를 유지합니다. ALL은 서버가 회차의 제외되지 않은 전원으로 결정. CUSTOM에서는 보내지 않습니다.' },
-  customShares: { ...array(object({ userId: id, amount: { type: 'string', pattern: '^\\d+(\\.\\d{1,2})?$', description: '회차 통화 주 단위의 양의 부담금 문자열. KRW·JPY는 정수, USD는 소수 최대 2자리.' } }, ['userId', 'amount'])), minItems: 1, maxItems: MAX_GROUP_MEMBERS, description: 'CUSTOM 생성·전환 시 필수. 제외되지 않은 부담자별 정확한 금액이며 userId 중복은 금지합니다. 합계는 총 amount와 같아야 합니다. 기존 CUSTOM 수정에서 생략하면 이전 부담금을 유지합니다. ALL·SELECTED에서는 보내지 않습니다.' },
+  customShares: { ...array(object({ userId: id, amount: { type: 'string', pattern: '^\\d+(\\.\\d{1,2})?$', description: '회차 통화 주 단위의 양의 부담금 문자열. KRW·JPY·VND는 정수, 나머지 지원 통화는 소수 최대 2자리.' } }, ['userId', 'amount'])), minItems: 1, maxItems: MAX_GROUP_MEMBERS, description: 'CUSTOM 생성·전환 시 필수. 제외되지 않은 부담자별 정확한 금액이며 userId 중복은 금지합니다. 합계는 총 amount와 같아야 합니다. 기존 CUSTOM 수정에서 생략하면 이전 부담금을 유지합니다. ALL·SELECTED에서는 보내지 않습니다.' },
   expectedVersion: integer,
 }
 const pageParameters = [
@@ -130,7 +131,7 @@ const domainPaths = {
   },
   '/api/groups/{groupId}/rounds': {
     get: operation('모임', '본인 참여 권한이 있는 모임 회차 목록', { response: ref('RoundPage'), parameters: [...pageParameters, roundSearchParameter] }),
-    post: operation('모임', '선택한 멤버로 기록 시작', { mutation: true, request: { ...object({ name: string, currency, participantIds: { type: 'array', items: id, minItems: 2, maxItems: MAX_GROUP_MEMBERS, uniqueItems: true, description: '현재 활성 모임 멤버 중 요청자 자신을 반드시 포함합니다.' } }, ['name', 'currency', 'participantIds']), additionalProperties: false }, description: '모든 활성 모임 참여자가 요청자 자신을 포함한 최소 2명과 USD·KRW·JPY 중 통화를 선택해 회차를 만들 수 있습니다. 요청자가 회차 생성자가 되어 해당 회차 수명주기와 전체 지출을 관리하며, 모임 생성자는 필수 참여자가 아닙니다. currency는 필수이고 같은 모임에서도 회차마다 다른 통화를 선택할 수 있습니다. 생성 후 통화는 변경할 수 없고 과거 회차의 통화는 보존합니다. 미완료 회차가 있어도 생성할 수 있습니다.' }),
+    post: operation('모임', '선택한 멤버로 기록 시작', { mutation: true, request: { ...object({ name: string, currency, participantIds: { type: 'array', items: id, minItems: 2, maxItems: MAX_GROUP_MEMBERS, uniqueItems: true, description: '현재 활성 모임 멤버 중 요청자 자신을 반드시 포함합니다.' } }, ['name', 'currency', 'participantIds']), additionalProperties: false }, description: '모든 활성 모임 참여자가 요청자 자신을 포함한 최소 2명과 지원 통화 중 하나를 선택해 회차를 만들 수 있습니다. 요청자가 회차 생성자가 되어 해당 회차 수명주기와 전체 지출을 관리하며, 모임 생성자는 필수 참여자가 아닙니다. currency는 필수이고 같은 모임에서도 회차마다 다른 통화를 선택할 수 있습니다. 생성 후 통화는 변경할 수 없고 과거 회차의 통화는 보존합니다. 미완료 회차가 있어도 생성할 수 있습니다.' }),
   },
   '/api/groups/{groupId}/invites': { post: operation('모임', '7일 유효 초대 발급·재발급', { mutation: true, request: object({ replaceInviteId: id }), description: '모임 생성자가 발급하며 원문 링크는 최초 응답에서만 제공합니다. 같은 키 재시도는 inviteId와 linkUnavailable을 반환합니다. 새 키와 replaceInviteId로 이전 초대를 폐기하며 다시 발급합니다.' }) },
   '/api/groups/{groupId}/invites/{inviteId}': { delete: operation('모임', '모임 생성자가 초대 폐기', { mutation: true }) },
@@ -158,7 +159,7 @@ const domainPaths = {
   '/api/rounds/{roundId}/complete': { post: roundCommand('모든 송금 수취 확인 후 정산 종료', '회차 생성자만 최종 금액이 저장된 LOCKED 회차에서 모든 송금 건의 수취가 확인된 경우 COMPLETED로 바꿉니다. 송금 건이 없으면 별도 확인 없이 종료할 수 있습니다. 완료 데이터는 누구도 수정할 수 없고 해당 회차의 탈퇴 차단을 해제합니다.') },
   '/api/rounds/{roundId}/force-complete': { post: roundCommand('정산 강제 종료', '회차 생성자만 최종 금액이 저장된 LOCKED 회차를 수취 확인과 무관하게 COMPLETED로 바꿉니다. 미확인 송금 건은 null로 보존하며 완료 후 누구도 확인이나 정산 데이터를 변경할 수 없습니다.') },
   '/api/rounds/{roundId}/settlement-check': { post: operation('정산', '본인의 송금 건별 수취 확인 설정', { mutation: true, request: settlementCheckBody, description: '최종 금액이 저장된 LOCKED 회차에서 수취인 본인만 확인을 설정하거나 해제합니다. senderId를 지정하면 해당 송금 건만, 생략하면 본인의 모든 수취 건을 변경합니다. 확인 변경은 회차 version을 올리지 않아 같은 수취인의 여러 건을 동시에 저장할 수 있습니다. 완료 후에는 변경할 수 없습니다.' }) },
-  '/api/rounds/{roundId}/settlement': { get: operation('정산', '본인의 개인 지급·수취 안내', { response: ref('Settlement'), description: '최종 저장 전에는 대기 상태만 반환합니다. 최종 금액은 고정하며 KRW에서는 본인이 지급할 수취인의 최신 계좌만 조회합니다. 지급·수취 상대의 이름과 활성 회원의 최신 카카오 프로필 이미지를 반환하고 탈퇴자의 이미지는 null로 반환합니다. 각 수취 건의 확인 시각과 수취인별 전체 완료 상태를 반환하며, 강제 종료 뒤에도 미확인 건은 null로 보존합니다. USD·JPY와 수취 내역에는 계좌 필드가 없습니다. 모임·회차 생성자도 같은 공개 범위이며 링크는 로그인한 본인의 정보만 보여 줍니다.' }) },
+  '/api/rounds/{roundId}/settlement': { get: operation('정산', '본인의 개인 지급·수취 안내', { response: ref('Settlement'), description: '최종 저장 전에는 대기 상태만 반환합니다. 최종 금액은 고정하며 KRW에서는 본인이 지급할 수취인의 최신 계좌만 조회합니다. 지급·수취 상대의 이름과 활성 회원의 최신 카카오 프로필 이미지를 반환하고 탈퇴자의 이미지는 null로 반환합니다. 각 수취 건의 확인 시각과 수취인별 전체 완료 상태를 반환하며, 강제 종료 뒤에도 미확인 건은 null로 보존합니다. KRW 이외 통화와 수취 내역에는 계좌 필드가 없습니다. 모임·회차 생성자도 같은 공개 범위이며 링크는 로그인한 본인의 정보만 보여 줍니다.' }) },
 }
 const documentedDomainPaths = Object.fromEntries(Object.entries(domainPaths).map(([path, operations]) => [path, {
   parameters: [...path.matchAll(/\{([^}]+)\}/g)].map(([, name]) => ({ name, in: 'path', required: true, schema: name === 'token' ? string : id })),
