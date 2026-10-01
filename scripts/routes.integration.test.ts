@@ -6,6 +6,7 @@ import sharp from 'sharp'
 import { ACCESS_TOKEN_COOKIE_NAME, readAccessToken } from '../src/lib/auth.ts'
 import { signInKakao } from '../src/lib/auth-store.ts'
 import { createDatabaseClient } from '../src/lib/db.ts'
+import { CURRENCY_CODES } from '../src/lib/money.ts'
 import { GET as dispatch } from '../src/app/api/[...path]/route.ts'
 import { GET as me } from '../src/app/api/me/route.ts'
 import { applyMigrations } from './migrations.mjs'
@@ -58,7 +59,7 @@ test('Route Handler contracts enforce cookies, origin, idempotency, normalized i
     assert.equal(preview.isMember, false)
     assert.equal('currency' in preview, false)
     assert.equal((await request(`invites/${token}/accept`, b.accessToken, 'POST')).status, 200)
-    for (const currency of [undefined, 'EUR']) {
+    for (const currency of [undefined, 'XXX']) {
       const rejected = await request(`groups/${groupId}/rounds`, a.accessToken, 'POST', { name: '통화 필요', participantIds: [a.userId, b.userId], ...(currency === undefined ? {} : { currency }) })
       assert.equal(rejected.status, 400)
       assert.equal((await rejected.json()).error, 'unsupported_currency')
@@ -74,11 +75,11 @@ test('Route Handler contracts enforce cookies, origin, idempotency, normalized i
     const created = await request(`groups/${groupId}/rounds`, a.accessToken, 'POST', { name: 'API 회차', currency: 'KRW', participantIds: [a.userId, b.userId] })
     assert.equal(created.status, 200)
     const roundId = (await created.json()).data.id
-    for (const currency of ['USD', 'JPY']) {
+    for (const currency of CURRENCY_CODES) {
       const foreign = await request(`groups/${groupId}/rounds`, a.accessToken, 'POST', { name: `${currency} API 회차`, currency, participantIds: [a.userId, b.userId] })
       assert.equal(foreign.status, 200)
       const foreignId = (await foreign.json()).data.id
-      const saved = await request(`rounds/${foreignId}/expenses`, a.accessToken, 'POST', { description: '회차 통화', amount: currency === 'USD' ? '10.25' : '1025', payerId: b.userId, splitMode: 'ALL', expectedVersion: 1 })
+      const saved = await request(`rounds/${foreignId}/expenses`, a.accessToken, 'POST', { description: '회차 통화', amount: ['KRW', 'JPY', 'VND'].includes(currency) ? '1025' : '10.25', payerId: b.userId, splitMode: 'ALL', expectedVersion: 1 })
       assert.equal(saved.status, 200)
       const current = (await (await request(`rounds/${foreignId}`, a.accessToken)).json()).data
       assert.equal(current.groupId, groupId)

@@ -10,6 +10,7 @@ import { signInKakao } from '../src/lib/auth-store.ts'
 import { ACCESS_TOKEN_COOKIE_NAME, REFRESH_TOKEN_COOKIE_NAME } from '../src/lib/auth.ts'
 import { withWriteTransaction } from '../src/lib/db.ts'
 import { BANKS, formatAccountNumber } from '../src/lib/bank-account.ts'
+import { CURRENCIES, CURRENCY_CODES } from '../src/lib/money.ts'
 
 const database = process.env.TEST_DATABASE_URL
 assert.ok(database && ['localhost', '127.0.0.1', '[::1]'].includes(new URL(database).hostname), 'TEST_DATABASE_URL must point to an isolated local PostgreSQL database')
@@ -186,9 +187,36 @@ try {
       await evaluate("document.querySelector('.bank-select-trigger').click()")
       await waitFor("Boolean(document.querySelector('.bank-sheet[open]'))")
       await evaluate("Promise.all(document.querySelector('.bank-sheet').getAnimations().map(animation => animation.finished))")
-      assert.equal(await evaluate("document.querySelectorAll('.bank-tile').length"), 3)
-      await waitFor("Array.from(document.querySelectorAll('.currency-sheet img')).length === 3 && Array.from(document.querySelectorAll('.currency-sheet img')).every(img => img.complete && img.naturalWidth > 0)")
-      assert.deepEqual(await evaluate("[getComputedStyle(document.querySelector('.currency-sheet')).backgroundColor, getComputedStyle(document.querySelector('.currency-sheet .bank-grid')).flexDirection]"), ['rgb(255, 255, 255)', 'column'])
+      assert.equal(await evaluate("document.querySelectorAll('.bank-tile').length"), CURRENCY_CODES.length)
+      await waitFor(`Array.from(document.querySelectorAll('.currency-sheet img')).length === ${CURRENCY_CODES.length} && Array.from(document.querySelectorAll('.currency-sheet img')).every(img => img.complete && img.naturalWidth > 0)`)
+      assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.bank-tile span'), item => item.textContent)"), CURRENCY_CODES.map(code => CURRENCIES[code].name))
+      assert.deepEqual(await evaluate("[getComputedStyle(document.querySelector('.currency-sheet')).backgroundColor, getComputedStyle(document.querySelector('.currency-sheet .bank-grid')).flexDirection]"), ['rgb(247, 248, 250)', 'column'])
+      await waitFor("!document.querySelector('.currency-sheet .bank-grid').dataset.scrolling")
+      await waitFor("getComputedStyle(document.querySelector('.currency-sheet .bank-grid'), '::-webkit-scrollbar-thumb').backgroundColor === 'rgba(0, 0, 0, 0)'")
+      await evaluate("document.querySelector('.currency-search input').focus(); document.querySelector('.currency-sheet .bank-grid').scrollTop = 80")
+      await waitFor("Boolean(document.querySelector('.currency-sheet .bank-grid').dataset.scrolling)")
+      assert.deepEqual(await evaluate("(() => { const list = document.querySelector('.currency-sheet .bank-grid'); const track = getComputedStyle(list, '::-webkit-scrollbar-track'); const thumb = getComputedStyle(list, '::-webkit-scrollbar-thumb'); return [getComputedStyle(list).overflowY, track.backgroundColor, track.borderLeftWidth, thumb.backgroundColor, thumb.borderLeftWidth, list.scrollTop > 0]; })()"), ['auto', 'rgba(0, 0, 0, 0)', '0px', 'rgba(107, 118, 132, 0.45)', '2px', true])
+      if (width === 1024) {
+        const clip = await evaluate("(() => { const list = document.querySelector('.currency-sheet .bank-grid'); const rect = list.getBoundingClientRect(); return { x: Math.floor(rect.right - 10), y: Math.floor(rect.top + (list.scrollTop + list.clientHeight / 2) * list.clientHeight / list.scrollHeight), width: 10, height: 1, scale: 1 }; })()")
+        const thumbWidth = async () => {
+          const shot = await cdp('Page.captureScreenshot', { format: 'png', clip })
+          const { data, info } = await sharp(Buffer.from(shot.data, 'base64')).raw().toBuffer({ resolveWithObject: true })
+          return Array.from({ length: info.width }, (_, x) => data[x * info.channels]).filter(red => red < 210).length
+        }
+        const normalWidth = await thumbWidth()
+        assert.ok(normalWidth > 0, 'Scrolling shows the scrollbar thumb')
+        await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: clip.x + 5, y: clip.y })
+        await waitFor("Boolean(document.querySelector('.currency-sheet .bank-grid').dataset.scrollbarHovered)")
+        assert.ok(await thumbWidth() > normalWidth, 'Hover makes the visible scrollbar thumb wider')
+        await waitFor("!document.querySelector('.currency-sheet .bank-grid').dataset.scrolling")
+        assert.ok(await thumbWidth() > normalWidth, 'Hover keeps the thumb visible after scrolling stops')
+        await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 0, y: 0 })
+      }
+      await waitFor("!document.querySelector('.currency-sheet .bank-grid').dataset.scrolling")
+      await waitFor("(() => { const color = getComputedStyle(document.querySelector('.currency-sheet .bank-grid'), '::-webkit-scrollbar-thumb').backgroundColor; const alpha = Number(color.match(/, ([\\d.]+)\\)$/)?.[1]); return alpha > 0 && alpha < .45; })()", 'Scrollbar thumb fades out')
+      await waitFor("getComputedStyle(document.querySelector('.currency-sheet .bank-grid'), '::-webkit-scrollbar-thumb').backgroundColor === 'rgba(0, 0, 0, 0)'")
+      await evaluate("document.querySelector('.currency-sheet .bank-grid').scrollTop = 0")
+      assert.equal(await evaluate("getComputedStyle(document.querySelector('.currency-sheet img')).borderTopWidth"), '0px')
       assert.equal(await evaluate("document.querySelectorAll('.bank-tile svg').length"), 0)
       assert.equal(await evaluate("getComputedStyle(document.querySelector('.bank-tile[aria-pressed=true]')).backgroundColor"), 'rgb(230, 244, 255)')
       await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 })
@@ -200,7 +228,16 @@ try {
       await evaluate("document.querySelector('.bank-sheet-header button').click()")
       await waitFor("!document.querySelector('.bank-sheet[open]')")
     }
-    for (const currency of ['JPY', 'KRW', 'USD']) {
+    await evaluate("document.querySelector('.bank-select-trigger').click()")
+    await waitFor("Boolean(document.querySelector('.bank-sheet[open]'))")
+    for (const [search, expected] of [['일본', ['JPY']], ['usd', ['USD']], ['마카오', ['HKD', 'MOP']], ['캄보디아', ['USD', 'KHR']], ['몰디브', ['USD', 'MVR']], ['독일', ['EUR']], ['없는나라', []]]) {
+      await fill('.currency-search input', search)
+      await waitFor(`document.querySelectorAll('.bank-tile').length === ${expected.length}`)
+      assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.bank-tile'), button => button.dataset.value)"), expected)
+    }
+    await evaluate("document.querySelector('.bank-sheet-header button').click()")
+    await waitFor("!document.querySelector('.bank-sheet[open]')")
+    for (const currency of [...CURRENCY_CODES.filter(code => code !== 'USD'), 'USD']) {
       await fill('[name=currency]', currency)
       assert.equal(await evaluate("new FormData(document.querySelector('form')).get('currency')"), currency)
     }
@@ -337,6 +374,22 @@ try {
       await waitFor(`location.pathname === ${JSON.stringify(path)} && Boolean(document.querySelector('.round-search-bar input'))`)
       assert.deepEqual(await evaluate("(() => { const input = document.querySelector('.round-search-bar input'); const bar = input.parentElement; const shadow = getComputedStyle(bar).boxShadow; input.focus(); const style = getComputedStyle(bar); return [getComputedStyle(input).outlineStyle, style.outlineStyle, style.boxShadow === shadow, style.borderColor]; })()"), ['none', 'none', true, 'rgb(93, 196, 252)'])
     }
+    for (const [currency, amount, input, display] of [['EUR', '1234.01', '1,234.01', '1,234.01 EUR'], ['VND', '1234', '1,234', '1,234 VND']]) {
+      const round = await api(roundPartner.session, `/api/groups/${customGroupId}/rounds`, 'POST', { name: `${currency} 화면 검증`, currency, participantIds: [newcomer.session.userId, roundPartner.session.userId] })
+      await navigate(`/home/rounds/${round.id}`, `${currency} 화면 검증`)
+      await click('지출 추가')
+      await fill('[name=description]', `${currency} 지출`)
+      await fill('[name=amount]', amount)
+      assert.equal(await evaluate("document.querySelector('[name=amount]').inputMode"), currency === 'VND' ? 'numeric' : 'decimal')
+      await click('지출 저장')
+      await waitFor("!document.querySelector('#expense-editor')")
+      await waitFor(hasText(display))
+      await waitFor(`document.querySelector('.round-total-money').textContent === ${JSON.stringify(display)}`)
+      await click('수정')
+      await waitFor("Boolean(document.querySelector('#expense-editor'))")
+      assert.equal(await evaluate("document.querySelector('[name=amount]').value"), input)
+      await click('닫기')
+    }
     assert.deepEqual(exceptions, [])
     console.log('PASS custom controls: required bank, Escape/focus, group/round creation, currency/payer selection, expense validation/save/edit, settlement sharing/remaining outgoing amounts, account save, search focus, 320/390/1024px layouts')
     console.log(`Browser evidence: ${artifactDir}`)
@@ -385,7 +438,7 @@ try {
   await evaluate("document.querySelector('button[aria-label=\"현재 멤버 목록 닫기\"]').click()")
   await waitFor("!document.querySelector('#group-members-dialog[open]')")
   assert.equal(await evaluate("document.querySelector('[name=currency]').value"), 'KRW')
-  assert.deepEqual(await evaluate("Array.from(document.querySelector('[name=currency]').options, option => option.value)"), ['KRW', 'USD', 'JPY'])
+  assert.deepEqual(await evaluate("Array.from(document.querySelector('[name=currency]').options, option => option.value)"), CURRENCY_CODES)
   await evaluate(`document.querySelector('input[name=participantIds][value="${extraD.session.userId}"]').click(); document.querySelector('input[name=participantIds][value="${extraE.session.userId}"]').click()`)
   assert.equal(await evaluate("document.querySelectorAll('input[name=participantIds]:checked').length"), 3)
   await fill('[name=name]', '지출과 제외 검증')

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { CURRENCY_CODES } from './money.ts'
 import { openApiDocument } from './openapi.ts'
 
 test('OpenAPI document uses the Swagger UI-compatible 3.0 dialect', () => {
@@ -96,7 +97,7 @@ test('OpenAPI component references resolve and financial privacy rules remain ex
   }
   check(document)
   assert.match(paths['/api/rounds/{roundId}/settlement'].get.description, /본인이 지급할 수취인의 최신 계좌/)
-  assert.match(paths['/api/rounds/{roundId}/settlement'].get.description, /USD·JPY와 수취 내역에는 계좌 필드가 없습니다/)
+  assert.match(paths['/api/rounds/{roundId}/settlement'].get.description, /KRW 이외 통화와 수취 내역에는 계좌 필드가 없습니다/)
   assert.match(paths['/api/rounds/{roundId}/settlement'].get.description, /각 수취 건의 확인 시각/)
   assert.ok((openApiDocument.components.schemas.Settlement as DocumentedSchema).required?.includes('confirmations'))
   assert.deepEqual((openApiDocument.components.schemas.SettlementConfirmation as DocumentedSchema).required, ['userId', 'displayName', 'profileImageUrl', 'checkedAt'])
@@ -107,7 +108,7 @@ test('OpenAPI component references resolve and financial privacy rules remain ex
   assert.match(paths['/api/auth/withdraw'].post.description, /deletedAt/)
   assert.match(paths['/api/rounds/{roundId}/send'].post.description, /실제 메시지를 전송하지 않습니다/)
   assert.equal(openApiDocument.components.schemas.MinorAmount.type, 'string')
-  assert.deepEqual(openApiDocument.components.schemas.Currency.enum, ['KRW', 'JPY', 'USD'])
+  assert.deepEqual(openApiDocument.components.schemas.Currency.enum, CURRENCY_CODES)
 })
 
 test('currency is required on round creation and absent from groups and invitation previews', () => {
@@ -118,7 +119,7 @@ test('currency is required on round creation and absent from groups and invitati
 
   const roundInput = paths['/api/groups/{groupId}/rounds'].post.requestBody!.content['application/json'].schema as DocumentedSchema
   assert.deepEqual(roundInput.required, ['name', 'currency', 'participantIds'])
-  assert.deepEqual(roundInput.properties!.currency.enum, ['KRW', 'JPY', 'USD'])
+  assert.deepEqual(roundInput.properties!.currency.enum, CURRENCY_CODES)
   assert.equal(roundInput.additionalProperties, false)
   assert.match(paths['/api/groups/{groupId}/rounds'].post.description, /같은 모임에서도 회차마다 다른 통화/)
   assert.match(paths['/api/groups/{groupId}/rounds'].post.description, /생성 후 통화는 변경할 수 없고 과거 회차의 통화는 보존/)
@@ -133,7 +134,7 @@ test('currency is required on round creation and absent from groups and invitati
   assert.equal(roundInput.properties!.participantIds.maxItems, 10)
   assert.match(paths['/api/invites/{token}/accept'].post.description, /group_member_limit_exceeded/)
   const round = openApiDocument.components.schemas.Round as DocumentedSchema
-  assert.deepEqual(round.properties!.currency.enum, ['KRW', 'JPY', 'USD'])
+  assert.deepEqual(round.properties!.currency.enum, CURRENCY_CODES)
 })
 
 test('round lists document group and round name search', () => {
