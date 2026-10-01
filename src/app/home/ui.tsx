@@ -125,12 +125,24 @@ export function SheetSelect({ label, name, title, value, onChange, options, disa
   const dialogRef = useRef<HTMLDialogElement>(null)
   const trigger = useRef<HTMLButtonElement>(null)
   const closing = useRef(false)
+  const scrollTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const [opened, setOpened] = useState(false)
+  const [scrolling, setScrolling] = useState(false)
+  const [scrollbarHovered, setScrollbarHovered] = useState(false)
   const [search, setSearch] = useState('')
+  useEffect(() => () => clearTimeout(scrollTimer.current), [])
+  function showScrollbar() {
+    setScrolling(true)
+    clearTimeout(scrollTimer.current)
+    scrollTimer.current = setTimeout(() => setScrolling(false), 800)
+  }
   const filtered = options.filter(option => `${option.label} ${option.searchText ?? ''}`.toLocaleLowerCase('ko-KR').includes(search.trim().toLocaleLowerCase('ko-KR')))
   const selected = options.find(option => option.value === value)
   function open() {
     if (disabled || closing.current) return
+    clearTimeout(scrollTimer.current)
+    setScrolling(false)
+    setScrollbarHovered(false)
     setSearch('')
     dialogRef.current?.showModal()
     setOpened(true)
@@ -161,7 +173,7 @@ export function SheetSelect({ label, name, title, value, onChange, options, disa
     <dialog aria-labelledby={`${id}-title`} className={`bank-sheet ${sheetClassName ?? ''}`} id={`${id}-sheet`} onCancel={event => { event.preventDefault(); void close() }} onClick={event => { if (event.target === event.currentTarget) void close() }} onClose={() => { setOpened(false); trigger.current?.focus() }} ref={dialogRef}>
       <div className="bank-sheet-content"><div className="bank-sheet-handle" aria-hidden="true" /><header className="bank-sheet-header"><h2 id={`${id}-title`}>{title}</h2><button aria-label={`${label} 닫기`} className="icon-button" onClick={() => void close()} type="button"><X aria-hidden="true" size={20} /></button></header>
         {searchPlaceholder && <div className="round-search-bar currency-search"><Search aria-hidden="true" size={21} /><input aria-label={searchPlaceholder} autoComplete="off" maxLength={100} onChange={event => setSearch(event.target.value)} placeholder={searchPlaceholder} type="search" value={search} /></div>}
-        <div aria-label={`${label} 목록`} className="bank-grid" role="group">{filtered.map(option => <button aria-pressed={value === option.value} className="bank-tile" data-value={option.value} key={option.value} onClick={() => choose(option.value)} type="button">{option.icon}<span>{option.label}</span></button>)}</div>
+        <div aria-label={`${label} 목록`} className="bank-grid" data-scrolling={scrolling || undefined} data-scrollbar-hovered={scrollbarHovered || undefined} onPointerMove={event => { const list = event.currentTarget; setScrollbarHovered(event.pointerType === 'mouse' && event.clientX >= list.getBoundingClientRect().left + list.clientLeft + list.clientWidth) }} onPointerLeave={() => setScrollbarHovered(false)} onScroll={showScrollbar} role="group">{filtered.map(option => <button aria-pressed={value === option.value} className="bank-tile" data-value={option.value} key={option.value} onClick={() => choose(option.value)} type="button">{option.icon}<span>{option.label}</span></button>)}</div>
         {filtered.length === 0 && <p className="help-text" role="status">검색 결과가 없어요.</p>}
       </div>
     </dialog>
