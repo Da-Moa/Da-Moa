@@ -1,9 +1,8 @@
-import type { Client } from '@neondatabase/serverless'
-import { createDatabaseClient } from './db-client.mjs'
+import type { PoolClient } from 'pg'
+import { getDatabasePool } from './db-client.mjs'
 export { createDatabaseClient } from './db-client.mjs'
 
-export type Database = Client
-
+export type Database = PoolClient
 
 function connectionString() {
   const value = process.env.DATABASE_URL || process.env.POSTGRES_URL
@@ -11,10 +10,10 @@ function connectionString() {
   return value
 }
 
-async function transaction<T>(write: boolean, work: (client: Client) => Promise<T>): Promise<T> {
-  const client = createDatabaseClient(connectionString())
+async function transaction<T>(write: boolean, work: (client: Database) => Promise<T>): Promise<T> {
+  const client = await getDatabasePool(connectionString()).connect()
+  let discard = false
   try {
-    await client.connect()
     await client.query(write ? 'BEGIN' : 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
     await client.query("SET LOCAL statement_timeout = '15s'")
     await client.query("SET LOCAL lock_timeout = '10s'")
@@ -24,17 +23,17 @@ async function transaction<T>(write: boolean, work: (client: Client) => Promise<
     await client.query('COMMIT')
     return result
   } catch (error) {
-    try { await client.query('ROLLBACK') } catch { /* A lost COMMIT response is resolved with the request key. */ }
+    try { await client.query('ROLLBACK') } catch { discard = true /* A lost COMMIT response is resolved with the request key. */ }
     throw error
   } finally {
-    try { await client.end() } catch (error) { console.error('Database client cleanup failed', error) }
+    client.release(discard)
   }
 }
 
-export function withWriteTransaction<T>(work: (client: Client) => Promise<T>): Promise<T> {
+export function withWriteTransaction<T>(work: (client: Database) => Promise<T>): Promise<T> {
   return transaction(true, work)
 }
 
-export function withReadTransaction<T>(work: (client: Client) => Promise<T>): Promise<T> {
+export function withReadTransaction<T>(work: (client: Database) => Promise<T>): Promise<T> {
   return transaction(false, work)
 }

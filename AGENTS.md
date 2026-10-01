@@ -63,7 +63,7 @@ Use the existing plain CSS and shared components. `src/app/globals.css` is the s
 
 ## Development and verification
 
-Use Node.js 22.18 or newer. Local development uses Docker PostgreSQL; deployed environments use their own Neon database. Follow the README and `.env.example` for setup rather than embedding environment values in code.
+Use Node.js 22.18 or newer. Local development and production use PostgreSQL; application transactions use the shared `pg` connection pool. Follow the README and `.env.example` for setup rather than embedding environment values in code.
 
 - `npm test` runs the existing `node:test`/`tsx` checks. `npm run build` is the other CI check. Use focused existing tests while iterating, and run both for application changes.
 - For DB, transaction, or Route Handler changes, use `npm run test:integration` with an explicitly configured local `TEST_DATABASE_URL` whose database name contains `test`. These tests write data; follow the README's isolation requirements.

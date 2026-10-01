@@ -14,6 +14,7 @@ channel('da-moa.db.query').subscribe(() => { queries++ })
 channel('da-moa.api.exception').subscribe(() => { exceptions++ })
 
 export async function collectDatabaseMetrics() {
+  // Probe independently so a saturated application pool cannot hide DB capacity.
   let client
   try {
     client = createDatabaseClient(process.env.DATABASE_URL || process.env.POSTGRES_URL, {
