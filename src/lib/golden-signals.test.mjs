@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { test } from 'node:test'
-import { Client } from '@neondatabase/serverless'
+import { Client } from 'pg'
 import { createDatabaseClient } from './db-client.mjs'
 import { collectDatabaseMetrics, httpMetrics, trackHttpResponse } from './http-metrics.mjs'
 import { AppError, errorResponse } from './errors.ts'
