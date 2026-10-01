@@ -1,15 +1,9 @@
-import { Client, type ClientConfig } from '@neondatabase/serverless'
-import { Socket } from 'node:net'
+import type { Client } from '@neondatabase/serverless'
+import { createDatabaseClient } from './db-client.mjs'
+export { createDatabaseClient } from './db-client.mjs'
 
 export type Database = Client
 
-export function createDatabaseClient(value: string) {
-  const url = new URL(value)
-  // Local development uses PostgreSQL directly; hosted Neon retains its secure WebSocket transport.
-  const local = ['localhost', '127.0.0.1', '[::1]', 'postgres'].includes(url.hostname)
-  // The bundled pg connection takes a stream instance; its public type incorrectly describes a factory.
-  return new Client({ connectionString: value, connectionTimeoutMillis: 10_000, ...(local ? { stream: new Socket() as unknown as ClientConfig['stream'], ssl: false } : {}) })
-}
 
 function connectionString() {
   const value = process.env.DATABASE_URL || process.env.POSTGRES_URL

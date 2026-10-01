@@ -2,7 +2,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { createServer } from 'node:http'
 import next from 'next'
 import { WebSocketServer } from 'ws'
-import { httpMetrics, trackHttpResponse } from './src/lib/http-metrics.mjs'
+import { collectDatabaseMetrics, httpMetrics, trackHttpResponse } from './src/lib/http-metrics.mjs'
 
 const portArg = process.argv.findIndex(value => value === '--port' || value === '-p')
 const port = Number(portArg < 0 ? process.env.PORT || 3000 : process.argv[portArg + 1])
@@ -109,6 +109,10 @@ setInterval(() => {
 }, 60000)
 
 await app.prepare()
+if (metricsPort !== null) {
+  await collectDatabaseMetrics()
+  setInterval(collectDatabaseMetrics, 30000).unref()
+}
 if (metricsPort !== null) createServer((request, response) => {
   if (request.method !== 'GET' || request.url !== '/metrics') { response.writeHead(404).end(); return }
   response.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8', 'Cache-Control': 'no-store' }).end(httpMetrics())
