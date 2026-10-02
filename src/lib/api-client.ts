@@ -60,7 +60,21 @@ async function fingerprint(path: string, method: string, body: unknown): Promise
   return JSON.stringify([path, method, entries])
 }
 
-export async function apiRequest<T>(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal; response?: 'blob' } = {}): Promise<T> {
+type RequestOptions = { method?: string; body?: unknown; signal?: AbortSignal; response?: 'blob' }
+const readRequests = new Map<string, Promise<unknown>>()
+
+export function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  if ((options.method ?? 'GET') !== 'GET' || options.signal) return request<T>(path, options)
+  const key = JSON.stringify([path, options.response, getAccessToken()])
+  let pending = readRequests.get(key)
+  if (!pending) {
+    pending = request<T>(path, options).finally(() => { readRequests.delete(key) })
+    readRequests.set(key, pending)
+  }
+  return pending as Promise<T>
+}
+
+async function request<T>(path: string, options: RequestOptions): Promise<T> {
   const method = options.method ?? 'GET'
   const mutation = method !== 'GET'
   const operation = `${method} ${path}`
@@ -96,7 +110,7 @@ export async function apiRequest<T>(path: string, options: { method?: string; bo
   let response: Response
   try {
     response = await fetch(path, init)
-    if (response.status === 401 && !path.startsWith('/api/auth/')) {
+    if ((response.status === 401 || path === '/api/me' && response.status === 404) && !path.startsWith('/api/auth/')) {
       refreshRequest ??= fetch('/api/auth/refresh', { method: 'POST', credentials: 'same-origin', cache: 'no-store' })
         .then(async response => {
           if (response.ok) {
@@ -112,7 +126,8 @@ export async function apiRequest<T>(path: string, options: { method?: string; bo
         headers.set('Authorization', `Bearer ${getAccessToken()}`)
         response = await fetch(path, init)
       }
-      else if (refresh.status !== 401) throw new ApiError(refresh.status, 'storage_unavailable', '로그인 상태를 확인하지 못했어요. 입력을 유지했으니 다시 시도해 주세요.')
+      else if (refresh.status === 401) response = refresh
+      else throw new ApiError(refresh.status, 'storage_unavailable', '로그인 상태를 확인하지 못했어요. 입력을 유지했으니 다시 시도해 주세요.')
     }
   } catch (error) {
     if (error instanceof ApiError || error instanceof DOMException && error.name === 'AbortError') throw error

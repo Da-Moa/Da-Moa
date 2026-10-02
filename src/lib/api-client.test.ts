@@ -222,3 +222,68 @@ test('receipt retry retains its original version and bytes after a round refresh
   await apiRequest('/api/rounds/receipt-replay/expenses/expense/receipts', { method: 'POST', body: form('2') })
   assert.deepEqual(requests[0], requests[1])
 })
+
+test('overlapping GETs share a request but completed reads and different tokens stay independent', async () => {
+  fakeWindow()
+  let calls = 0
+  globalThis.fetch = async () => { calls++; return Response.json({ data: { sequence: calls } }) }
+  const first = apiRequest('/api/groups')
+  const duplicate = apiRequest('/api/groups')
+  assert.equal(first, duplicate)
+  await Promise.all([first, duplicate, apiRequest('/api/groups?q=other')])
+  assert.equal(calls, 2)
+  await apiRequest('/api/groups')
+  assert.equal(calls, 3)
+  const oldAccount = apiRequest('/api/me')
+  window.localStorage.setItem('da_moa_access', 'other-account-token')
+  await Promise.all([oldAccount, apiRequest('/api/me')])
+  assert.equal(calls, 5)
+})
+
+test('failed GETs are not cached and callers with AbortSignal remain independent', async () => {
+  fakeWindow()
+  let calls = 0
+  globalThis.fetch = async () => { calls++; return Response.json({ error: 'storage_unavailable' }, { status: 503 }) }
+  await assert.rejects(apiRequest('/api/groups'))
+  await assert.rejects(apiRequest('/api/groups'))
+  assert.equal(calls, 2)
+  const controller = new AbortController()
+  await Promise.allSettled([apiRequest('/api/groups', { signal: controller.signal }), apiRequest('/api/groups')])
+  assert.equal(calls, 4)
+})
+
+test('me 401 and 404 refresh once then retry once, while domain 404 never refreshes', async () => {
+  for (const status of [401, 404]) {
+    const redirects = fakeWindow()
+    const paths: string[] = []
+    globalThis.fetch = async (input, init) => {
+      paths.push(String(input))
+      if (input === '/api/auth/refresh') return Response.json({ data: { accessToken: 'renewed-token' } })
+      if (paths.length === 1) return Response.json({ error: 'not_found' }, { status })
+      assert.equal(new Headers(init?.headers).get('Authorization'), 'Bearer renewed-token')
+      return Response.json({ data: { id: 'member' } })
+    }
+    assert.deepEqual(await apiRequest('/api/me'), { id: 'member' })
+    assert.deepEqual(paths, ['/api/me', '/api/auth/refresh', '/api/me'])
+    assert.deepEqual(redirects, [])
+  }
+  const paths: string[] = []
+  globalThis.fetch = async input => { paths.push(String(input)); return Response.json({ error: 'not_found' }, { status: 404 }) }
+  await assert.rejects(apiRequest('/api/groups/missing'), error => error instanceof ApiError && error.status === 404)
+  assert.deepEqual(paths, ['/api/groups/missing'])
+})
+
+test('me refresh and retry failures stop without an authentication loop', async () => {
+  for (const refreshStatus of [200, 401, 503]) {
+    const redirects = fakeWindow()
+    const paths: string[] = []
+    globalThis.fetch = async input => {
+      paths.push(String(input))
+      if (input === '/api/auth/refresh') return Response.json({ data: { accessToken: 'renewed-token' } }, { status: refreshStatus })
+      return Response.json({ error: 'not_found' }, { status: 404 })
+    }
+    await assert.rejects(apiRequest('/api/me'), error => error instanceof ApiError && error.status === (refreshStatus === 200 ? 404 : refreshStatus))
+    assert.deepEqual(paths, refreshStatus === 200 ? ['/api/me', '/api/auth/refresh', '/api/me'] : ['/api/me', '/api/auth/refresh'])
+    assert.equal(redirects.length, refreshStatus === 401 ? 1 : 0)
+  }
+})

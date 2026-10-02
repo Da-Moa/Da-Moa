@@ -28,6 +28,7 @@ let nextId = 1
 const pending = new Map()
 const exceptions = []
 const dialogs = []
+const apiReads = []
 let loseNextExpenseResponse = false
 function cdp(method, params = {}) {
   const id = nextId++
@@ -44,6 +45,10 @@ ws.addEventListener('message', event => {
     if (!request) return
     clearTimeout(request.timer); pending.delete(message.id)
     if (message.error) request.reject(new Error(message.error.message)); else request.resolve(message.result)
+  }
+  if (message.method === 'Network.requestWillBeSent' && message.params.request.method === 'GET') {
+    const url = new URL(message.params.request.url)
+    if (url.origin === origin && url.pathname.startsWith('/api/')) apiReads.push(`${url.pathname}${url.search}`)
   }
   if (message.method === 'Runtime.exceptionThrown') exceptions.push(message.params.exceptionDetails.exception?.description ?? message.params.exceptionDetails.text)
   if (message.method === 'Page.javascriptDialogOpening') { dialogs.push(message.params.message); void cdp('Page.handleJavaScriptDialog', { accept: true }) }
@@ -72,6 +77,13 @@ async function waitFor(expression, label = expression) {
 }
 const hasText = text => `Boolean(document.body?.innerText.includes(${JSON.stringify(text)}))`
 async function navigate(path, text) { await cdp('Page.navigate', { url: new URL(path, origin).href }); if (text) await waitFor(hasText(text), text) }
+async function assertPageReads(start, groups = false) {
+  await new Promise(resolve => setTimeout(resolve, 700))
+  const reads = apiReads.slice(start)
+  assert.equal(reads.filter(path => path === '/api/me').length, 1, `one me read per navigation: ${reads}`)
+  if (groups) assert.equal(reads.filter(path => new URL(path, origin).pathname === '/api/groups').length, 1, `one groups read: ${reads}`)
+  for (const path of new Set(reads)) assert.equal(reads.filter(read => read === path).length, 1, `one initial resource read: ${path}`)
+}
 async function click(text) {
   await waitFor(`Array.from(document.querySelectorAll('button')).some(button => button.textContent.trim() === ${JSON.stringify(text)} && !button.disabled && button.getClientRects().length > 0)`, `enabled button ${text}`)
   await evaluate(`Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === ${JSON.stringify(text)} && !button.disabled && button.getClientRects().length > 0).click()`)
@@ -417,7 +429,17 @@ try {
   await navigate('/home', '함께 쓴 돈, 함께 정리해요')
   console.log('SETUP settlement regression uses legacy account fixtures seeded only in TEST_DATABASE_URL')
 
+  let readStart = apiReads.length
   await navigate('/home/groups', '새 모임 만들기')
+  await assertPageReads(readStart, true)
+  for (const [path, heading] of [['/home', '함께 쓴 돈, 함께 정리해요'], ['/home/history', '정산 기록'], ['/home/all', '계좌 설정'], ['/home/account', '내 정보'], ['/home/groups', '새 모임 만들기']]) {
+    readStart = apiReads.length
+    await waitFor(`Boolean(document.querySelector('a[href="${path}"]'))`)
+    await evaluate(`document.querySelector('a[href="${path}"]').click()`)
+    await waitFor(`location.pathname === '${path}' && ${hasText(heading)}`)
+    await assertPageReads(readStart, path === '/home/groups')
+  }
+  console.log('PASS direct entry and client navigation read me once and each page resource once, including groups and account')
   assert.equal(await evaluate("Boolean(document.querySelector('[name=currency]'))"), false)
   const groupName = `브라우저 검증 ${runId.slice(0, 6)}`
   await fill('[name=name]', groupName)

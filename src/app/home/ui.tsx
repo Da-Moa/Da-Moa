@@ -308,17 +308,21 @@ function RealtimeProvider({ accountId, reloadAccount, children }: { accountId: s
     }
     const retry = (event?: CloseEvent) => {
       if (disposed) return
-      reconnect = setTimeout(() => { void connect() }, event?.code === 4001 ? 0 : Math.min(30000, 1000 * 2 ** Math.min(attempts++, 5)))
+      reconnect = setTimeout(() => { void connect(true) }, event?.code === 4001 ? 0 : Math.min(30000, 1000 * 2 ** Math.min(attempts++, 5)))
     }
-    const connect = async () => {
+    const connect = async (refresh = false) => {
       try {
-        const account = await apiRequest<Account>('/api/me')
+        if (refresh) {
+          const account = await accountReload.current()
+          if (disposed) return
+          if (!account) { retry(); return }
+          if (account.id !== accountId) { window.location.reload(); return }
+        }
         if (disposed) return
-        if (account.id !== accountId) { window.location.reload(); return }
         const token = getAccessToken()
         if (!token) { retry(); return }
         socket = new WebSocket(`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/realtime`, ['da-moa', token])
-        socket.onopen = () => { attempts = 0; queue(['me', ...listeners.current.keys()]) }
+        socket.onopen = () => { attempts = 0; if (refresh) queue([...listeners.current.keys()]) }
         socket.onmessage = message => { const event = parseInvalidateEvent(message.data); if (event) queue(event.keys) }
         socket.onclose = retry
         socket.onerror = () => socket?.close()
@@ -341,20 +345,11 @@ export function AccountPanel() {
   const bankForm = useBankForm('/api/me/bank-account')
   const [draftVersion, setDraftVersion] = useState(account.bankVersion)
   const [formKey, setFormKey] = useState(0)
-  const [ready, setReady] = useState(false)
+  const [ready, setReady] = useState(true)
   const [saved, setSaved] = useState(false)
   const [editingBank, setEditingBank] = useState(false)
   const bankToggle = useRef<HTMLButtonElement>(null)
   const [blockedRounds, setBlockedRounds] = useState<{ id: string; name: string; groupName?: string }[]>([])
-  useEffect(() => {
-    let active = true
-    void reloadAccount().then(latest => {
-      if (!active) return
-      if (latest) { setDraftVersion(latest.bankVersion); setFormKey(key => key + 1); setReady(true) }
-      else action.setError(new Error('저장된 계좌를 확인하지 못했어요. 다시 불러와 주세요.'))
-    })
-    return () => { active = false }
-  }, [reloadAccount, action.setError])
   useEffect(() => {
     if (!saved) return
     const timer = window.setTimeout(() => setSaved(false), 3000)
@@ -439,6 +434,12 @@ export function AppShell({ children }: { children: ReactNode }) {
   const tabTitle = pathname === '/home/groups' ? '내 모임' : pathname === '/home/history' ? '정산 기록' : pathname === '/home/all' ? '전체' : null
   const topbarContent = pathname === '/home' ? <Link className="brand" href="/home" aria-label="다모아 홈"><img alt="다모아" height="38" src="/logo/da-moa-trans.png" width="46" /></Link> : tabTitle ? <h1 className="topbar-title">{tabTitle}</h1> : pathname.startsWith('/invites/') ? <span className="topbar-title">모임 초대</span> : null
   const me = useResource<Account>('/api/me')
+  const previousPath = useRef(pathname)
+  useEffect(() => {
+    if (previousPath.current === pathname) return
+    previousPath.current = pathname
+    void me.reload()
+  }, [pathname, me.reload])
   const account = me.data
   useEffect(() => {
     if (account && (account.purpose === 'onboarding' || !account.onboardingCompletedAt || account.deletedAt)) window.location.replace(`/onboarding?returnTo=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`)

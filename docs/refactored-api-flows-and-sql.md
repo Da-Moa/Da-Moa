@@ -71,6 +71,12 @@ SQL 기록과 아래 호출 수는 유효한 JWT가 Guard를 통과한 요청 �
 
 Access JWT는 localStorage에 저장하며 만료는 10분이다. 로그인 완료 시 Refresh JWT를 POST /api/auth/access-token으로 검증해 Access JWT를 받아 저장한다. Refresh는 HttpOnly 쿠키에 저장하고 서명·만료·종류·목적을 확인한다. 로그인·가입·갱신·로그아웃은 refresh_sessions를 읽거나 쓰지 않는다. sid는 JWT 발급 식별자일 뿐 DB 세션이 아니다. 갱신은 목적을 보존하며 onboarding의 원래 만료를 연장하지 않는다. 로그아웃은 클라이언트 Access 토큰과 Refresh 쿠키를 삭제하며 이전 JWT는 자체 만료까지 유효하다. 회원의 가입·탈퇴 상태와 리소스 권한 검사는 유지한다.
 
+브라우저 공통 조회 흐름은 다음과 같다. `AppShell` 진입과 pathname 변경마다 `/api/me`를 한 번 조회하고 결과를 `AccountContext`로 공유한다. 200이면 그대로 사용한다. `/api/me`의 401·404는 `/api/auth/refresh`를 한 번 호출하고, 성공하면 갱신된 Bearer JWT로 원래 요청을 한 번만 재시도한다. 갱신 401은 토큰을 지우고 로그인으로 이동하며 503은 재시도 오류로 표시한다. 일반 모임·회차 API의 404는 갱신하지 않는다.
+
+`apiRequest()`는 같은 URL·응답 종류·Access 토큰의 진행 중인 GET Promise만 공유한다. 완료·실패 후에는 지우므로 페이지 재방문, 검색, 다음 커서, 수동 갱신과 실시간 무효화는 최신 데이터를 조회한다. AbortSignal이 있는 요청과 변경 요청은 공유하지 않는다. 개발 모드 effect 재실행도 이 경로를 사용하므로 정상 모임 목록 진입의 브라우저 요청은 `/api/me` 1회 → `/api/groups` 1회다. 유지되는 layout에서 페이지를 이동하면 내 정보와 해당 페이지 자료를 각각 조회한다.
+
+WebSocket 최초 연결은 이미 확인한 AccountContext와 저장된 JWT를 사용하며 연결 전후에 브라우저 `/api/me`나 화면 자료를 다시 조회하지 않는다. 재연결 시에는 내 정보를 갱신한 뒤 연결하고 화면의 구독 자료를 다시 읽는다. 서버의 WebSocket JWT·회원 상태 인증 및 주기적 검증용 내부 `/api/me` 요청은 유지하며 위 브라우저 요청 횟수에 포함하지 않는다. 계좌 화면도 처음에는 Context를 사용하고 저장·충돌 복구 시에만 명시적으로 재조회한다.
+
 실제 Node 서버 통합 검사는 미인증 잘못된 JSON의 401 우선 차단, 변조·만료·토큰 종류 혼동, 공개 Health, Refresh-only 갱신·로그아웃 및 Bearer WebSocket 인증을 검증한다.
 
 ### 읽기 R — 모임 목록 제외
