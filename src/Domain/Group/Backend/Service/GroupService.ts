@@ -4,7 +4,7 @@ import { requireAccount } from '../../../../Global/Auth/Backend'
 import { badInput, domainMutation, nowSeconds, onlyKeys, pageOf, pagination, textInput, withDatabaseConnection, withReadTransaction, type Database, type Identity } from '../../../../Global/Util/Backend'
 import { getActiveUserProfiles } from '../../../User/Backend'
 import { hasUnfinishedGroupParticipation, hasUnfinishedGroupRounds } from '../../../Settle/Backend'
-import { MAX_GROUP_MEMBERS, type GroupDetail, type GroupMember, type GroupListItem, type GroupSummary, type InvitePreview, type GroupMutationResult, type CreateGroupRequestDTO, type CreateInviteRequestDTO } from '../../Shared'
+import { MAX_GROUP_MEMBERS, type GroupDetail, type GroupListItem, type GroupSummary, type InvitePreview, type GroupMutationResult, type CreateGroupRequestDTO, type CreateInviteRequestDTO } from '../../Shared'
 import type { Page } from '../../../../lib/domain-types'
 import type { GroupRow } from '../DAO/GroupDAO'
 import { creatorOnly, duplicateGroup, memberLimitExceeded, missing, unfinishedGroupRounds, unfinishedRounds } from '../Exception/GroupException'
@@ -23,15 +23,6 @@ async function memberGroup(client: Database, groupId: string, userId: string, ow
 
 export async function requireGroupMembership(client: Database, groupId: string, userId: string): Promise<GroupSummary> {
   return groupDTO(await memberGroup(client, groupId, userId))
-}
-
-async function activeMembers(client: Database, groupIds: string[]) {
-  const memberships = await repository.findActiveMemberships(client, groupIds)
-  const profiles = new Map((await getActiveUserProfiles(client, [...new Set(memberships.map(member => member.user_id))])).map(profile => [profile.userId, profile]))
-  return memberships.flatMap(member => {
-    const profile = profiles.get(member.user_id)
-    return profile ? [{ groupId: member.group_id, ...profile }] : []
-  })
 }
 
 export async function listGroups(access: Identity, query: URLSearchParams): Promise<Page<GroupListItem>> {
@@ -53,17 +44,12 @@ export async function listGroups(access: Identity, query: URLSearchParams): Prom
 export async function getGroup(access: Identity, groupId: string): Promise<GroupDetail> {
   return withDatabaseConnection(async client => {
     const account = await requireAccount(client, access)
-    const group = await memberGroup(client, groupId, account.id)
+    const rows = await repository.findGroupWithMembers(client, groupId)
+    if (!rows.some(row => row.user_id === account.id)) throw missing()
+    const group = rows[0]
+    const members = rows.map(row => ({ userId: row.user_id, displayName: row.display_name, excludedAt: null }))
     const invites = group.creator_id === account.id ? await repository.findActiveInvites(client, groupId, nowSeconds()) : []
-    return { ...groupDTO(group), isCreator: group.creator_id === account.id, invites: invites.map(row => ({ id: row.id, expiresAt: Number(row.expires_at) })) }
-  })
-}
-
-export async function getGroupMembers(access: Identity, groupId: string): Promise<GroupMember[]> {
-  return withReadTransaction(async client => {
-    const account = await requireAccount(client, access)
-    await memberGroup(client, groupId, account.id)
-    return (await activeMembers(client, [groupId])).map(member => ({ userId: member.userId, displayName: member.displayName, excludedAt: null }))
+    return { ...groupDTO(group), isCreator: group.creator_id === account.id, members, invites: invites.map(row => ({ id: row.id, expiresAt: Number(row.expires_at) })) }
   })
 }
 

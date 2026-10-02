@@ -139,9 +139,8 @@ test('currency is required on round creation and absent from groups and invitati
   }
   const preview = paths['/api/invites/{token}'].get.responses['200'] as { content: Record<string, { schema: DocumentedSchema }> }
   assert.equal('currency' in preview.content['application/json'].schema.properties!.data.properties!, false)
-  assert.equal('members' in (openApiDocument.components.schemas.GroupDetail as DocumentedSchema).properties!, false)
-  const members = paths['/api/groups/{groupId}/members'].get.responses['200'] as { content: Record<string, { schema: DocumentedSchema }> }
-  assert.equal(members.content['application/json'].schema.properties!.data.maxItems, 10)
+  assert.equal((openApiDocument.components.schemas.GroupDetail as DocumentedSchema).properties!.members.maxItems, 10)
+  assert.equal('/api/groups/{groupId}/members' in paths, false)
   assert.equal(roundInput.properties!.participantIds.maxItems, 10)
   assert.match(paths['/api/invites/{token}/accept'].post.description, /group_member_limit_exceeded/)
   const round = openApiDocument.components.schemas.Round as DocumentedSchema

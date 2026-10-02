@@ -4,7 +4,7 @@ import { useRef, useState } from 'react'
 import { ChevronLeft, Search, X } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { MAX_GROUP_MEMBERS, type GroupDetail, type GroupMember, type GroupMutationResult as MutationResult } from '../../Shared'
+import { MAX_GROUP_MEMBERS, type GroupDetail, type GroupMutationResult as MutationResult } from '../../Shared'
 import { apiRequest, CopyLink, ErrorNotice, Loading, useAccount, useAction, useResource } from '../../../../Global/Util/Frontend'
 import { CreateRoundForm, RoundList } from '../../../Settle/Frontend'
 
@@ -14,7 +14,6 @@ export default function GroupClient({ groupId }: { groupId: string }) {
   const roundsDialog = useRef<HTMLDialogElement>(null)
   const { account } = useAccount()
   const group = useResource<GroupDetail>(`/api/groups/${groupId}`)
-  const members = useResource<GroupMember[]>(`/api/groups/${groupId}/members`)
   const action = useAction()
   const departure = useAction()
   const [invite, setInvite] = useState<{ id: string; path: string | null } | null>(null)
@@ -22,8 +21,7 @@ export default function GroupClient({ groupId }: { groupId: string }) {
   const [roundSearch, setRoundSearch] = useState('')
   const [roundStatus, setRoundStatus] = useState('')
   const data = group.data
-  const currentMembers = members.data
-  const memberLimitReached = (currentMembers?.length ?? 0) >= MAX_GROUP_MEMBERS
+  const memberLimitReached = (data?.members.length ?? 0) >= MAX_GROUP_MEMBERS
   const roundSearchQuery = roundSearch.trim()
   const roundDialogQuery = new URLSearchParams()
   if (roundSearchQuery) roundDialogQuery.set('q', roundSearchQuery)
@@ -51,19 +49,17 @@ export default function GroupClient({ groupId }: { groupId: string }) {
     <ErrorNotice error={group.error} retry={() => void group.reload()} />
     {!data ? group.loading && <Loading /> : <div className="stack">
       <section className="tab-heading compact"><h1>{data.name}</h1></section>
-      <ErrorNotice error={members.error} retry={() => void members.reload()} />
-      {!currentMembers && members.loading && <Loading />}
-      {currentMembers && <section className="domain-card stack"><h2>현재 멤버 {currentMembers.length}명</h2><ul aria-label="현재 멤버 요약" className="member-list">{currentMembers.slice(0, 4).map(member => <li key={member.userId}><span>{member.displayName}</span>{member.userId === data.creatorId && <span className="subtle-tag">모임 생성자</span>}</li>)}</ul>{currentMembers.length >= 5 && <button aria-controls="group-members-dialog" aria-haspopup="dialog" aria-label="현재 멤버 전체 보기" className="secondary-button" onClick={() => membersDialog.current?.showModal()} type="button">더보기</button>}
+      <section className="domain-card stack"><h2>현재 멤버 {data.members.length}명</h2><ul aria-label="현재 멤버 요약" className="member-list">{data.members.slice(0, 4).map(member => <li key={member.userId}><span>{member.displayName}</span>{member.userId === data.creatorId && <span className="subtle-tag">모임 생성자</span>}</li>)}</ul>{data.members.length >= 5 && <button aria-controls="group-members-dialog" aria-haspopup="dialog" aria-label="현재 멤버 전체 보기" className="secondary-button" onClick={() => membersDialog.current?.showModal()} type="button">더보기</button>}
         {data.isCreator && <>
           {memberLimitReached ? <p className="notice">모임은 생성자를 포함해 최대 {MAX_GROUP_MEMBERS}명까지 참여할 수 있어요.</p> : <><button className="secondary-button" disabled={action.busy} onClick={() => void inviteMembers()} type="button">초대 링크 만들기</button>
             {invite?.path && <CopyLink hideButton path={invite.path} />}
             {invite && !invite.path && <div className="notice"><p>초대는 발급됐지만 링크를 다시 표시할 수 없어요. 이전 링크를 폐기하고 다시 발급해 주세요.</p><button className="secondary-button" disabled={action.busy} onClick={() => void inviteMembers(invite.id)} type="button">링크 다시 발급</button></div>}</>}
           {data.invites.length > 0 && <details><summary>유효한 초대 {data.invites.length}개 관리</summary><ul className="member-list">{data.invites.map(item => <li key={item.id}><span>{new Date(item.expiresAt * 1000).toLocaleDateString('ko-KR')}까지 유효</span><span className="inline-actions">{!memberLimitReached && <button className="text-button" disabled={action.busy} type="button" onClick={() => void inviteMembers(item.id)}>재발급</button>}<button className="text-button danger-text" disabled={action.busy} type="button" onClick={() => void revoke(item.id)}>폐기</button></span></li>)}</ul></details>}
         </>}
-      </section>}
-      {currentMembers && currentMembers.length >= 5 && <dialog aria-labelledby="group-members-dialog-heading" className="account-dialog" id="group-members-dialog" ref={membersDialog} onClick={event => { if (event.target === event.currentTarget) event.currentTarget.close() }}><div className="account-dialog-content stack"><div className="account-dialog-header"><h2 id="group-members-dialog-heading">현재 멤버 {currentMembers.length}명</h2><button aria-label="현재 멤버 목록 닫기" className="icon-button account-dialog-close" onClick={() => membersDialog.current?.close()} type="button"><X size={20} /></button></div><ul aria-label="현재 멤버 전체 목록" className="member-list">{currentMembers.map(member => <li key={member.userId}><span>{member.displayName}</span>{member.userId === data.creatorId && <span className="subtle-tag">모임 생성자</span>}</li>)}</ul></div></dialog>}
+      </section>
+      {data.members.length >= 5 && <dialog aria-labelledby="group-members-dialog-heading" className="account-dialog" id="group-members-dialog" ref={membersDialog} onClick={event => { if (event.target === event.currentTarget) event.currentTarget.close() }}><div className="account-dialog-content stack"><div className="account-dialog-header"><h2 id="group-members-dialog-heading">현재 멤버 {data.members.length}명</h2><button aria-label="현재 멤버 목록 닫기" className="icon-button account-dialog-close" onClick={() => membersDialog.current?.close()} type="button"><X size={20} /></button></div><ul aria-label="현재 멤버 전체 목록" className="member-list">{data.members.map(member => <li key={member.userId}><span>{member.displayName}</span>{member.userId === data.creatorId && <span className="subtle-tag">모임 생성자</span>}</li>)}</ul></div></dialog>}
       <ErrorNotice error={action.error} />
-      {currentMembers && <CreateRoundForm groupId={groupId} members={currentMembers} userId={account.id} action={action} />}
+      <CreateRoundForm groupId={groupId} members={data.members} userId={account.id} action={action} />
       <h2 className="section-heading">내가 참여한 회차</h2>
       <RoundList endpoint={`/api/groups/${groupId}/rounds?limit=3`} onMore={() => { setRoundsDialogOpened(true); roundsDialog.current?.showModal() }} />
       <dialog aria-labelledby="group-rounds-dialog-heading" className="account-dialog" id="group-rounds-dialog" ref={roundsDialog} onClick={event => { if (event.target === event.currentTarget) event.currentTarget.close() }}><div className="account-dialog-content stack"><div className="account-dialog-header"><h2 id="group-rounds-dialog-heading">내가 참여한 회차</h2><button aria-label="참여 회차 목록 닫기" className="icon-button account-dialog-close" onClick={() => roundsDialog.current?.close()} type="button"><X size={20} /></button></div><div className="round-search-bar"><Search aria-hidden="true" size={21} /><input aria-label="내가 참여한 회차 검색어" autoComplete="off" maxLength={100} onChange={event => setRoundSearch(event.target.value)} placeholder="모임명 또는 회차명 검색" type="search" value={roundSearch} /></div><div aria-label="회차 상태" className="round-status-filters" role="group"><button aria-pressed={roundStatus === ''} className="round-status-filter" onClick={() => setRoundStatus('')} type="button">전체</button><button aria-pressed={roundStatus === 'active'} className="round-status-filter" onClick={() => setRoundStatus('active')} type="button">진행 중</button><button aria-pressed={roundStatus === 'COMPLETED'} className="round-status-filter" onClick={() => setRoundStatus('COMPLETED')} type="button">정산 종료</button></div>{roundsDialogOpened && <div aria-label="참여 회차 전체 목록"><RoundList key={roundDialogEndpoint} endpoint={roundDialogEndpoint} empty={roundSearchQuery || roundStatus ? '조건에 맞는 회차가 없어요.' : undefined} /></div>}</div></dialog>

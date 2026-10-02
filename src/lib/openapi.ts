@@ -71,7 +71,7 @@ const domainSchemas = {
   Group: object(groupFields, Object.keys(groupFields)),
   GroupListItem: object({ ...groupFields, memberCount: { type: 'integer', minimum: 1, maximum: MAX_GROUP_MEMBERS }, memberPreview: { ...array(object({ userId: id, displayName: string, profileImageUrl: profileImage }, ['userId', 'displayName', 'profileImageUrl'])), maxItems: 5 } }, [...Object.keys(groupFields), 'memberCount', 'memberPreview']),
   GroupMember: object({ userId: id, displayName: string, excludedAt: nullableTimestamp }, ['userId', 'displayName', 'excludedAt']),
-  GroupDetail: object({ ...groupFields, isCreator: { type: 'boolean', description: '조회 사용자가 현재 활성 모임 생성자인지 여부' }, invites: array(object({ id, expiresAt: timestamp }, ['id', 'expiresAt'])) }, [...Object.keys(groupFields), 'isCreator', 'invites']),
+  GroupDetail: object({ ...groupFields, members: { ...array(ref('GroupMember')), maxItems: MAX_GROUP_MEMBERS, description: '활성 멤버만 포함하며 생성자가 첫 번째입니다.' }, isCreator: { type: 'boolean', description: '조회 사용자가 현재 활성 모임 생성자인지 여부' }, invites: array(object({ id, expiresAt: timestamp }, ['id', 'expiresAt'])) }, [...Object.keys(groupFields), 'members', 'isCreator', 'invites']),
   Round: object(roundFields, Object.keys(roundFields)),
   RoundMember: object({ userId: id, displayName: string, profileImageUrl: profileImage, excludedAt: nullableTimestamp }, ['userId', 'displayName', 'profileImageUrl', 'excludedAt']),
   Expense: object({ id, authorId: id, payerId: id, description: string, amountMinor: minor, splitMode: expenseFields.splitMode, participantIds: array(id), baseShareMinor: { ...minor, nullable: true }, remainderUnits: { type: 'integer', minimum: 0, nullable: true }, shares: array(object({ userId: id, assignedAmountMinor: { ...minor, nullable: true, description: 'CUSTOM에서 지정한 원본 부담금. 균등 분배에서는 null이며 재오픈해도 원본은 유지됩니다.' }, amountMinor: { ...minor, nullable: true, description: '최종 저장된 부담금. 최종화 전에는 CUSTOM도 null입니다.' }, receivedRemainder: { type: 'boolean', nullable: true } }, ['userId', 'assignedAmountMinor', 'amountMinor', 'receivedRemainder'])), receipts: array(ref('Receipt')), createdAt: timestamp, updatedAt: timestamp }, ['id', 'authorId', 'payerId', 'description', 'amountMinor', 'splitMode', 'participantIds', 'baseShareMinor', 'remainderUnits', 'shares', 'receipts', 'createdAt', 'updatedAt']),
@@ -126,11 +126,8 @@ const domainPaths = {
     post: operation('모임', '모임 생성', { parameters: [{ ...mutationParameters[1], schema: { ...id, pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$' }, description: '모임 PK로 사용할 UUIDv7. 같은 키 재전송은 409로 거절합니다.' }, mutationParameters[0]], request: { ...object({ name: string }, ['name']), additionalProperties: false }, description: 'JWT·회원 상태를 확인한 뒤 UUIDv7 Idempotency-Key를 모임 PK로 사용합니다. 명시적 트랜잭션 없이 모임·생성자 멤버십을 한 SQL로 저장하고 총 AUTH+생성 2회입니다. 같은 PK는 409 group_already_exists로 거절하며 멱등 기록 조회·저장은 하지 않습니다.' }),
   },
   '/api/groups/{groupId}': {
-    get: operation('모임', '모임 상세 정보', { response: ref('GroupDetail'), description: 'JWT 회원 조회 1회 → 모임과 본인의 활성 멤버십 JOIN 조회 1회 → 생성자인 경우에만 유효 초대 조회 1회입니다. 명시적 트랜잭션 없이 일반 멤버는 SQL 2회, 생성자는 3회이며 멤버 목록·프로필·회차는 포함하지 않습니다. 초대 원문 링크는 최초 발급 응답에서만 제공합니다.' }),
+    get: operation('모임', '모임 상세 정보', { response: ref('GroupDetail'), description: 'JWT 회원 조회 1회 → 모임·활성 group_members·users를 JOIN하여 멤버 이름까지 조회하고 본인의 참여 여부 비교 1회 → 생성자인 경우에만 유효 초대 조회 1회입니다. 명시적 트랜잭션 없이 일반 멤버는 SQL 2회, 생성자는 3회이며 멤버 목록을 함께 반환하며 회차는 포함하지 않습니다. 초대 원문 링크는 최초 발급 응답에서만 제공합니다.' }),
     delete: operation('모임', '모임 나가기 또는 없애기', { mutation: true, description: '일반 참여자는 본인이 참여 중인 미종료 회차가 없을 때 현재 멤버십의 leftAt을 기록하고 나갑니다. 모임 생성자는 본인 참여 여부와 무관하게 모임 전체의 모든 회차가 종료된 경우에만 모든 멤버십을 종료하고 초대를 폐기합니다. 완료된 회차와 모임 이름은 과거 정산 조회를 위해 보존합니다.' }),
-  },
-  '/api/groups/{groupId}/members': {
-    get: operation('모임', '현재 활성 모임 멤버 목록', { response: { ...array(ref('GroupMember')), maxItems: MAX_GROUP_MEMBERS }, description: '활성 모임 참여자만 조회할 수 있으며 생성자를 먼저 반환합니다. 멤버 요약과 회차 생성 후보에 사용합니다.' }),
   },
   '/api/groups/{groupId}/rounds': {
     get: operation('모임', '본인 참여 권한이 있는 모임 회차 목록', { response: ref('RoundPage'), parameters: [...pageParameters, roundSearchParameter] }),

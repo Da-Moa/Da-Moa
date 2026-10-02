@@ -46,8 +46,7 @@ SQL은 해당 함수의 실제 query() 문자열을 가져와 PostgreSQL 형식�
 |---|---|---|---|---|
 | POST /api/groups | createGroup() | { name } | GroupMutationResult: 모임 id | 가입 완료 회원 |
 | GET /api/groups | listGroups() | q·limit·cursor | Page<GroupListItem> | 본인의 활성 모임 |
-| GET /api/groups/{groupId} | getGroup() | 경로 모임 ID | GroupDetail: 모임 정보·isCreator·생성자의 유효 초대 | 현재 활성 모임 멤버 |
-| GET /api/groups/{groupId}/members | getGroupMembers() | 경로 모임 ID | GroupMember[] | 현재 활성 모임 멤버 |
+| GET /api/groups/{groupId} | getGroup() | 경로 모임 ID | GroupDetail: 모임 정보·멤버·isCreator·생성자의 유효 초대 | 현재 활성 모임 멤버 |
 | DELETE /api/groups/{groupId} | leaveGroup() | 경로 모임 ID | GroupMutationResult: 모임 id | 일반 멤버 이탈 / 생성자 닫기 |
 | POST /api/groups/{groupId}/invites | createInvite() | {} 또는 { replaceInviteId } | GroupMutationResult: 초대 id·inviteId·최초 sharePath | 활성 모임 생성자 |
 | DELETE /api/groups/{groupId}/invites/{inviteId} | revokeInvite() | 경로 모임·초대 ID | GroupMutationResult: 초대 id | 활성 모임 생성자 |
@@ -163,22 +162,18 @@ GroupsList.useResource()·loadMore() → GET /api/groups(query) → Node Proxy �
 5. pageOf()로 실제 페이지 선택. 비어 있으면 연결을 반환한다. 나머지는 실제 페이지의 member_ids를 앱의 Set으로 중복 제거 → U-PROFILES로 활성 회원 프로필 한 번 조회. 다음 페이지 유무 확인용 모임의 프로필은 조회하지 않는다.
 6. 생성자 우선 순서로 회원 수·최대 5명 미리보기 구성 → 연결 반환. member_ids는 내부 DAO 데이터이며 공개 DTO에 포함하지 않는다.
 
-정상 목록·검색 SQL: **AUTH → G-LIST → U-PROFILES = 3회**. 빈 결과는 AUTH → G-LIST = 2회다. 별도 G-MEMBERS·BEGIN·COMMIT·ROLLBACK·SET LOCAL·명시적 락은 실행하지 않는다. 세 조회는 같은 연결에서 각기 실행하며 읽기 트랜잭션 스냅샷을 사용하지 않는다.
+정상 목록·검색 SQL: **AUTH → G-LIST → U-PROFILES = 3회**. 빈 결과는 AUTH → G-LIST = 2회다. 별도 멤버십 SELECT·BEGIN·COMMIT·ROLLBACK·SET LOCAL·명시적 락은 실행하지 않는다. 세 조회는 같은 연결에서 각기 실행하며 읽기 트랜잭션 스냅샷을 사용하지 않는다.
 
 ### G3. GET /api/groups/{groupId} — 상세
 
-GroupClient.useResource() → GET /api/groups/{groupId} → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 Group 분배 → GroupController → getGroup() → GroupDetail → 모임 정보·생성자 여부·유효 초대 표시.
+GroupClient.useResource() → GET /api/groups/{groupId} → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 Group 분배 → GroupController → getGroup() → GroupDetail → 모임 정보·멤버·생성자 여부·유효 초대 표시.
 
 1. 공용 풀 연결 확보 → AUTH: JWT의 사용자 ID로 현재 회원 상태 조회 1회.
-2. G-ACCESS: groupId로 모임 조회와 본인의 활성 group_members JOIN 권한 검사 1회. 없으면 not_found.
+2. G-DETAIL: groupId로 groups·활성 group_members·미탈퇴/가입 완료 users를 JOIN하여 모임 정보와 멤버 ID·이름을 함께 조회 1회. Service에서 조회된 멤버 ID와 본인 ID를 비교하며 참여자가 아니거나 모임이 없으면 not_found. 초대는 조회하지 않고 멤버 정보도 응답하지 않는다.
 3. 조회자가 creator_id와 같으면 G-INVITES로 유효 초대 조회 1회; 일반 멤버는 이 SQL을 생략하고 invites=[] 반환.
-4. 모임 DTO·isCreator·초대 만료 시각 구성 → 연결 반환.
+4. 생성자를 먼저 정렬한 멤버 목록(excludedAt=null)·모임 정보·isCreator·초대 만료 시각 구성 → 연결 반환. 화면의 멤버 요약·전체 목록·회차 생성 후보가 같은 응답을 사용하며 group 무효화 키로 함께 재조회한다.
 
-명시적 트랜잭션·SET LOCAL 없이 일반 멤버는 2회, 생성자는 3회다. 멤버 목록·프로필·회차는 포함하지 않으며 초대 원문 링크는 기존대로 최초 발급 응답에서만 제공한다.
-
-### G3a. GET /api/groups/{groupId}/members — 활성 멤버
-
-GroupClient의 별도 useResource() → Controller → getGroupMembers() → R-START → AUTH → G-ACCESS → G-MEMBERS → U-PROFILES → TX-COMMIT = 8회. 활성 참여자만 조회할 수 있다. 생성자를 먼저 정렬하고 GroupMember[]의 excludedAt=null을 반환한다. 화면의 멤버 요약·전체 목록·회차 생성 후보는 이 API를 사용하며 group 무효화 키로 재조회한다.
+명시적 트랜잭션·SET LOCAL 없이 일반 멤버는 2회, 생성자는 3회다. 별도 멤버 API·회원 프로필 조회는 없으며 회차는 기존 별도 API로 조회한다. 초대 원문 링크는 기존대로 최초 발급 응답에서만 제공한다.
 
 ### G4. DELETE /api/groups/{groupId} — 일반 이탈/생성자 닫기
 
@@ -413,22 +408,28 @@ WHERE
 
 $1=groupId, $2=조회자 ID. 생성자 전용 기능은 반환된 creator_id와 요청자 ID를 Service에서 비교한다.
 
-### G-MEMBERS — 모임들의 활성 멤버십
+### G-DETAIL — 모임과 활성 멤버 이름
 
-출처: [src/Domain/Group/Backend/Repository/GroupRepository.ts](../src/Domain/Group/Backend/Repository/GroupRepository.ts).
+출처: [src/Domain/Group/Backend/Repository/GroupRepository.ts](../src/Domain/Group/Backend/Repository/GroupRepository.ts)의 findGroupWithMembers().
 
 ```sql
 SELECT
-  m.group_id,
-  m.user_id
+  g.id,
+  g.creator_id,
+  g.name,
+  g.created_at,
+  m.user_id,
+  COALESCE(u.display_name, '카카오 사용자') AS display_name
 FROM
-  group_members m
-  JOIN groups g ON g.id = m.group_id
-WHERE
-  m.group_id = ANY ($1::TEXT[])
+  groups g
+  JOIN group_members m ON m.group_id = g.id
   AND m.left_at IS NULL
+  JOIN users u ON u.id = m.user_id
+  AND u.deleted_at IS NULL
+  AND u.onboarding_completed_at IS NOT NULL
+WHERE
+  g.id = $1
 ORDER BY
-  m.group_id,
   CASE
     WHEN m.user_id = g.creator_id THEN 0
     ELSE 1
@@ -436,7 +437,7 @@ ORDER BY
   m.user_id;
 ```
 
-$1=상세 조회의 모임 ID 배열. 생성자를 먼저 정렬한다. 목록은 G-LIST 안에서 멤버 ID를 가져오므로 이 SQL을 호출하지 않는다.
+$1=groupId. Service에서 모든 반환 행의 user_id를 JWT로 확인한 본인 ID와 비교한다. 없으면 not_found이며 초대 조회와 응답 구성을 수행하지 않는다. 계좌·이메일·인증 정보는 SELECT하지 않는다. G-ACCESS는 기존 변경 요청·회차 생성 권한 검사에 유지한다.
 
 ### G-INVITES — 생성자에게 보여줄 유효 초대
 

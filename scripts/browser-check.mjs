@@ -462,7 +462,12 @@ try {
   assert.equal(await evaluate("document.querySelector('.member-picker .check-row:first-of-type')?.textContent.includes('검증 E (회차 생성자 · 필수)')"), true)
   assert.equal(await evaluate(`Array.from(document.querySelectorAll('.member-picker .check-row')).find(row => row.querySelector('input')?.value === ${JSON.stringify(owner.session.userId)})?.textContent.includes('회차 생성자')`), false)
   await setSession(owner.session)
+  readStart = apiReads.length
   await navigate(`/home/groups/${groupId}`, '현재 멤버 5명')
+  await assertPageReads(readStart)
+  assert.equal(apiReads.slice(readStart).filter(path => path === `/api/groups/${groupId}`).length, 1)
+  assert.equal(apiReads.slice(readStart).some(path => path === `/api/groups/${groupId}/members`), false)
+
   assert.equal(await evaluate("document.querySelectorAll('[aria-label=\"현재 멤버 요약\"] > li').length"), 4)
   assert.equal(await evaluate("document.querySelector('[aria-label=\"현재 멤버 요약\"] > li:first-child')?.textContent.includes('검증 A') && document.querySelector('[aria-label=\"현재 멤버 요약\"] > li:first-child')?.textContent.includes('모임 생성자')"), true)
   assert.equal(await evaluate("Boolean(document.querySelector('button[aria-label=\"현재 멤버 전체 보기\"][aria-haspopup=\"dialog\"][aria-controls=\"group-members-dialog\"]'))"), true)

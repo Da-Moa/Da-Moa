@@ -1,6 +1,6 @@
 import 'server-only'
 import type { Database } from '../../../../Global/Util/Backend'
-import type { GroupRow, GroupListRow, InviteRow, InviteSummaryRow, MembershipRow } from '../DAO/GroupDAO'
+import type { GroupRow, GroupListRow, InviteRow, InviteSummaryRow, GroupMemberRow } from '../DAO/GroupDAO'
 
 type Cursor = { createdAt: string; id: string } | null
 
@@ -23,10 +23,13 @@ export async function findMemberGroup(client: Database, groupId: string, userId:
   return (await client.query<GroupRow>(`SELECT g.* FROM groups g JOIN group_members m ON m.group_id=g.id AND m.user_id=$2 AND m.left_at IS NULL WHERE g.id=$1`, [groupId, userId])).rows[0]
 }
 
-export async function findActiveMemberships(client: Database, groupIds: string[]) {
-  return (await client.query<MembershipRow>(`SELECT m.group_id,m.user_id FROM group_members m JOIN groups g ON g.id=m.group_id
-    WHERE m.group_id=ANY($1::text[]) AND m.left_at IS NULL
-    ORDER BY m.group_id,CASE WHEN m.user_id=g.creator_id THEN 0 ELSE 1 END,m.user_id`, [groupIds])).rows
+export async function findGroupWithMembers(client: Database, groupId: string) {
+  return (await client.query<GroupMemberRow>(`SELECT g.id,g.creator_id,g.name,g.created_at,m.user_id,COALESCE(u.display_name,'카카오 사용자') AS display_name
+    FROM groups g
+    JOIN group_members m ON m.group_id=g.id AND m.left_at IS NULL
+    JOIN users u ON u.id=m.user_id AND u.deleted_at IS NULL AND u.onboarding_completed_at IS NOT NULL
+    WHERE g.id=$1
+    ORDER BY CASE WHEN m.user_id=g.creator_id THEN 0 ELSE 1 END,m.user_id`, [groupId])).rows
 }
 
 export async function findActiveInvites(client: Database, groupId: string, now: number) {

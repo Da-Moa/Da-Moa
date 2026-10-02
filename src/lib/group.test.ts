@@ -24,9 +24,10 @@ test('Group controller preserves route dispatch, origin and input errors without
   }
 })
 
-test('Group repository owns only group tables and leaves transactions and rules to its service', () => {
+test('Group repository joins user names for details and leaves user writes, transactions and rules to their owners', () => {
   const repository = readFileSync('src/Domain/Group/Backend/Repository/GroupRepository.ts', 'utf8')
-  assert.doesNotMatch(repository, /\b(?:users|rounds|round_members|refresh_sessions|mutation_requests)\b/)
+  assert.doesNotMatch(repository, /\b(?:rounds|round_members|refresh_sessions|mutation_requests)\b/)
+  assert.doesNotMatch(repository, /\b(?:INSERT INTO|UPDATE|DELETE FROM)\s+users\b/i)
   assert.doesNotMatch(repository, /\b(?:withWriteTransaction|withReadTransaction|Response|AppError|MAX_GROUP_MEMBERS|FOR UPDATE|pg_advisory_xact_lock)\b/)
   const service = readFileSync('src/Domain/Group/Backend/Service/GroupService.ts', 'utf8')
   assert.doesNotMatch(service, /client\.query\(/)

@@ -14,7 +14,7 @@ import {
 import { getAccount } from '../src/lib/authorization.ts'
 import { createDatabaseClient, withReadTransaction, withWriteTransaction } from '../src/lib/db.ts'
 import { AppError } from '../src/lib/errors.ts'
-import { acceptInvite, createGroup, createInvite, getGroup, getGroupMembers, getInvite, listGroups } from '../src/Domain/Group/Backend/index.ts'
+import { acceptInvite, createGroup, createInvite, getGroup, getInvite, listGroups } from '../src/Domain/Group/Backend/index.ts'
 import { applyMigrations } from './migrations.mjs'
 import { completeTestOnboarding as completeOnboarding, updateTestBankAccount as updateBankAccount } from './bank-test-support.ts'
 
@@ -223,7 +223,7 @@ test('withdrawal checks all unfinished history including excluded members; rejoi
   assert.deepEqual(retained.rows.map(row => row.round_id), [roundIds[1]])
   assert.equal((await getInvite(restoredAccess, token)).isMember, false)
   await acceptInvite(restoredAccess, randomUUID(), token)
-  assert.ok((await getGroupMembers(restoredAccess, group.id)).some(member => member.userId === restored.userId))
+  assert.ok((await getGroup(restoredAccess, group.id)).members.some(member => member.userId === restored.userId))
   assert.equal((await getGroup(restoredAccess, group.id)).isCreator, false)
 
   await withdrawAccount(owner.access)

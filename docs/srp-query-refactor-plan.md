@@ -197,7 +197,7 @@ DB SQL은 기존 읽기 트랜잭션의 5회에서 `SELECT 1` 1회로 줄인다.
 
 반영된 공개 경계는 `Domain/Group/{Frontend,Backend,Shared}/index.ts`다. 기존 `group-store.ts`, `app/home/group-client.tsx`, `app/invites/invite-client.tsx`를 제거했다. 프론트의 `GroupsList`·`GroupClient`·`InviteClient`는 Group Frontend에 있으며, Group 화면의 `CreateRoundForm`·`RoundList`는 Settle Frontend 공개 컴포넌트를 사용한다. Group Backend는 GroupController의 `getGroupResponse()`·`isGroupPath()`, GroupService, GroupRepository, GroupDAO, GroupException으로 나눴다. `GroupSummary`·`GroupListItem`·`GroupDetail`·`InvitePreview`·`GroupMutationResult`와 입력 DTO는 Group Shared에 있다. 일반 이탈은 Service의 `leaveMembership()`, 생성자 닫기는 `closeGroup()`로 구분하며 기존 `leaveGroup()` DELETE 진입점이 역할을 선택한다.
 
-User의 공개 `getActiveUserProfiles()`는 필요한 ID를 한 번에 조회하여 활성 회원의 ID·이름·프로필 이미지만 반환한다. Group Repository에는 `users` SQL이 없다. Settle의 `hasUnfinishedGroupRounds()`·`hasUnfinishedGroupParticipation()`는 같은 Client로 미종료 여부만 반환하며 Group Repository에는 회차 SQL이 없다. `requireGroupMembership()`는 회차 생성 호출자가 필요한 모임 권한을 검사하고 공개 GroupSummary만 반환한다. Repository·DAO·내부 오류는 공개 진입점에서 내보내지 않는다. 공통 입력·페이지네이션·`domainMutation()`을 Global Util의 `input-validation-util.ts`·`pagenation-util.ts`·`idempotency-util.ts`로 나눴고, 초대 재생 응답의 링크 제거는 Group Service가 맡는다. Auth/Websocket Backend와 Util Frontend의 공개 진입점은 기존 lib·공통 UI 구현에 위임한다. 다른 도메인의 전체 이전은 이번 범위에 포함하지 않는다.
+User의 공개 `getActiveUserProfiles()`는 필요한 ID를 한 번에 조회하여 활성 회원의 ID·이름·프로필 이미지만 반환한다. 모임 상세는 요청된 단일 조회를 위해 Group Repository에서 `users`의 활성 상태·이름을 JOIN한다. 회원 변경은 수행하지 않으며 목록·초대의 프로필 조회는 User 공개 기능을 사용한다. Settle의 `hasUnfinishedGroupRounds()`·`hasUnfinishedGroupParticipation()`는 같은 Client로 미종료 여부만 반환하며 Group Repository에는 회차 SQL이 없다. `requireGroupMembership()`는 회차 생성 호출자가 필요한 모임 권한을 검사하고 공개 GroupSummary만 반환한다. Repository·DAO·내부 오류는 공개 진입점에서 내보내지 않는다. 공통 입력·페이지네이션·`domainMutation()`을 Global Util의 `input-validation-util.ts`·`pagenation-util.ts`·`idempotency-util.ts`로 나눴고, 초대 재생 응답의 링크 제거는 Group Service가 맡는다. Auth/Websocket Backend와 Util Frontend의 공개 진입점은 기존 lib·공통 UI 구현에 위임한다. 다른 도메인의 전체 이전은 이번 범위에 포함하지 않는다.
 
 요청한 후속 세분화에서 기존 공개 진입점과 함수 본문을 유지하고 `domain.ts`를 제거했다. `nowSeconds`는 같은 계산을 하는 기존 `currentTimestamp()`의 공개 별칭을 재사용한다. 작업한 Health/Group API 목록·로직 흐름·바인딩 자리표시자를 유지한 SQL 원문은 [API 흐름·SQL 문서](refactored-api-flows-and-sql.md)에 별도로 기록한다. 후속 유틸 세분화 후에도 `npm test` 81개·`npm run build`·격리된 DB/MinIO의 `npm run test:integration` 38개가 통과했고 SQL 호출 수는 유지된다.
 
@@ -211,8 +211,7 @@ User의 공개 `getActiveUserProfiles()`는 필요한 ID를 한 번에 조회하
 |---|---|
 | 모임 생성 | `GroupsList.create()` → POST `/api/groups` → Node Proxy → JWT Guard(Access JWT 검사) → `getGroupResponse()` → `createGroup(CreateGroupRequestDTO)` → ① 공용 풀 연결 확보 ② `requireAccount()`로 JWT 목적/회원 상태 확인 ③ UUIDv7 요청 키를 PK로 groups INSERT·생성자 group_members INSERT를 한 SQL로 저장 ④ 자동 커밋·연결 반환; 같은 PK는 409 → GroupMutationResult → 상세 이동. 명시적 트랜잭션·락 없음 |
 | 모임 목록·검색 | `GroupsList`의 `useResource()` → GET `/api/groups` → Node Proxy → JWT Guard(Access JWT 검사) → Controller → `listGroups()` → ① 공용 풀 연결 확보 ② AUTH 회원 상태 SELECT ③ `findGroups()`에서 요청자 활성 멤버십 JOIN·ID 내림차순 커서·limit+1 선택·멤버 ID 집계를 한 SQL로 조회; 검색은 제목 ILIKE 조건 추가 ④ 실제 페이지의 멤버 ID를 Set으로 중복 제거 → User 공개 프로필 일괄 SELECT ⑤ 연결 반환 → `Page<GroupListItem>` → 목록/다음 커서 반영. 트랜잭션 없이 3회, 빈 결과는 ④ 생략해 2회 |
-| 모임 상세 | `GroupClient`의 `useResource()` → GET `/api/groups/{id}` → Node Proxy → JWT Guard(Access JWT 검사) → Controller → `getGroup()` → ① 공용 풀 연결 확보 ② JWT 사용자 ID로 회원 상태 SELECT ③ `findMemberGroup()`에서 모임 조회·본인 활성 멤버십 JOIN 권한 검사 ④ 생성자일 때만 유효 초대 SELECT ⑤ 연결 반환 → GroupDetail: 모임 정보·isCreator·invites. 트랜잭션 없이 일반 멤버 2회·생성자 3회 |
-| 모임 멤버 | 별도 `useResource()` → GET `/api/groups/{id}/members` → Controller → `getGroupMembers()` → 읽기 스냅샷·회원 상태·참여 권한·활성 멤버십·User 일괄 프로필·COMMIT → GroupMember[] → 멤버 요약·회차 후보 표시. 기존 group 무효화 키로 재조회 |
+| 모임 상세 | `GroupClient`의 `useResource()` → GET `/api/groups/{id}` → Node Proxy → JWT Guard(Access JWT 검사) → Controller → `getGroup()` → ① 공용 풀 연결 확보 ② JWT 사용자 ID로 회원 상태 SELECT ③ `findGroupWithMembers()`에서 모임·활성 멤버십·users 이름을 JOIN한 뒤 반환 멤버 ID로 본인의 참여 여부 비교 ④ 생성자일 때만 유효 초대 SELECT ⑤ 연결 반환 → GroupDetail: 모임 정보·members·isCreator·invites → 멤버 요약·회차 후보 표시. 트랜잭션 없이 일반 멤버 2회·생성자 3회 |
 | 초대 발급/재발급 | `GroupClient.inviteMembers()` → POST `/api/groups/{id}/invites` → Node Proxy → JWT Guard(Access JWT 검사) → Controller → `createInvite(CreateInviteRequestDTO)` → ① 쓰기 시작·설정·기존 락 ② JWT 목적/회원 상태 ③ 멱등 검사 ④ 생성자 권한 SELECT ⑤ 재발급이면 기존 초대 조건부 폐기 UPDATE·영향 행 확인 ⑥ token_hash만 group_invites INSERT ⑦ 링크 없는 성공 메타데이터 INSERT ⑧ COMMIT → 새 성공에서만 sharePath가 있는 GroupMutationResult → 링크 표시·모임 재조회. 성공 재생은 linkUnavailable=true |
 | 초대 폐기 | `GroupClient.revoke()` → DELETE `/api/groups/{id}/invites/{inviteId}` → Node Proxy → JWT Guard(Access JWT 검사) → Controller → `revokeInvite()` → ① 쓰기 시작·설정·기존 락 ② JWT 목적/회원 상태 ③ 멱등 검사 ④ 생성자 권한 ⑤ 모임/초대 ID 조건 UPDATE·영향 행 확인 ⑥ 성공 기록 ⑦ COMMIT → GroupMutationResult → 초대 목록 재조회. 기존 참여자는 유지 |
 | 초대 조회 | `InviteClient`의 `useResource()` → GET `/api/invites/{token}` → Node Proxy → JWT Guard(Access JWT 검사) → Controller → `getInvite()` → ① 읽기 스냅샷 시작·설정 ② JWT 목적/회원 상태 ③ 토큰 형식 검사 후 해시로 유효 초대·활성 생성자 멤버십·조회자의 참여 여부 SELECT ④ User 공개 조회로 생성자의 활성 회원 상태 확인 ⑤ COMMIT → InvitePreview → 직접 수락 버튼 또는 이미 참여한 모임 링크. 조회만으로 멤버십을 저장하지 않음 |
@@ -227,14 +226,13 @@ User의 공개 `getActiveUserProfiles()`는 필요한 ID를 한 번에 조회하
 
 다른 쓰기 트랜잭션 부가 SQL은 BEGIN·SET LOCAL 2회·공통 advisory lock·COMMIT의 5회다. 모임 목록·상세를 제외한 읽기는 BEGIN REPEATABLE READ READ ONLY·SET LOCAL 2회·COMMIT의 4회다. 실패 시 COMMIT 대신 ROLLBACK하고 DB 변경과 성공 기록을 모두 되돌린다. 재발급 실패는 기존 초대 변경도 롤백한다. 네트워크/저장 응답 유실 시 같은 키·본문으로 재시도하며 초대 재생은 원문 링크를 반환하지 않으므로 기존 재발급 안내를 사용한다. 기존 초대 수락·탈퇴 경로의 쓰기 락은 유지하며 나머지 전역 락 제거와 조건부 정합성 전환은 별도 7단계다.
 
-쿼리 수는 같은 정상 작업의 공통 트랜잭션 SQL을 포함하고, 실시간 알림·다음 화면 재조회는 제외한다. 이전 수는 변경 전 함수의 SQL 호출 순서 기준이며 변경 후 수는 `scripts/group.integration.test.ts`에서 실제 PostgreSQL SQL 로그를 수집해 검증했다. 모임 목록·검색은 별도 멤버십 SELECT와 읽기 트랜잭션을 제거해 3회/빈 결과 2회로 줄였다. 상세는 멤버 조회를 별도 API로 분리해 일반 멤버 2회·생성자 3회로 줄였다. 초대 조회·참여 수락은 도메인별 공개 조회로 분리하며 각 1회 늘었고, 조회 수는 회원 수와 무관하게 일정하다. 성능 개선 수치는 주장하지 않는다.
+쿼리 수는 같은 정상 작업의 공통 트랜잭션 SQL을 포함하고, 실시간 알림·다음 화면 재조회는 제외한다. 이전 수는 변경 전 함수의 SQL 호출 순서 기준이며 변경 후 수는 `scripts/group.integration.test.ts`에서 실제 PostgreSQL SQL 로그를 수집해 검증했다. 모임 목록·검색은 별도 멤버십 SELECT와 읽기 트랜잭션을 제거해 3회/빈 결과 2회로 줄였다. 상세는 모임·활성 멤버십·회원 이름을 한 SQL로 JOIN하고 Service에서 참여 여부를 비교하여, 멤버 목록을 포함하면서 일반 멤버 2회·생성자 3회로 줄였다. 별도 멤버 API는 제거했다. 초대 조회·참여 수락은 도메인별 공개 조회로 분리하며 각 1회 늘었고, 조회 수는 회원 수와 무관하게 일정하다. 성능 개선 수치는 주장하지 않는다.
 
 | 정상 작업 | 이전 → 현재 SQL 호출 수 |
 |---|---|
 | 모임 생성 / 같은 PK 중복(409) | 10 → 2 / 7(이전 재생) → 2 |
 | 모임 목록·검색(비어 있지 않음) / 빈 목록 | 7 → 8 → 3 / 6 → 2 |
 | 모임 상세(생성자 / 일반 멤버) | 8 → 9 → 3 / 7 → 8 → 2 |
-| 모임 멤버 목록(별도 API) | 8 |
 | 초대 발급 / 재발급 / 폐기 | 10 → 10 / 11 → 11 / 10 → 10 |
 | 초대 조회 | 6 → 7 |
 | 초대 수락(비멤버 / 이미 멤버) | 11 → 12 / 10 → 11 |

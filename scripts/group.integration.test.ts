@@ -5,7 +5,7 @@ import test from 'node:test'
 import { readAccessToken } from '../src/lib/auth.ts'
 import { signInKakao } from '../src/lib/auth-store.ts'
 import { createDatabaseClient } from '../src/lib/db.ts'
-import { acceptInvite, createGroup, createInvite, getGroup, getGroupMembers, getInvite, leaveGroup, listGroups, revokeInvite } from '../src/Domain/Group/Backend/index.ts'
+import { acceptInvite, createGroup, createInvite, getGroup, getInvite, leaveGroup, listGroups, revokeInvite } from '../src/Domain/Group/Backend/index.ts'
 import { applyMigrations } from './migrations.mjs'
 import { completeTestOnboarding } from './bank-test-support.ts'
 
@@ -68,13 +68,12 @@ test('Group creation, lists and details use autocommit SQL; other operations pre
       assert.equal(list.items.length, 1)
       assert.equal(list.items[0].memberCount, 1)
       const ownerDetail = await trace(3, null, () => getGroup(owner, group.id))
-      assert.deepEqual(ownerDetail, { id: group.id, name: body.name, creatorId: owner.userId, createdAt: ownerDetail.createdAt, isCreator: true, invites: [] })
+      assert.deepEqual(ownerDetail, { id: group.id, name: body.name, creatorId: owner.userId, createdAt: ownerDetail.createdAt, isCreator: true, members: [{ userId: owner.userId, displayName: '모임 생성자', excludedAt: null }], invites: [] })
       assert.match(statements[1], /JOIN group_members/)
-      assert.equal((await trace(8, false, () => getGroupMembers(owner, group.id)))[0].userId, owner.userId)
+      assert.match(statements[1], /JOIN users/)
       statements = []
       await assert.rejects(getGroup(participant, group.id), (error: { code: string }) => error.code === 'not_found')
       assert.equal(statements.length, 2)
-      await assert.rejects(getGroupMembers(participant, group.id), (error: { code: string }) => error.code === 'not_found')
       const inviteKey = randomUUID()
       const invite = await trace(10, true, () => createInvite(owner, inviteKey, group.id, {}))
       assert.deepEqual((await trace(3, null, () => getGroup(owner, group.id))).invites.map(item => item.id), [invite.id])
@@ -110,10 +109,21 @@ test('Group creation, lists and details use autocommit SQL; other operations pre
       await leaveGroup(owner, randomUUID(), second.id)
       const detail = await trace(2, null, () => getGroup(participant, group.id))
       assert.equal(detail.isCreator, false)
-      assert.equal('members' in detail, false)
+      assert.deepEqual(detail.members, [{ userId: owner.userId, displayName: '모임 생성자', excludedAt: null }, { userId: participant.userId, displayName: '모임 참여자', excludedAt: null }])
       assert.ok(statements.every(sql => !sql.includes('group_invites')))
       assert.deepEqual(detail.invites, [])
-      assert.deepEqual((await trace(8, false, () => getGroupMembers(participant, group.id))).map(member => member.userId), [owner.userId, participant.userId])
+      const withdrawn = await member('탈퇴 멤버'), incomplete = await member('미가입 멤버')
+      for (const actor of [withdrawn, incomplete]) await acceptInvite(actor, randomUUID(), token)
+      await client.query('UPDATE users SET deleted_at=1 WHERE id=$1', [withdrawn.userId])
+      await client.query('UPDATE users SET onboarding_completed_at=NULL WHERE id=$1', [incomplete.userId])
+      await client.query('UPDATE users SET display_name=NULL WHERE id=$1', [participant.userId])
+      const activeDetail = await trace(3, null, () => getGroup(owner, group.id))
+      assert.deepEqual(activeDetail.members, [{ userId: owner.userId, displayName: '모임 생성자', excludedAt: null }, { userId: participant.userId, displayName: '카카오 사용자', excludedAt: null }])
+      await assert.rejects(getGroup(withdrawn, group.id), (error: { code: string }) => error.code === 'unauthorized')
+      await assert.rejects(getGroup(incomplete, group.id), (error: { code: string }) => error.code === 'onboarding_required')
+      statements = []
+      await assert.rejects(getGroup(participant, randomUUID()), (error: { code: string }) => error.code === 'not_found')
+      assert.equal(statements.length, 2)
       const failedKey = randomUUID()
       statements = []
       await assert.rejects(createInvite(owner, failedKey, group.id, { replaceInviteId: randomUUID() }), (error: { code: string }) => error.code === 'not_found')
@@ -127,7 +137,7 @@ test('Group creation, lists and details use autocommit SQL; other operations pre
       statements = []
       await assert.rejects(getGroup(participant, group.id), (error: { code: string }) => error.code === 'not_found')
       assert.equal(statements.length, 2)
-      await assert.rejects(getGroupMembers(participant, group.id), (error: { code: string }) => error.code === 'not_found')
+      assert.deepEqual((await trace(3, null, () => getGroup(owner, group.id))).members.map(member => member.userId), [owner.userId])
       await trace(12, true, () => leaveGroup(owner, randomUUID(), group.id))
       assert.equal((await trace(2, null, () => listGroups(owner, new URLSearchParams({ q: body.name })))).items.length, 0)
       assert.equal((await client.query('SELECT COUNT(*)::int AS count FROM group_members WHERE group_id=$1 AND left_at IS NULL', [group.id])).rows[0].count, 0)

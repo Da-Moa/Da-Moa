@@ -55,23 +55,19 @@ test('Route Handler contracts enforce Bearer JWTs, origin, idempotency, normaliz
     assert.equal((await request(`groups/${emptyGroupId}`, a.accessToken)).status, 404)
     const detail = (await (await request(`groups/${groupId}`, a.accessToken)).json()).data
     assert.equal('currency' in detail, false)
-    assert.equal('members' in detail, false)
+    assert.deepEqual(detail.members, [{ userId: a.userId, displayName: 'API-A', excludedAt: null }])
     assert.equal(detail.isCreator, true)
-    for (const path of [`groups/${groupId}`, `groups/${groupId}/members`]) {
-      assert.equal((await request(path, null)).status, 401)
-      assert.equal((await request(path, outsider.accessToken)).status, 404)
-    }
+    assert.equal((await request(`groups/${groupId}`, null)).status, 401)
+    assert.equal((await request(`groups/${groupId}`, outsider.accessToken)).status, 404)
+    assert.equal((await request(`groups/${groupId}/members`, a.accessToken)).status, 404)
     const invite = (await (await request(`groups/${groupId}/invites`, a.accessToken, 'POST', {})).json()).data
     const token = invite.sharePath.split('/').at(-1)
     const preview = (await (await request(`invites/${token}`, b.accessToken)).json()).data
     assert.equal(preview.isMember, false)
     assert.equal('currency' in preview, false)
     assert.equal((await request(`invites/${token}/accept`, b.accessToken, 'POST')).status, 200)
-    const membersResponse = await request(`groups/${groupId}/members`, b.accessToken)
-    assert.equal(membersResponse.status, 200)
-    assert.equal(membersResponse.headers.get('cache-control'), 'private, no-store')
-    assert.deepEqual((await membersResponse.json()).data.map((member: { userId: string }) => member.userId), [a.userId, b.userId])
     const participantDetail = (await (await request(`groups/${groupId}`, b.accessToken)).json()).data
+    assert.deepEqual(participantDetail.members.map((member: { userId: string }) => member.userId), [a.userId, b.userId])
     assert.equal(participantDetail.isCreator, false)
     assert.deepEqual(participantDetail.invites, [])
     for (const currency of [undefined, 'XXX']) {
