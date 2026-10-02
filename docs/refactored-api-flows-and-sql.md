@@ -67,7 +67,7 @@ GroupSummary는 모임 ID·이름·생성자 ID·생성 시각이다. 목록은 
 
 읽기 트랜잭션 자체는 R-START의 3문장과 COMMIT 1문장으로 총 4회다. 도메인용 명시적 락은 없다.
 
-### 쓰기 W
+### 쓰기 W — 모임 생성 제외
 
 1. 요청 Cookie의 JWT를 readAccessToken()으로 해석하고 Controller가 동일 출처 검사. JSON을 읽는 API는 기존 1MiB 제한·객체 본문 검사.
 2. 필요한 Service 입력 검증. 모임/초대 생성 입력은 트랜잭션 전에 검사.
@@ -83,7 +83,6 @@ GroupSummary는 모임 ID·이름·생성자 ID·생성 시각이다. 목록은 
 
 | operation | 멱등 payload |
 |---|---|
-| group.create | 원 요청 { name } |
 | group.leave | { groupId } |
 | invite.create | { groupId, ...원 요청 body } |
 | invite.revoke | { groupId, inviteId } |
@@ -115,15 +114,17 @@ GroupSummary는 모임 ID·이름·생성자 ID·생성 시각이다. 목록은 
 
 ### G1. POST /api/groups — 모임 생성
 
-GroupsList.create() → 기존 API Route의 Group 분배 → Global/Auth → GroupController.getGroupResponse()의 JSON 입력 → GroupService.createGroup(CreateGroupRequestDTO) → 아래 DB 처리 → GroupMutationResult → 상세 화면 이동.
+GroupsList.create() → 기존 API Route의 Group 분배 → GroupController.getGroupResponse()의 JSON 입력 → GroupService.createGroup(CreateGroupRequestDTO) → 아래 DB 처리 → GroupMutationResult → 상세 화면 이동.
 
-1. onlyKeys(['name'])·textInput(name): trim 후 1~100자.
-2. W-START → AUTH → IDEM-READ(operation=group.create).
-3. 새 UUID·현재 초 시각 생성 → G-INSERT-1(groups INSERT) → G-INSERT-2(생성자 group_members INSERT). 두 INSERT에 같은 시각 사용.
-4. IDEM-SAVE({ id: groupId }) → TX-COMMIT.
+1. onlyKeys(['name'])·textInput(name): trim 후 1~100자. Idempotency-Key는 UUIDv7 형식으로 검사하고 소문자로 정규화한다.
+2. withDatabaseConnection()으로 공용 풀의 연결만 확보 → AUTH로 회원·인증 상태를 한 번 확인한다. 멱등 기록은 조회하지 않는다.
+3. UUIDv7 요청 키를 모임 PK로 사용 → G-CREATE 단일 SQL: 모임 INSERT CTE → 반환된 모임 ID·생성자·시각으로 생성자 멤버십 INSERT.
+4. 문장 자동 커밋 후 연결을 반환하고 { id }를 응답한다. 같은 PK이면 groups_pkey 제약으로 409 group_already_exists를 반환한다. 저장된 성공 응답을 재생하지 않는다.
 5. 활성화 시 해당 모임 ID로 알림 → 프론트 상세 조회.
 
-정상 SQL 순서: W-START(4) → AUTH → IDEM-READ → G-INSERT-1 → G-INSERT-2 → IDEM-SAVE → TX-COMMIT = 10회. 본문 오류는 트랜잭션 전 400. INSERT/기록 저장 실패는 모임·멤버십·성공 기록 모두 롤백.
+SQL 순서: AUTH → G-CREATE = **2회**. 같은 PK 중복도 2회다. BEGIN·COMMIT·ROLLBACK·SET LOCAL·명시적 락·mutation_requests 조회/저장을 실행하지 않는다. PostgreSQL 단일 문장 원자성으로 INSERT 실패 시 모임·멤버십 모두 저장되지 않는다. 본문/키 오류는 저장 SQL 전에 400. 기존 모임 PK의 TEXT 타입과 과거 ID는 유지한다.
+
+scripts/group.integration.test.ts는 정상·중복 SQL 2회, 멱등 SQL 및 명시적 트랜잭션 미실행, 같은 키 동시 요청의 성공 1개·중복 409, 생성 실패 시 부분 저장 없음을 검증한다.
 
 ### G2. GET /api/groups — 목록/검색/페이지
 
@@ -247,7 +248,7 @@ SELECT
   pg_advisory_xact_lock(1684106607);
 ```
 
-현재 모든 쓰기에 적용되는 기존 락이다. 이번 유틸 분리에서 추가하거나 제거하지 않았다.
+모임 생성을 제외한 기존 쓰기에 적용되는 락이다. 이번 유틸 분리에서 추가하거나 제거하지 않았다.
 
 ### TX-COMMIT — 성공 종료
 
@@ -442,31 +443,21 @@ ORDER BY
 
 $1=groupId, $2=현재 초 시각. 원문 토큰이나 token_hash를 반환하지 않는다.
 
-### G-INSERT-1 — 모임과 생성자 멤버십 생성 1
+### G-CREATE — 모임 생성 단일 SQL
 
-출처: [src/Domain/Group/Backend/Repository/GroupRepository.ts](../src/Domain/Group/Backend/Repository/GroupRepository.ts).
-
-```sql
-INSERT INTO
-  groups (id, creator_id, name, created_at)
-VALUES
-  ($1, $2, $3, $4);
-```
-
-첫 SQL: $1=새 모임 ID, $2=생성자 ID, $3=trim된 이름, $4=현재 초 시각. 두 번째: $1=같은 모임 ID, $2=생성자 ID, $3=같은 시각.
-
-### G-INSERT-2 — 모임과 생성자 멤버십 생성 2
-
-출처: [src/Domain/Group/Backend/Repository/GroupRepository.ts](../src/Domain/Group/Backend/Repository/GroupRepository.ts).
+출처: [GroupRepository.insertGroup()](../src/Domain/Group/Backend/Repository/GroupRepository.ts).
 
 ```sql
-INSERT INTO
-  group_members (group_id, user_id, joined_at)
-VALUES
-  ($1, $2, $3);
+WITH created_group AS (
+  INSERT INTO groups (id, creator_id, name, created_at)
+  VALUES ($1, $2, $3, $4)
+  RETURNING id, creator_id, created_at
+)
+INSERT INTO group_members (group_id, user_id, joined_at)
+SELECT id, creator_id, created_at FROM created_group;
 ```
 
-첫 SQL: $1=새 모임 ID, $2=생성자 ID, $3=trim된 이름, $4=현재 초 시각. 두 번째: $1=같은 모임 ID, $2=생성자 ID, $3=같은 시각.
+$1=UUIDv7 요청 키, $2=생성자 ID, $3=trim된 이름, $4=현재 초 시각. PK 중복은 409로 변환한다. PostgreSQL의 문장 원자성으로 둘 중 하나라도 실패하면 모임·멤버십 저장 전체가 취소된다.
 
 ### G-CLOSE-1 — 생성자 닫기 1
 
@@ -721,7 +712,7 @@ $1=groupId. 별도 읽기 트랜잭션에 AUTH는 없고, 이미 허가된 커�
 
 | Group 정상 작업 | 이전 | 현재 |
 |---|---:|---:|
-| 생성 | 10 | 10 |
+| 생성 | 10 | 2 |
 | 목록(비빈/빈) | 7 / 6 | 8 / 6 |
 | 상세(생성자/일반 멤버) | 8 / 7 | 9 / 8 |
 | 일반 이탈/생성자 닫기 | 11 / 12 | 11 / 12 |

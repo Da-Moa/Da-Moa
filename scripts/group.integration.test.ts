@@ -1,3 +1,4 @@
+import { uuidV7 } from '../src/lib/uuid.ts'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import test from 'node:test'
@@ -13,7 +14,7 @@ if (!database || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(database)
 process.env.DATABASE_URL = database
 process.env.AUTH_JWT_SECRET ||= 'isolated-group-test-secret-at-least-32-bytes'
 
-test('Group public operations preserve transactions, query counts, replay privacy and rollback', async t => {
+test('Group creation uses atomic autocommit SQL; other operations preserve transactions, replay and rollback', async t => {
   const client = createDatabaseClient(database)
   await client.connect()
   try {
@@ -27,19 +28,42 @@ test('Group public operations preserve transactions, query counts, replay privac
     process.env.DB_QUERY_LOG = 'true'
     let statements: string[] = []
     const logger = t.mock.method(console, 'info', (message: string) => { statements.push(message.replace(/^SQL:\s*/, '').replace(/\s+/g, ' ').trim()) })
-    const trace = async <T>(expected: number, write: boolean, work: () => Promise<T>) => {
+    const trace = async <T>(expected: number, write: boolean | null, work: () => Promise<T>) => {
       statements = []
       const result = await work()
       assert.equal(statements.length, expected, statements.join('\n'))
-      assert.equal(statements[0], write ? 'BEGIN' : 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
-      assert.equal(statements.at(-1), 'COMMIT')
-      assert.equal(statements.some(sql => sql.includes('pg_advisory_xact_lock')), write)
+      if (write === null) {
+        assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b/.test(sql) && !sql.includes('pg_advisory_xact_lock')))
+      } else {
+        assert.equal(statements[0], write ? 'BEGIN' : 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
+        assert.equal(statements.at(-1), 'COMMIT')
+        assert.equal(statements.some(sql => sql.includes('pg_advisory_xact_lock')), write)
+      }
       return result
     }
     try {
-      const createKey = randomUUID(), body = { name: `모임 SQL ${randomUUID()}` }
-      const group = await trace(10, true, () => createGroup(owner, createKey, body))
-      assert.deepEqual(await trace(7, true, () => createGroup(owner, createKey, body)), group)
+      const createKey = uuidV7(), body = { name: `모임 SQL ${randomUUID()}` }
+      const group = await trace(2, null, () => createGroup(owner, createKey, body))
+      assert.equal(group.id, createKey)
+      for (const name of [body.name, '다른 이름']) {
+        statements = []
+        await assert.rejects(createGroup(owner, createKey, { name }), (error: { code: string }) => error.code === 'group_already_exists')
+        assert.equal(statements.length, 2)
+        assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b/.test(sql) && !sql.includes('mutation_requests') && !sql.includes('pg_advisory_xact_lock')))
+      }
+      assert.equal((await client.query('SELECT 1 FROM mutation_requests WHERE request_key=$1', [createKey])).rowCount, 0)
+      const concurrentKey = uuidV7()
+      const concurrent = await Promise.allSettled(Array.from({ length: 5 }, () => createGroup(owner, concurrentKey, body)))
+      assert.equal(concurrent.filter(result => result.status === 'fulfilled').length, 1)
+      assert.ok(concurrent.filter(result => result.status === 'rejected').every(result => result.reason.code === 'group_already_exists'))
+      assert.equal((await client.query('SELECT COUNT(*)::int AS count FROM group_members WHERE group_id=$1', [concurrentKey])).rows[0].count, 1)
+      await leaveGroup(owner, randomUUID(), concurrentKey)
+      const rejectedKey = uuidV7(), constraint = `group_create_test_${randomUUID().replaceAll('-', '')}`
+      await client.query(`ALTER TABLE group_members ADD CONSTRAINT ${constraint} CHECK (group_id <> '${rejectedKey}') NOT VALID`)
+      try {
+        await assert.rejects(createGroup(owner, rejectedKey, body), (error: { code: string; constraint: string }) => error.code === '23514' && error.constraint === constraint)
+        assert.equal((await client.query('SELECT 1 FROM groups WHERE id=$1', [rejectedKey])).rowCount, 0, 'membership failure rolls back the group INSERT in the same statement')
+      } finally { await client.query(`ALTER TABLE group_members DROP CONSTRAINT ${constraint}`) }
       const list = await trace(8, false, () => listGroups(owner, new URLSearchParams({ q: body.name })))
       assert.equal(list.items.length, 1)
       assert.equal(list.items[0].memberCount, 1)

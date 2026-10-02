@@ -1,13 +1,13 @@
 import 'server-only'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { requireAccount } from '../../../../Global/Auth/Backend'
-import { domainMutation, nowSeconds, onlyKeys, pageOf, pagination, textInput, withReadTransaction, type Database, type Identity } from '../../../../Global/Util/Backend'
+import { badInput, domainMutation, nowSeconds, onlyKeys, pageOf, pagination, textInput, withDatabaseConnection, withReadTransaction, type Database, type Identity } from '../../../../Global/Util/Backend'
 import { getActiveUserProfiles } from '../../../User/Backend'
 import { hasUnfinishedGroupParticipation, hasUnfinishedGroupRounds } from '../../../Settle/Backend'
 import { MAX_GROUP_MEMBERS, type GroupDetail, type GroupListItem, type GroupSummary, type InvitePreview, type GroupMutationResult, type CreateGroupRequestDTO, type CreateInviteRequestDTO } from '../../Shared'
 import type { Page } from '../../../../lib/domain-types'
 import type { GroupRow } from '../DAO/GroupDAO'
-import { creatorOnly, memberLimitExceeded, missing, unfinishedGroupRounds, unfinishedRounds } from '../Exception/GroupException'
+import { creatorOnly, duplicateGroup, memberLimitExceeded, missing, unfinishedGroupRounds, unfinishedRounds } from '../Exception/GroupException'
 import * as repository from '../Repository/GroupRepository'
 
 function groupDTO(row: GroupRow): GroupSummary {
@@ -62,9 +62,15 @@ export async function getGroup(access: Identity, groupId: string): Promise<Group
 export async function createGroup(access: Identity, key: string, body: CreateGroupRequestDTO | Record<string, unknown>): Promise<GroupMutationResult> {
   onlyKeys(body, ['name'])
   const name = textInput(body.name)
-  return domainMutation(access, key, 'group.create', body, async (client, userId) => {
-    const id = randomUUID(), now = nowSeconds()
-    await repository.insertGroup(client, id, userId, name, now)
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(key)) badInput('invalid_request_key', 'UUIDv7 모임 생성 키가 필요합니다')
+  const id = key.toLowerCase()
+  return withDatabaseConnection(async client => {
+    const account = await requireAccount(client, access)
+    try { await repository.insertGroup(client, id, account.id, name, nowSeconds()) }
+    catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === '23505' && 'constraint' in error && error.constraint === 'groups_pkey') throw duplicateGroup()
+      throw error
+    }
     return { id }
   })
 }

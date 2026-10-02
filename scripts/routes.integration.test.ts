@@ -1,3 +1,4 @@
+import { uuidV7 } from '../src/lib/uuid.ts'
 import assert from 'node:assert/strict'
 import { randomBytes, randomUUID } from 'node:crypto'
 import test from 'node:test'
@@ -26,7 +27,7 @@ async function session(name: string) {
 async function request(path: string, token: string | null, method = 'GET', body?: unknown, extraHeaders?: Record<string, string>) {
   const headers = new Headers({ origin, ...extraHeaders })
   if (token) headers.set('cookie', `${ACCESS_TOKEN_COOKIE_NAME}=${token}`)
-  if (method !== 'GET' && !headers.has('Idempotency-Key')) headers.set('Idempotency-Key', randomUUID())
+  if (method !== 'GET' && !headers.has('Idempotency-Key')) headers.set('Idempotency-Key', path === 'groups' && method === 'POST' ? uuidV7() : randomUUID())
   const multipart = body instanceof FormData
   if (body !== undefined && !multipart) headers.set('content-type', 'application/json')
   const req = new NextRequest(`${origin}/api/${path}`, { method, headers, ...(body === undefined ? {} : { body: multipart ? body : JSON.stringify(body) }) })

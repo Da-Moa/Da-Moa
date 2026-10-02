@@ -1,5 +1,6 @@
 'use client'
 
+import { uuidV7 } from './uuid'
 export class ApiError extends Error {
   recover?: () => Promise<unknown>
   constructor(public status: number, public code: string, message: string, public details?: unknown) {
@@ -75,7 +76,7 @@ export async function apiRequest<T>(path: string, options: { method?: string; bo
       }
       throw error
     }
-    pending ??= { signature, key: crypto.randomUUID(), body: snapshot(options.body) }
+    pending ??= { signature, key: method === 'POST' && path === '/api/groups' ? uuidV7() : crypto.randomUUID(), body: snapshot(options.body) }
     unfinishedRequests.set(operation, pending)
   }
   const body = pending ? pending.body : options.body

@@ -10,6 +10,12 @@ function connectionString() {
   return value
 }
 
+export async function withDatabaseConnection<T>(work: (client: Database) => Promise<T>): Promise<T> {
+  const client = await getDatabasePool(connectionString()).connect()
+  try { return await work(client) }
+  finally { client.release() }
+}
+
 async function transaction<T>(write: boolean, work: (client: Database) => Promise<T>): Promise<T> {
   const client = await getDatabasePool(connectionString()).connect()
   let discard = false

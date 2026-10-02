@@ -123,7 +123,7 @@ const domainPaths = {
   '/api/me/bank-account': { put: operation('계정', '대표 계좌 저장', { mutation: true, request: ref('BankAccount'), response: object({ id, bankVersion }, ['id', 'bankVersion']), description: '직접 입력한 계좌를 저장합니다. 계좌가 바뀌면 기존 확인 이력을 초기화하고, 진행 중 정산도 계좌 교체를 막지 않습니다. 같은 성공 멱등 키는 저장 결과를 반환합니다.' }) },
   '/api/groups': {
     get: operation('모임', '활성 모임 목록', { response: ref('GroupPage'), parameters: [...pageParameters, groupSearchParameter] }),
-    post: operation('모임', '모임 생성', { mutation: true, request: { ...object({ name: string }, ['name']), additionalProperties: false } }),
+    post: operation('모임', '모임 생성', { parameters: [{ ...mutationParameters[1], schema: { ...id, pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$' }, description: '모임 PK로 사용할 UUIDv7. 같은 키 재전송은 409로 거절합니다.' }, mutationParameters[0]], request: { ...object({ name: string }, ['name']), additionalProperties: false }, description: 'JWT·회원 상태를 확인한 뒤 UUIDv7 Idempotency-Key를 모임 PK로 사용합니다. 명시적 트랜잭션 없이 모임·생성자 멤버십을 한 SQL로 저장하고 총 AUTH+생성 2회입니다. 같은 PK는 409 group_already_exists로 거절하며 멱등 기록 조회·저장은 하지 않습니다.' }),
   },
   '/api/groups/{groupId}': {
     get: operation('모임', '현재 모임과 활성 멤버 후보', { response: ref('GroupDetail') }),

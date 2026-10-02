@@ -1,3 +1,4 @@
+import { uuidV7 } from '../src/lib/uuid.ts'
 import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
 import test from 'node:test'
@@ -40,7 +41,7 @@ test('legacy receipt migration preserves images and restores expense deletion an
       members.push(readAccessToken(session.accessToken)!)
     }
     const [a, b, outsider] = members
-    const group = await createGroup(a, key(), { name: '영수증 호환 검증' })
+    const group = await createGroup(a, uuidV7(), { name: '영수증 호환 검증' })
     const invite = await createInvite(a, key(), group.id, {})
     await acceptInvite(b, key(), invite.sharePath!.split('/').at(-1)!)
     const round = await createRound(a, key(), group.id, { name: '구버전 영수증', currency: 'KRW', participantIds: [a.userId, b.userId] })

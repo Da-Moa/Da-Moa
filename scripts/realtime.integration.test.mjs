@@ -1,3 +1,4 @@
+import { uuidV7 } from '../src/lib/uuid.ts'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -76,7 +77,7 @@ test('authenticated WebSocket receives only its own committed invalidations', as
         try { resolve(JSON.parse(bytes.toString())) } catch (error) { reject(error) }
       })
     })
-    const response = await fetch(`${origin}/api/groups`, { method: 'POST', headers: { origin, cookie: mine.cookie, 'content-type': 'application/json', 'idempotency-key': randomUUID() }, body: JSON.stringify({ name: `WebSocket ${randomUUID()}` }) })
+    const response = await fetch(`${origin}/api/groups`, { method: 'POST', headers: { origin, cookie: mine.cookie, 'content-type': 'application/json', 'idempotency-key': uuidV7() }, body: JSON.stringify({ name: `WebSocket ${randomUUID()}` }) })
     assert.equal(response.status, 200)
     const event = await message
     assert.equal(event.type, 'invalidate')

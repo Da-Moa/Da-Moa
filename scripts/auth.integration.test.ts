@@ -1,3 +1,4 @@
+import { uuidV7 } from '../src/lib/uuid.ts'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
@@ -122,7 +123,7 @@ test('onboarding purpose, bank normalization, request replay, logout, and one-ti
   assert.equal(limited.accessMaxAge, 600)
   assert.equal((await getAccount(limitedAccess, true)).onboardingCompletedAt, null)
   await assert.rejects(getAccount(limitedAccess), codeIs('onboarding_required'))
-  await assert.rejects(createGroup(limitedAccess, randomUUID(), { name: '제한 세션 모임' }), codeIs('onboarding_required'))
+  await assert.rejects(createGroup(limitedAccess, uuidV7(), { name: '제한 세션 모임' }), codeIs('onboarding_required'))
 
   const app = await completeOnboarding(limitedAccess, bank)
   const access = accessOf(app)
@@ -155,7 +156,7 @@ test('withdrawal checks all unfinished history including excluded members; rejoi
   const owner = await newAccount()
   const participant = await newAccount()
   const third = await newAccount()
-  const group = await createGroup(owner.access, randomUUID(), { name: '회원 상태 검증' })
+  const group = await createGroup(owner.access, uuidV7(), { name: '회원 상태 검증' })
   const invite = await createInvite(owner.access, randomUUID(), group.id, {})
   const token = invite.sharePath!.split('/').at(-1)!
   await acceptInvite(participant.access, randomUUID(), token)

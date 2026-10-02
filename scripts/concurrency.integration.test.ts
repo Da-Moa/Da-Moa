@@ -1,3 +1,4 @@
+import { uuidV7 } from '../src/lib/uuid.ts'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -30,7 +31,7 @@ async function member(): Promise<AccessToken> {
 
 async function group(join = true) {
   const owner = await member(), participant = await member()
-  const group = await createGroup(owner, key(), { name: '경합 검증 모임' })
+  const group = await createGroup(owner, uuidV7(), { name: '경합 검증 모임' })
   const invitation = await createInvite(owner, key(), group.id, {})
   const token = invitation.sharePath!.split('/').at(-1)!
   if (join) await acceptInvite(participant, key(), token)

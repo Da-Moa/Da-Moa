@@ -1,3 +1,4 @@
+import { uuidV7 } from '../src/lib/uuid.ts'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import test from 'node:test'
@@ -34,7 +35,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     await applyMigrations(client)
     const a = await member('A'), b = await member('B'), c = await member('C'), d = await member('D'), outsider = await member('외부인')
     const people = [a, b, c, d]
-    const g = await createGroup(a, key(), { name: '정산 통합 검증' })
+    const g = await createGroup(a, uuidV7(), { name: '정산 통합 검증' })
     const inviteKey = key()
     const invite = await createInvite(a, inviteKey, g.id, {})
     const token = invite.sharePath!.split('/').at(-1)!
@@ -62,7 +63,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       const replacement = await createInvite(a, key(), g.id, { replaceInviteId: invite.inviteId })
       await assert.rejects(getInvite(b, token), code('not_found'))
       assert.ok(replacement.sharePath)
-      await assert.rejects(createGroup(a, key(), { name: 'x'.repeat(101) }), code('invalid_input'))
+      await assert.rejects(createGroup(a, uuidV7(), { name: 'x'.repeat(101) }), code('invalid_input'))
       await assert.rejects(createRound(a, key(), g.id, { name: '한 명', currency: 'KRW', participantIds: [a.userId] }), code('minimum_participants'))
       await assert.rejects(createRound(b, key(), g.id, { name: '본인 누락', currency: 'KRW', participantIds: [a.userId, c.userId] }), code('minimum_participants'))
       await assert.rejects(createRound(a, key(), g.id, { name: '외부인', currency: 'KRW', participantIds: [a.userId, outsider.userId] }), code('invalid_participants'))
@@ -85,7 +86,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     })
 
     await t.test('group search keeps its filter across cursor pages', async () => {
-      const created = await Promise.all(['Alpha 모임 검색', 'Beta 모임 검색', 'Gamma 모임 검색'].map(name => createGroup(a, key(), { name })))
+      const created = await Promise.all(['Alpha 모임 검색', 'Beta 모임 검색', 'Gamma 모임 검색'].map(name => createGroup(a, uuidV7(), { name })))
       const first = await listGroups(a, new URLSearchParams({ q: ' 모임 검색 ', limit: '2' }))
       const second = await listGroups(a, new URLSearchParams({ q: '모임 검색', limit: '2', cursor: first.nextCursor! }))
       assert.equal(first.items.length, 2)
@@ -97,7 +98,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     })
 
     await t.test('group list previews at most five active members', async () => {
-      const group = await createGroup(a, key(), { name: '참여 인원 미리보기 검증' })
+      const group = await createGroup(a, uuidV7(), { name: '참여 인원 미리보기 검증' })
       const invite = await createInvite(a, key(), group.id, {})
       const extras = [await member('목록 회원 1'), await member('목록 회원 2')]
       for (const person of [b, c, d, ...extras]) await acceptInvite(person, key(), invite.sharePath!.split('/').at(-1)!)
@@ -150,7 +151,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     })
 
     await t.test('participants leave without unfinished participation and creators close groups after every round completes', async () => {
-      const leaving = await createGroup(a, key(), { name: '나가기 검증' })
+      const leaving = await createGroup(a, uuidV7(), { name: '나가기 검증' })
       const invitation = await createInvite(a, key(), leaving.id, {})
       const invitationToken = invitation.sharePath!.split('/').at(-1)!
       await acceptInvite(b, key(), invitationToken)
@@ -168,7 +169,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       assert.equal((await getRound(a, past.id, query())).groupName, '나가기 검증')
       await assert.rejects(getInvite(a, invitationToken), code('not_found'))
 
-      const empty = await createGroup(c, key(), { name: '삭제할 빈 모임' })
+      const empty = await createGroup(c, uuidV7(), { name: '삭제할 빈 모임' })
       const emptyInvite = await createInvite(c, key(), empty.id, {})
       await acceptInvite(d, key(), emptyInvite.sharePath!.split('/').at(-1)!)
       const deletionKey = key()
@@ -579,7 +580,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
 
     await t.test('all supported currencies persist exact amounts, immutable rounds and KRW-only accounts without cross-round offset', async () => {
       const participants = [a.userId, b.userId]
-      await assert.rejects(createGroup(a, key(), { name: '모임 통화 없음', currency: 'KRW' }), code('invalid_input'))
+      await assert.rejects(createGroup(a, uuidV7(), { name: '모임 통화 없음', currency: 'KRW' }), code('invalid_input'))
       for (const currency of [undefined, null, '', 'XXX', 'usd']) {
         await assert.rejects(createRound(a, key(), g.id, { name: '잘못된 통화', participantIds: participants, ...(currency === undefined ? {} : { currency }) }), code('unsupported_currency'))
       }
@@ -626,7 +627,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       const signup = await signInKakao(subject, { displayName: '탈퇴 프로필', email: null, profileImageUrl })
       const registered = await completeOnboarding(readAccessToken(signup.accessToken), { bankName: '프로필은행', accountHolder: '탈퇴 프로필', accountNumber: '12340312345678' })
       const departed = readAccessToken(registered.accessToken)!
-      const profileGroup = await createGroup(a, key(), { name: '프로필 표시 검증' })
+      const profileGroup = await createGroup(a, uuidV7(), { name: '프로필 표시 검증' })
       const profileInvite = await createInvite(a, key(), profileGroup.id, {})
       await acceptInvite(departed, key(), profileInvite.sharePath!.split('/').at(-1)!)
       const r = await createRound(a, key(), profileGroup.id, { name: '프로필 회차', currency: 'KRW', participantIds: [a.userId, departed.userId] })

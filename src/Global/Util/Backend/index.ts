@@ -1,6 +1,6 @@
 import 'server-only'
 
-export { withReadTransaction, withWriteTransaction, type Database } from '../../../lib/db'
+export { withDatabaseConnection, withReadTransaction, withWriteTransaction, type Database } from '../../../lib/db'
 export { AppError, badInput, errorResponse } from '../../../lib/errors'
 export { readJsonBody, sameOrigin } from '../../../lib/http'
 export { idsInput, onlyKeys, textInput } from './input-validation-util'

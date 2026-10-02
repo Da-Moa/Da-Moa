@@ -25,8 +25,12 @@ export async function findActiveInvites(client: Database, groupId: string, now: 
 }
 
 export async function insertGroup(client: Database, id: string, userId: string, name: string, now: number) {
-  await client.query('INSERT INTO groups(id,creator_id,name,created_at) VALUES($1,$2,$3,$4)', [id, userId, name, now])
-  await client.query('INSERT INTO group_members(group_id,user_id,joined_at) VALUES($1,$2,$3)', [id, userId, now])
+  await client.query(`WITH created_group AS (
+    INSERT INTO groups(id,creator_id,name,created_at)
+    VALUES($1,$2,$3,$4)
+    RETURNING id,creator_id,created_at
+  ) INSERT INTO group_members(group_id,user_id,joined_at)
+    SELECT id,creator_id,created_at FROM created_group`, [id, userId, name, now])
 }
 
 export async function closeGroup(client: Database, groupId: string, now: number) {

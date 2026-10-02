@@ -1,3 +1,4 @@
+import { uuidV7 } from '../src/lib/uuid.ts'
 // UI regression in an isolated local DB; --forms-only checks custom input and bank controls.
 // Run with a dev server using that same test DB and Chrome --remote-debugging-port=9223.
 import assert from 'node:assert/strict'
@@ -95,7 +96,7 @@ async function setSession(session) {
   ] })
 }
 async function api(session, path, method = 'GET', body) {
-  const response = await fetch(`${origin}${path}`, { method, headers: { Origin: origin, Cookie: `${ACCESS_TOKEN_COOKIE_NAME}=${session.accessToken}`, 'Content-Type': 'application/json', 'Idempotency-Key': randomUUID() }, body: body === undefined ? undefined : JSON.stringify(body) })
+  const response = await fetch(`${origin}${path}`, { method, headers: { Origin: origin, Cookie: `${ACCESS_TOKEN_COOKIE_NAME}=${session.accessToken}`, 'Content-Type': 'application/json', 'Idempotency-Key': path === '/api/groups' && method === 'POST' ? uuidV7() : randomUUID() }, body: body === undefined ? undefined : JSON.stringify(body) })
   const result = await response.json()
   assert.ok(response.ok, `${method} ${path}: ${response.status} ${result.message ?? ''}`)
   return result.data ?? result
