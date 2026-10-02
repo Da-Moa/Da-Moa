@@ -1,13 +1,22 @@
 import 'server-only'
 import type { Database } from '../../../../Global/Util/Backend'
-import type { GroupRow, InviteRow, InviteSummaryRow, MembershipRow } from '../DAO/GroupDAO'
+import type { GroupRow, GroupListRow, InviteRow, InviteSummaryRow, MembershipRow } from '../DAO/GroupDAO'
 
 type Cursor = { createdAt: string; id: string } | null
 
 export async function findGroups(client: Database, userId: string, search: string | null, cursor: Cursor, limit: number) {
-  return (await client.query<GroupRow>(`SELECT g.* FROM groups g JOIN group_members m ON m.group_id=g.id AND m.user_id=$1 AND m.left_at IS NULL
-    WHERE ($2::text IS NULL OR strpos(lower(g.name),lower($2))>0)
-    AND ($3::bigint IS NULL OR (g.created_at,g.id)<($3::bigint,$4::text)) ORDER BY g.created_at DESC,g.id DESC LIMIT $5`, [userId, search, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1])).rows
+  const pattern = search === null ? null : `%${search.replace(/[\\%_]/g, '\\$&')}%`
+  return (await client.query<GroupListRow>(`SELECT g.id,g.creator_id,g.name,g.created_at,
+    array_agg(member.user_id ORDER BY CASE WHEN member.user_id=g.creator_id THEN 0 ELSE 1 END,member.user_id) AS member_ids
+    FROM (
+      SELECT g.* FROM groups g
+      JOIN group_members viewer ON viewer.group_id=g.id AND viewer.user_id=$1 AND viewer.left_at IS NULL
+      WHERE ($2::text IS NULL OR g.name ILIKE $2)
+      AND ($3::text IS NULL OR g.id<$3)
+      ORDER BY g.id DESC LIMIT $4
+    ) g
+    JOIN group_members member ON member.group_id=g.id AND member.left_at IS NULL
+    GROUP BY g.id,g.creator_id,g.name,g.created_at ORDER BY g.id DESC`, [userId, pattern, cursor?.id ?? null, limit + 1])).rows
 }
 
 export async function findMemberGroup(client: Database, groupId: string, userId: string) {

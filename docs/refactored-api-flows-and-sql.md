@@ -73,7 +73,7 @@ Access JWT는 localStorage에 저장하며 만료는 10분이다. 로그인 완�
 
 실제 Node 서버 통합 검사는 미인증 잘못된 JSON의 401 우선 차단, 변조·만료·토큰 종류 혼동, 공개 Health, Refresh-only 갱신·로그아웃 및 Bearer WebSocket 인증을 검증한다.
 
-### 읽기 R
+### 읽기 R — 모임 목록 제외
 
 1. HTTP 요청 → Node Proxy → JWT Guard에서 Access JWT 검증 → Route Handler/Controller → Service 입력 검증.
 2. 공용 pg 풀에서 연결 확보.
@@ -145,15 +145,16 @@ scripts/group.integration.test.ts는 정상·중복 SQL 2회, 세션·멱등 SQL
 
 ### G2. GET /api/groups — 목록/검색/페이지
 
-GroupsList.useResource()·loadMore() → GET /api/groups(query) → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 Group 분배 → GroupController → listGroups() → R 스냅샷 → Page<GroupListItem> → 목록·다음 커서 반영.
+GroupsList.useResource()·loadMore() → GET /api/groups(query) → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 Group 분배 → GroupController → listGroups() → 공용 풀 연결에서 일반 SELECT → Page<GroupListItem> → 목록·다음 커서 반영.
 
-1. pagination()으로 limit/cursor 검사, q가 있으면 textInput(q,100).
-2. R-START → AUTH → G-LIST: 활성 모임·대소문자 무시 부분 검색·(created_at,id) 내림차순·limit+1 조회.
-3. pageOf()가 실제 페이지를 선택. 비어 있으면 바로 COMMIT.
-4. G-MEMBERS: 실제 페이지 모임들의 활성 멤버십을 한 번에 조회 → U-PROFILES: 중복 제거한 회원 ID의 활성 프로필을 한 번에 조회.
-5. 생성자 우선 순서를 유지해 회원 수·최대 5명 미리보기 구성 → TX-COMMIT.
+1. pagination()으로 limit/cursor 검사, q가 있으면 textInput(q,100). 기존 공통 커서의 { id, createdAt } 형식은 유지하며 이 조회의 정렬·조건에는 id만 사용한다.
+2. withDatabaseConnection()으로 공용 풀 연결만 확보 → AUTH: JWT 목적과 가입·탈퇴 상태 확인.
+3. G-LIST: group_members의 JOIN ON 조건으로 요청자의 활성 멤버십 제한 → g.id DESC, g.id < cursor.id로 모임 limit+1개를 먼저 조회 → 같은 SQL에서 선택한 모임의 활성 멤버 ID를 array_agg로 집계한다. 모임을 고른 뒤 멤버를 JOIN하므로 멤버 수가 페이지 크기에 영향을 주지 않는다.
+4. 검색은 같은 G-LIST에 제목 ILIKE 조건을 적용한다. 검색어의 %, _, 역슬래시는 이스케이프해 문자 그대로 부분 검색하며 대소문자는 구분하지 않는다.
+5. pageOf()로 실제 페이지 선택. 비어 있으면 연결을 반환한다. 나머지는 실제 페이지의 member_ids를 앱의 Set으로 중복 제거 → U-PROFILES로 활성 회원 프로필 한 번 조회. 다음 페이지 유무 확인용 모임의 프로필은 조회하지 않는다.
+6. 생성자 우선 순서로 회원 수·최대 5명 미리보기 구성 → 연결 반환. member_ids는 내부 DAO 데이터이며 공개 DTO에 포함하지 않는다.
 
-정상 비빈 SQL: R-START(3) → AUTH → G-LIST → G-MEMBERS → U-PROFILES → TX-COMMIT = 8회. 빈 목록은 6회. limit+1번째 모임의 하위 데이터는 읽지 않는다. 회원 수가 늘어도 회원별 SELECT를 추가하지 않는다.
+정상 목록·검색 SQL: **AUTH → G-LIST → U-PROFILES = 3회**. 빈 결과는 AUTH → G-LIST = 2회다. 별도 G-MEMBERS·BEGIN·COMMIT·ROLLBACK·SET LOCAL·명시적 락은 실행하지 않는다. 세 조회는 같은 연결에서 각기 실행하며 읽기 트랜잭션 스냅샷을 사용하지 않는다.
 
 ### G3. GET /api/groups/{groupId} — 상세
 
@@ -351,35 +352,35 @@ VALUES
 
 바인딩: $1=actorId, $2=operation, $3=requestKey, $4=payload digest, $5=resourceId, $6=JSON 직렬화 응답 메타데이터, $7=현재 초 시각. 초대 발급은 링크가 없는 메타데이터를 전달한다.
 
-### G-LIST — 내 활성 모임 목록
+### G-LIST — 내 활성 모임 목록과 멤버 ID
 
-출처: [src/Domain/Group/Backend/Repository/GroupRepository.ts](../src/Domain/Group/Backend/Repository/GroupRepository.ts).
+출처: [GroupRepository.findGroups()](../src/Domain/Group/Backend/Repository/GroupRepository.ts).
 
 ```sql
 SELECT
-  g.*
-FROM
-  groups g
-  JOIN group_members m ON m.group_id = g.id
-  AND m.user_id = $1
-  AND m.left_at IS NULL
-WHERE
-  (
-    $2::text IS NULL
-    OR strpos(lower(g.name), lower($2)) > 0
-  )
-  AND (
-    $3::bigint IS NULL
-    OR (g.created_at, g.id) < ($3::bigint, $4::text)
-  )
-ORDER BY
-  g.created_at DESC,
-  g.id DESC
-LIMIT
-  $5;
+  g.id, g.creator_id, g.name, g.created_at,
+  array_agg(
+    member.user_id ORDER BY
+      CASE WHEN member.user_id = g.creator_id THEN 0 ELSE 1 END,
+      member.user_id
+  ) AS member_ids
+FROM (
+  SELECT g.*
+  FROM groups g
+  JOIN group_members viewer ON viewer.group_id = g.id
+    AND viewer.user_id = $1 AND viewer.left_at IS NULL
+  WHERE ($2::text IS NULL OR g.name ILIKE $2)
+    AND ($3::text IS NULL OR g.id < $3)
+  ORDER BY g.id DESC
+  LIMIT $4
+) g
+JOIN group_members member ON member.group_id = g.id
+  AND member.left_at IS NULL
+GROUP BY g.id, g.creator_id, g.name, g.created_at
+ORDER BY g.id DESC;
 ```
 
-$1=조회자 ID, $2=검색어 또는 null, $3=커서 createdAt 또는 null, $4=커서 ID 또는 null, $5=limit+1.
+$1=조회자 ID, $2=이스케이프한 검색어를 %로 감싼 패턴 또는 null, $3=커서 ID 또는 null, $4=limit+1. 모임 ID의 기존 PK 인덱스를 유지하며 스키마 변경은 없다. 반환된 실제 페이지의 member_ids를 Set으로 중복 제거하여 U-PROFILES의 $1에 전달한다.
 
 ### G-ACCESS — 활성 모임 권한
 
@@ -422,7 +423,7 @@ ORDER BY
   m.user_id;
 ```
 
-$1=현재 페이지의 모임 ID 배열 또는 상세 모임 하나. 생성자를 먼저 정렬한다.
+$1=상세 조회의 모임 ID 배열. 생성자를 먼저 정렬한다. 목록은 G-LIST 안에서 멤버 ID를 가져오므로 이 SQL을 호출하지 않는다.
 
 ### G-INVITES — 생성자에게 보여줄 유효 초대
 
@@ -714,7 +715,7 @@ $1=groupId. 별도 읽기 트랜잭션에 AUTH는 없고, 이미 허가된 커�
 | Group 정상 작업 | 이전 | 현재 |
 |---|---:|---:|
 | 생성 | 10 | 2 |
-| 목록(비빈/빈) | 7 / 6 | 8 / 6 |
+| 목록·검색(비빈/빈) | 7 / 6 | 3 / 2 |
 | 상세(생성자/일반 멤버) | 8 / 7 | 9 / 8 |
 | 일반 이탈/생성자 닫기 | 11 / 12 | 11 / 12 |
 | 초대 발급/재발급/폐기 | 10 / 11 / 10 | 10 / 11 / 10 |
@@ -747,4 +748,8 @@ node --import ./scripts/test-server-only.mjs --import tsx --test scripts/group.i
 
 이 문서는 현재 코드의 요청/SQL 흐름 기록이며 실제 사용자 쿼리 확인 결과를 대신하지 않는다. 다음 도메인 작업은 [Group-01](srp-query-refactor-plan.md#group-01-구현된-모임초대참여-도메인-분리)의 사용자 쿼리 확인 후 진행한다.
 
-검증 결과(2026-10-02): 단위 85개, 격리된 로컬 DB·MinIO 통합 38개, 프로덕션 빌드 및 전체 모바일 브라우저 회귀 검사 통과. 실제 로그인 완료 페이지의 localStorage/Bearer 전환과 로그아웃 토큰 삭제도 확인했다. 실제 카카오 외부 인증은 이번 자동 검사에 포함하지 않는다.
+JWT 인증 전환 검증 결과(2026-10-02): 단위 85개, 격리된 로컬 DB·MinIO 통합 38개, 프로덕션 빌드 및 전체 모바일 브라우저 회귀 검사 통과. 실제 로그인 완료 페이지의 localStorage/Bearer 전환과 로그아웃 토큰 삭제도 확인했다. 실제 카카오 외부 인증은 이번 자동 검사에 포함하지 않는다.
+
+모임 목록 후속 변경: scripts/group.integration.test.ts에서 목록·검색 3회/빈 결과 2회, 트랜잭션 SQL 미실행, 생성 시각과 반대로 배치한 ID 커서, 멤버가 여러 명인 모임의 페이지 크기, 여러 모임이 공유하는 멤버의 프로필 일괄 조회, LIKE 특수문자의 문자 검색을 확인한다.
+
+모임 목록 후속 검증 결과(2026-10-02): 단위 85개·격리 DB/MinIO 통합 38개·프로덕션 빌드 통과. 일반 목록·검색 3회, 빈 결과 2회와 ID 커서를 실제 SQL 로그로 검증했다.

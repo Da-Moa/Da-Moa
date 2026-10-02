@@ -14,7 +14,7 @@ if (!database || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(database)
 process.env.DATABASE_URL = database
 process.env.AUTH_JWT_SECRET ||= 'isolated-group-test-secret-at-least-32-bytes'
 
-test('Group creation uses atomic autocommit SQL; other operations preserve transactions, replay and rollback', async t => {
+test('Group creation and lists use autocommit SQL; other operations preserve transactions, replay and rollback', async t => {
   const client = createDatabaseClient(database)
   await client.connect()
   try {
@@ -64,7 +64,7 @@ test('Group creation uses atomic autocommit SQL; other operations preserve trans
         await assert.rejects(createGroup(owner, rejectedKey, body), (error: { code: string; constraint: string }) => error.code === '23514' && error.constraint === constraint)
         assert.equal((await client.query('SELECT 1 FROM groups WHERE id=$1', [rejectedKey])).rowCount, 0, 'membership failure rolls back the group INSERT in the same statement')
       } finally { await client.query(`ALTER TABLE group_members DROP CONSTRAINT ${constraint}`) }
-      const list = await trace(8, false, () => listGroups(owner, new URLSearchParams({ q: body.name })))
+      const list = await trace(3, null, () => listGroups(owner, new URLSearchParams({ q: body.name })))
       assert.equal(list.items.length, 1)
       assert.equal(list.items[0].memberCount, 1)
       assert.equal((await trace(9, false, () => getGroup(owner, group.id))).members[0].userId, owner.userId)
@@ -79,6 +79,27 @@ test('Group creation uses atomic autocommit SQL; other operations preserve trans
       await trace(12, true, () => acceptInvite(participant, acceptKey, token))
       await trace(7, true, () => acceptInvite(participant, acceptKey, token))
       await trace(11, true, () => acceptInvite(participant, randomUUID(), token))
+      const second = await createGroup(owner, uuidV7(), { name: `${body.name} %_\\` })
+      const secondInvite = await createInvite(owner, randomUUID(), second.id, {})
+      await acceptInvite(participant, randomUUID(), secondInvite.sharePath!.split('/').at(-1)!)
+      const orderedIds = [group.id, second.id].sort().reverse()
+      // Reverse creation times so this fails if pagination still orders by created_at.
+      for (const [index, id] of orderedIds.entries()) await client.query('UPDATE groups SET created_at=$2 WHERE id=$1', [id, index + 1])
+      const combined = await trace(3, null, () => listGroups(owner, new URLSearchParams()))
+      assert.deepEqual(combined.items.map(item => item.id), orderedIds)
+      assert.ok(combined.items.every(item => item.memberCount === 2 && item.memberPreview[0].userId === owner.userId))
+      assert.equal(statements.filter(sql => sql.includes('FROM users')).length, 2, 'one AUTH and one batch profile query, despite members shared across groups')
+      assert.equal(JSON.stringify(combined).includes('member_ids'), false)
+      const firstPage = await trace(3, null, () => listGroups(owner, new URLSearchParams({ q: body.name, limit: '1' })))
+      assert.equal(firstPage.items[0].id, orderedIds[0])
+      assert.ok(firstPage.nextCursor)
+      const nextPage = await trace(3, null, () => listGroups(owner, new URLSearchParams({ q: body.name, limit: '1', cursor: firstPage.nextCursor! })))
+      assert.deepEqual(nextPage.items.map(item => item.id), [orderedIds[1]])
+      assert.equal(nextPage.nextCursor, null)
+      for (const q of ['%_', '\\']) {
+        assert.deepEqual((await trace(3, null, () => listGroups(owner, new URLSearchParams({ q })))).items.map(item => item.id), [second.id], 'LIKE metacharacters match literally')
+      }
+      await leaveGroup(owner, randomUUID(), second.id)
       const detail = await trace(8, false, () => getGroup(participant, group.id))
       assert.deepEqual(detail.members.map(member => member.userId), [owner.userId, participant.userId])
       assert.deepEqual(detail.invites, [])
@@ -92,7 +113,7 @@ test('Group creation uses atomic autocommit SQL; other operations preserve trans
       await trace(10, true, () => revokeInvite(owner, randomUUID(), group.id, replaced.id))
       await trace(11, true, () => leaveGroup(participant, randomUUID(), group.id))
       await trace(12, true, () => leaveGroup(owner, randomUUID(), group.id))
-      assert.equal((await trace(6, false, () => listGroups(owner, new URLSearchParams({ q: body.name })))).items.length, 0)
+      assert.equal((await trace(2, null, () => listGroups(owner, new URLSearchParams({ q: body.name })))).items.length, 0)
       assert.equal((await client.query('SELECT COUNT(*)::int AS count FROM group_members WHERE group_id=$1 AND left_at IS NULL', [group.id])).rows[0].count, 0)
     } finally {
       logger.mock.restore()

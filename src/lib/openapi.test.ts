@@ -25,7 +25,7 @@ test('OpenAPI documents a recoverable refresh failure', () => {
 })
 
 type DocumentedOperation = {
-  parameters?: Array<{ name: string; in: string; required?: boolean; schema?: { pattern?: string; format?: string } }>
+  parameters?: Array<{ name: string; in: string; required?: boolean; description?: string; schema?: { pattern?: string; format?: string } }>
   requestBody?: { content: Record<string, { schema: { required?: string[] } }> }
   responses: Record<string, unknown>
   description: string
@@ -42,7 +42,7 @@ type DocumentedSchema = {
   description?: string
 }
 const paths = openApiDocument.paths as unknown as Record<string, Record<string, DocumentedOperation> & {
-  parameters?: Array<{ name: string; in: string; required?: boolean; schema?: { pattern?: string; format?: string } }>
+  parameters?: Array<{ name: string; in: string; required?: boolean; description?: string; schema?: { pattern?: string; format?: string } }>
 }>
 
 test('group creation requires a UUIDv7 key and token bootstrap requires Origin only', () => {
@@ -157,7 +157,7 @@ test('group list documents name search with cursor pagination', () => {
   const parameters = paths['/api/groups'].get.parameters ?? []
   const search = parameters.find(parameter => parameter.name === 'q') as { schema?: { minLength?: number; maxLength?: number } } | undefined
   assert.deepEqual(search?.schema, { type: 'string', minLength: 1, maxLength: 100 })
-  assert.ok(parameters.some(parameter => parameter.name === 'cursor'))
+  assert.match(parameters.find(parameter => parameter.name === 'cursor')?.description ?? '', /모임 ID 내림차순/)
   const listItem = openApiDocument.components.schemas.GroupListItem as DocumentedSchema
   assert.ok(listItem.required?.includes('memberCount'))
   assert.equal(listItem.properties?.memberPreview.maxItems, 5)

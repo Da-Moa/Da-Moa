@@ -37,14 +37,15 @@ async function activeMembers(client: Database, groupIds: string[]) {
 export async function listGroups(access: Identity, query: URLSearchParams): Promise<Page<GroupListItem>> {
   const { limit, cursor } = pagination(query)
   const search = query.has('q') ? textInput(query.get('q'), 100) : null
-  return withReadTransaction(async client => {
+  return withDatabaseConnection(async client => {
     const account = await requireAccount(client, access)
-    const page = pageOf((await repository.findGroups(client, account.id, search, cursor, limit)).map(groupDTO), limit, row => row)
+    const page = pageOf(await repository.findGroups(client, account.id, search, cursor, limit), limit, groupDTO)
     if (!page.items.length) return { ...page, items: [] }
-    const members = await activeMembers(client, page.items.map(group => group.id))
+    const memberIds = new Set(page.items.flatMap(group => group.member_ids))
+    const profiles = new Map((await getActiveUserProfiles(client, [...memberIds])).map(profile => [profile.userId, profile]))
     return { ...page, items: page.items.map(group => {
-      const active = members.filter(member => member.groupId === group.id)
-      return { ...group, memberCount: active.length, memberPreview: active.slice(0, 5).map(member => ({ userId: member.userId, displayName: member.displayName, profileImageUrl: member.profileImageUrl })) }
+      const members = group.member_ids.flatMap(id => { const profile = profiles.get(id); return profile ? [profile] : [] })
+      return { ...groupDTO(group), memberCount: members.length, memberPreview: members.slice(0, 5) }
     }) }
   })
 }
