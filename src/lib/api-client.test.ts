@@ -78,7 +78,11 @@ test('expired bank authentication discards the original personal data before log
 
 function fakeWindow(path = '/settlements/round-a', search = '') {
   const redirects: string[] = []
-  Object.defineProperty(globalThis, 'window', { configurable: true, value: { location: { pathname: path, search, assign: (path: string) => redirects.push(path) } } })
+  const storage = new Map([['da_moa_access', 'test-access-token']])
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: {
+    location: { pathname: path, search, assign: (path: string) => redirects.push(path) },
+    localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) },
+  } })
   return redirects
 }
 
@@ -104,7 +108,7 @@ test('session refresh retries the unchanged mutation with the same key and body'
   globalThis.fetch = async (input, init) => {
     requests.push({ path: String(input), key: new Headers(init?.headers).get('Idempotency-Key'), body: init?.body })
     if (requests.length === 1) return Response.json({ error: 'unauthorized' }, { status: 401 })
-    if (String(input) === '/api/auth/refresh') return Response.json({ ok: true })
+    if (String(input) === '/api/auth/refresh') return Response.json({ data: { accessToken: 'refreshed-access-token' } })
     return Response.json({ data: { version: 2 } })
   }
   await apiRequest('/api/rounds/round-a/confirm', { method: 'POST', body: { expectedVersion: 1 } })
@@ -112,6 +116,16 @@ test('session refresh retries the unchanged mutation with the same key and body'
   assert.equal(requests[0].key, requests[2].key)
   assert.equal(requests[0].body, requests[2].body)
   assert.deepEqual(redirects, [])
+})
+
+test('logout clears the local Access token and requests carry Bearer authorization', async () => {
+  fakeWindow()
+  globalThis.fetch = async (_input, init) => {
+    assert.equal(new Headers(init?.headers).get('Authorization'), 'Bearer test-access-token')
+    return Response.json({ ok: true })
+  }
+  await apiRequest('/api/auth/logout', { method: 'POST' })
+  assert.equal(window.localStorage.getItem('da_moa_access'), null)
 })
 
 test('an expired session retains the settlement destination while redirecting to login', async () => {

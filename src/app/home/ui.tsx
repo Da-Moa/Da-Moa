@@ -1,5 +1,7 @@
 'use client'
 
+import { getAccessToken } from '../../Global/Auth/Frontend'
+
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
@@ -313,7 +315,9 @@ function RealtimeProvider({ accountId, reloadAccount, children }: { accountId: s
         const account = await apiRequest<Account>('/api/me')
         if (disposed) return
         if (account.id !== accountId) { window.location.reload(); return }
-        socket = new WebSocket(`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/realtime`)
+        const token = getAccessToken()
+        if (!token) { retry(); return }
+        socket = new WebSocket(`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/realtime`, ['da-moa', token])
         socket.onopen = () => { attempts = 0; queue(['me', ...listeners.current.keys()]) }
         socket.onmessage = message => { const event = parseInvalidateEvent(message.data); if (event) queue(event.keys) }
         socket.onclose = retry

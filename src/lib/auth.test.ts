@@ -174,7 +174,9 @@ test('access and refresh JWTs reject tampering, expiry, and token-type confusion
   assert.equal(refreshCookieOptions(REFRESH_TOKEN_MAX_AGE_SECONDS).path, '/api/auth')
 
   const onboarding = createAccessToken('user-id', 'limited-session', TEST_SECRET, issuedAt, ONBOARDING_MAX_AGE_SECONDS)
-  assert.ok(verifyAccessToken(onboarding, TEST_SECRET, issuedAt + ACCESS_TOKEN_MAX_AGE_SECONDS), 'the onboarding form must not lose its session at the normal five-minute access limit')
+  assert.equal(ACCESS_TOKEN_MAX_AGE_SECONDS, 600)
   assert.ok(verifyAccessToken(onboarding, TEST_SECRET, issuedAt + ONBOARDING_MAX_AGE_SECONDS - 1))
   assert.equal(verifyAccessToken(onboarding, TEST_SECRET, issuedAt + ONBOARDING_MAX_AGE_SECONDS), null)
+  const limited = createAccessToken('user-id', 'limited-session', TEST_SECRET, issuedAt, ONBOARDING_MAX_AGE_SECONDS, 'onboarding')
+  assert.equal(verifyAccessToken(limited, TEST_SECRET, issuedAt + 1)?.purpose, 'onboarding')
 })

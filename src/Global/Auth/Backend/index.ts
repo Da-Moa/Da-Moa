@@ -1,4 +1,5 @@
 import 'server-only'
 
-export { ACCESS_TOKEN_COOKIE_NAME, readAccessToken, currentTimestamp } from '../../../lib/auth'
+export { readRequestAccessToken, currentTimestamp } from '../../../lib/auth'
 export { requireAccount } from '../../../lib/authorization'
+export { jwtGuard } from './Guard/JwtGuard'

@@ -42,7 +42,7 @@ const roundSearchParameter = { name: 'q', in: 'query', schema: { type: 'string',
 const groupSearchParameter = { name: 'q', in: 'query', schema: { type: 'string', minLength: 1, maxLength: 100 }, description: '모임명의 대소문자를 구분하지 않는 부분 검색어' }
 const mutationParameters = [
   { name: 'Origin', in: 'header', required: true, schema: { type: 'string', format: 'uri' }, description: '현재 서비스 origin과 정확히 일치해야 합니다.' },
-  { name: 'Idempotency-Key', in: 'header', required: true, schema: id, description: '한 제출당 한 UUID. 네트워크·세션 갱신 후 재시도에도 같은 키와 본문을 사용합니다.' },
+  { name: 'Idempotency-Key', in: 'header', required: true, schema: id, description: '한 제출당 한 UUID. 네트워크·토큰 갱신 후 재시도에도 같은 키와 본문을 사용합니다.' },
 ]
 const domainResponses = {
   DomainFailure: {
@@ -99,8 +99,8 @@ type OperationOptions = {
 function operation(tag: string, summary: string, options: OperationOptions = {}) {
   return {
     tags: [tag], summary,
-    description: options.description ?? '활성 계정·세션 및 리소스 권한을 서버에서 검증합니다. 응답은 private, no-store입니다.',
-    security: [{ accessCookie: [] }],
+    description: options.description ?? 'Node JWT Guard에서 입력 검사 전에 JWT를 검증하고, DB에서 회원 상태 및 리소스 권한을 검증하며 세션 유효성은 조회하지 않습니다. 응답은 private, no-store입니다.',
+    security: [{ accessBearer: [] }],
     parameters: [...(options.mutation ? mutationParameters : []), ...(options.parameters ?? [])],
     ...(options.request ? { requestBody: { required: true, content: { [options.multipart ? 'multipart/form-data' : 'application/json']: { schema: options.request } } } } : {}),
     responses: {
@@ -118,8 +118,8 @@ function healthOperation(summary: string, names: string[]) {
   return { tags: ['상태'], summary, description: '인증 없이 조회합니다. 결과를 캐시하지 않으며 내부 오류·연결 정보는 반환하지 않습니다.', security: [], responses: { '200': { description: '모든 검사 정상', ...response }, ...(dependencyCheck ? { '503': { description: '하나 이상의 의존 서비스 장애', ...response } } : {}) } }
 }
 const domainPaths = {
-  '/api/me': { get: operation('계정', '본인 프로필·가입 상태·계좌 조회', { response: ref('Me'), description: 'app 또는 onboarding 목적의 활성 세션으로 본인 데이터만 조회합니다. 일반 기능은 가입 완료 app 세션이 필요합니다.' }) },
-  '/api/me/onboarding': { post: operation('계정', '계좌 저장 후 가입·명시적 재가입 완료', { response: object({ id, returnTo: string }, ['id', 'returnTo']), request: { ...object({ ...bankInputFields, confirmRejoin: { type: 'boolean', description: '탈퇴 계정의 명시적 재가입 동의' } }, bankInputRequired), additionalProperties: false }, parameters: [mutationParameters[0]], description: '은행·계좌번호·예금주를 직접 입력해 가입을 완료합니다. 계좌·가입·새 app 세션을 원자적으로 저장하며 기존 모임·관리 권한은 복구하지 않습니다. 쿠키 응답 유실은 카카오 재로그인으로 복구합니다.' }) },
+  '/api/me': { get: operation('계정', '본인 프로필·가입 상태·계좌 조회', { response: ref('Me'), description: 'app 또는 onboarding 목적의 JWT로 본인 데이터만 조회합니다. 일반 기능은 가입 완료 회원의 app JWT가 필요합니다.' }) },
+  '/api/me/onboarding': { post: operation('계정', '계좌 저장 후 가입·명시적 재가입 완료', { response: object({ id, returnTo: string, accessToken: string }, ['id', 'returnTo', 'accessToken']), request: { ...object({ ...bankInputFields, confirmRejoin: { type: 'boolean', description: '탈퇴 계정의 명시적 재가입 동의' } }, bankInputRequired), additionalProperties: false }, parameters: [mutationParameters[0]], description: '은행·계좌번호·예금주를 직접 입력해 가입을 완료합니다. 계좌·가입 상태를 원자적으로 저장하고 새 app JWT를 발급하며 기존 모임·관리 권한은 복구하지 않습니다. 토큰 응답 유실은 카카오 재로그인으로 복구합니다.' }) },
   '/api/me/bank-account': { put: operation('계정', '대표 계좌 저장', { mutation: true, request: ref('BankAccount'), response: object({ id, bankVersion }, ['id', 'bankVersion']), description: '직접 입력한 계좌를 저장합니다. 계좌가 바뀌면 기존 확인 이력을 초기화하고, 진행 중 정산도 계좌 교체를 막지 않습니다. 같은 성공 멱등 키는 저장 결과를 반환합니다.' }) },
   '/api/groups': {
     get: operation('모임', '활성 모임 목록', { response: ref('GroupPage'), parameters: [...pageParameters, groupSearchParameter] }),
@@ -172,7 +172,7 @@ export const openApiDocument = {
   info: {
     title: '다모아 API',
     version: '2.0.0',
-    description: '카카오 인증·계좌·모임·회차·증빙·개인 정산 API. HttpOnly 쿠키로 인증하며 변경은 origin·권한·멱등 키를 검증합니다. 금액은 정확한 문자열이고 양수 잔액은 보낼 돈, 음수는 받을 돈입니다.',
+    description: '카카오 인증·계좌·모임·회차·증빙·개인 정산 API. localStorage의 10분 Access JWT를 Bearer 헤더로 전송하고 Refresh JWT는 HttpOnly 쿠키로 유지합니다. 모임 생성은 UUIDv7 PK로 중복을 거절하며 다른 변경은 origin·권한·멱등 키를 검증합니다. 금액은 정확한 문자열이고 양수 잔액은 보낼 돈, 음수는 받을 돈입니다.',
   },
   servers: [{ url: '/', description: '현재 배포 주소' }],
   tags: [{ name: '상태' }, { name: '인증', description: '카카오 로그인과 토큰 관리' }, { name: '계정' }, { name: '모임' }, { name: '지출' }, { name: '정산' }],
@@ -198,7 +198,7 @@ export const openApiDocument = {
       get: {
         tags: ['인증'],
         summary: '카카오 로그인 콜백',
-        description: '인가 코드를 교환하고 OIDC sub를 검증합니다. 가입 완료 활성 회원은 app 세션, 신규·가입 미완료·탈퇴 회원은 10분 onboarding 세션을 발급합니다. 로그인만으로 재가입하지 않습니다.',
+        description: '인가 코드를 교환하고 OIDC sub를 검증합니다. 가입 완료 활성 회원은 app JWT, 신규·가입 미완료·탈퇴 회원은 10분 onboarding JWT를 발급합니다. 로그인만으로 재가입하지 않습니다.',
         parameters: [
           {
             name: 'code',
@@ -228,11 +228,17 @@ export const openApiDocument = {
         },
       },
     },
+    '/api/auth/access-token': { post: {
+      tags: ['인증'], summary: '로그인 완료 후 Access JWT 전달',
+      description: 'Refresh JWT의 서명·만료를 확인해 app/onboarding 목적을 보존한 Access JWT를 JSON으로 전달합니다. 브라우저가 localStorage에 저장하며 URL·Access 쿠키에 토큰을 넣지 않습니다.',
+      security: [{ refreshCookie: [] }], parameters: [mutationParameters[0]],
+      responses: { '200': { description: 'data.accessToken과 data.purpose 반환' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '503': { $ref: '#/components/responses/DomainFailure' } },
+    } },
     '/api/auth/refresh': {
       post: {
         tags: ['인증'],
         summary: '액세스 토큰 재발급',
-        description: '서명·만료·DB 해시와 활성 회원·가입 완료·app 세션 목적을 확인한 뒤 액세스·리프레시 JWT를 함께 회전합니다. onboarding 세션은 갱신하지 않습니다.',
+        description: 'Node JWT Guard에서 리프레시 JWT의 서명·만료를 먼저 검증합니다. DB 세션 없이 JWT의 목적을 보존해 Access JWT를 JSON으로 반환하고 Refresh 쿠키를 갱신합니다. app Refresh는 14일로 갱신하고 onboarding Refresh의 원래 만료 시각은 연장하지 않습니다. 이전 Refresh JWT도 자체 만료까지 유효합니다.',
         parameters: [
           {
             name: 'Origin',
@@ -244,7 +250,7 @@ export const openApiDocument = {
         ],
         security: [{ refreshCookie: [] }],
         responses: {
-          '200': { $ref: '#/components/responses/Ok' },
+          '200': { description: 'data.accessToken을 반환하고 Refresh 쿠키 갱신' },
           '401': { $ref: '#/components/responses/Unauthorized' },
           '403': { $ref: '#/components/responses/Forbidden' },
           '503': { $ref: '#/components/responses/RefreshUnavailable' },
@@ -255,7 +261,7 @@ export const openApiDocument = {
       post: {
         tags: ['인증'],
         summary: '로그아웃',
-        description: '유효한 리프레시 토큰을 우선 사용하고, 없으면 유효한 액세스 토큰의 세션 ID로 DB 기록을 식별·삭제한 뒤 액세스·리프레시 쿠키를 제거합니다.',
+        description: 'Node JWT Guard에서 유효한 Refresh 또는 Bearer Access JWT를 요구합니다. 브라우저는 성공 후 localStorage의 Access 토큰을 삭제하고 서버는 Refresh 쿠키를 삭제합니다. DB 세션을 사용하거나 Access JWT를 즉시 만료시키지 않으며 발급 후 10분까지 유효합니다.',
         parameters: [
           {
             name: 'Origin',
@@ -265,10 +271,11 @@ export const openApiDocument = {
             description: '현재 서비스 origin과 정확히 일치해야 합니다.',
           },
         ],
+        security: [{ refreshCookie: [] }, { accessBearer: [] }],
         responses: {
           '200': { $ref: '#/components/responses/Ok' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
           '403': { $ref: '#/components/responses/Forbidden' },
-          '503': { $ref: '#/components/responses/LogoutUnavailable' },
         },
       },
     },
@@ -286,7 +293,7 @@ export const openApiDocument = {
             description: '현재 서비스 origin과 정확히 일치해야 합니다.',
           },
         ],
-        security: [{ accessCookie: [] }],
+        security: [{ accessBearer: [] }],
         responses: {
           '200': { description: '탈퇴 완료', content: { 'application/json': { schema: object({ ok: { type: 'boolean' } }, ['ok']) } } },
           '401': { $ref: '#/components/responses/Unauthorized' },
@@ -299,11 +306,9 @@ export const openApiDocument = {
   },
   components: {
     securitySchemes: {
-      accessCookie: {
-        type: 'apiKey',
-        in: 'cookie',
-        name: 'da_moa_access',
-        description: 'HttpOnly 액세스 JWT. app 세션은 5분이며 DB에서 세션 목적·소유자·만료·폐기와 회원 상태도 검증합니다.',
+      accessBearer: {
+        type: 'http', scheme: 'bearer', bearerFormat: 'JWT',
+        description: 'localStorage에 저장하는 10분 Access JWT. DB 세션 유효성을 확인하지 않으며 회원 상태·리소스 권한은 검사합니다.',
       },
       refreshCookie: {
         type: 'apiKey',
@@ -347,12 +352,6 @@ export const openApiDocument = {
         required: ['error'],
         properties: { error: { type: 'string', enum: ['forbidden'] }, message: { type: 'string' } },
       },
-      LogoutUnavailable: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['error'],
-        properties: { error: { type: 'string', enum: ['logout_unavailable'] } },
-      },
       RefreshUnavailable: {
         type: 'object',
         additionalProperties: false,
@@ -389,17 +388,8 @@ export const openApiDocument = {
           },
         },
       },
-      LogoutUnavailable: {
-        description: '로그아웃 처리 중 DB를 사용할 수 없음',
-        content: {
-          'application/json': {
-            schema: { $ref: '#/components/schemas/LogoutUnavailable' },
-            example: { error: 'logout_unavailable' },
-          },
-        },
-      },
       RefreshUnavailable: {
-        description: '액세스 토큰 재발급 중 리프레시 세션 저장소를 사용할 수 없음',
+        description: '액세스 토큰 재발급 실패. 인증 설정·일시적 서버 오류 확인 후 재시도',
         content: {
           'application/json': {
             schema: { $ref: '#/components/schemas/RefreshUnavailable' },

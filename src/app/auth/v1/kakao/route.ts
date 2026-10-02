@@ -73,12 +73,12 @@ export async function GET(request: NextRequest) {
 
     const session = await signInKakao(subject, profile)
     const returnTo = readReturnToCookie(request.cookies.get(RETURN_TO_COOKIE_NAME)?.value, state)
-    const destination = session.purpose === 'onboarding' ? `/onboarding?returnTo=${encodeURIComponent(returnTo)}` : returnTo
+    const destination = `/auth/complete?returnTo=${encodeURIComponent(returnTo)}`
     const response = NextResponse.redirect(new URL(destination, requestOrigin(request) ?? request.url))
     response.cookies.set(
       ACCESS_TOKEN_COOKIE_NAME,
-      session.accessToken,
-      authCookieOptions(session.accessMaxAge),
+      '',
+      authCookieOptions(0),
     )
     response.cookies.set(
       REFRESH_TOKEN_COOKIE_NAME,

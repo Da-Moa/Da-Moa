@@ -1,5 +1,4 @@
 import type { AccessToken } from './auth'
-import { currentTimestamp } from './auth'
 import { withReadTransaction, type Database } from './db'
 import { AppError } from './errors'
 
@@ -22,18 +21,19 @@ export type Account = {
 
 export async function requireAccount(client: Database, access: AccessToken | null, allowOnboarding = false): Promise<Account> {
   if (!access) throw new AppError(401, 'unauthorized', '로그인이 필요합니다')
+  const purpose = access.purpose ?? 'app'
   const { rows } = await client.query(`
     SELECT u.id, u.display_name, u.email, u.profile_image_url,
            u.bank_name, u.account_number, u.account_number_formatted, u.account_holder, u.bank_code, u.bank_verified_at, u.bank_version,
-           u.deleted_at, u.onboarding_completed_at, s.purpose
-    FROM refresh_sessions s JOIN users u ON u.id = s.user_id
-    WHERE s.id = $1 AND s.user_id = $2 AND s.revoked_at IS NULL AND s.expires_at > $3
-  `, [access.sessionId, access.userId, currentTimestamp()])
+           u.deleted_at, u.onboarding_completed_at
+    FROM users u WHERE u.id = $1
+  `, [access.userId])
   const row = rows[0]
-  if (!row || (row.purpose === 'app' && row.deleted_at !== null)) {
+  if (!row || (purpose === 'app' && row.deleted_at !== null)
+    || (purpose === 'onboarding' && row.deleted_at === null && row.onboarding_completed_at !== null)) {
     throw new AppError(401, 'unauthorized', '로그인이 필요합니다')
   }
-  if (!allowOnboarding && (row.purpose !== 'app' || row.onboarding_completed_at === null)) {
+  if (!allowOnboarding && (purpose !== 'app' || row.onboarding_completed_at === null)) {
     throw new AppError(403, 'onboarding_required', '계좌 등록과 가입 완료가 필요합니다')
   }
   return {
@@ -50,7 +50,7 @@ export async function requireAccount(client: Database, access: AccessToken | nul
     bankVersion: Number(row.bank_version),
     deletedAt: row.deleted_at === null ? null : Number(row.deleted_at),
     onboardingCompletedAt: row.onboarding_completed_at === null ? null : Number(row.onboarding_completed_at),
-    purpose: row.purpose,
+    purpose,
   }
 }
 

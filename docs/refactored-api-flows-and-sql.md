@@ -18,17 +18,17 @@ SQL은 해당 함수의 실제 query() 문자열을 가져와 PostgreSQL 형식�
 | 멱등 실행 | [idempotency-util.ts](../src/Global/Util/Backend/idempotency-util.ts)의 domainMutation()·Identity. 기존 lib/mutations.ts의 replayMutation()·saveMutation() 재사용 |
 | 공개 공통 진입점 | [Global Util Backend](../src/Global/Util/Backend/index.ts). 기존 호출자의 import 경로와 함수 이름 유지 |
 | 현재 시각 | nowSeconds는 기존 currentTimestamp()의 공개 별칭. 같은 초 단위 계산을 중복 구현하지 않음 |
-| 인증 | [Global Auth Backend](../src/Global/Auth/Backend/index.ts)의 readAccessToken()·requireAccount(). 기존 auth/authorization 구현에 위임 |
+| 인증 | [Node Proxy](../src/proxy.ts) → [JwtGuard](../src/Global/Auth/Backend/Guard/JwtGuard.ts). Global Auth의 기존 JWT 검증과 트랜잭션 안 requireAccount() 재사용 |
 | 협력 조회 | [User Backend](../src/Domain/User/Backend/index.ts)의 getActiveUserProfiles(), [Settle Backend](../src/Domain/Settle/Backend/index.ts)의 미종료 여부 조회. Service가 같은 DB Client 전달 |
 | 실시간 | [Global Websocket Backend](../src/Global/Websocket/Backend/index.ts). 기존 captureGroupAudience()·publishGroupInvalidation() 구현에 위임 |
 
-입력 검증은 문자열 trim·필수/최대 길이, 허용 필드, 중복 없는 참여자 ID를 검사한다. 모임 이름은 최대 100자, 재발급 초대 ID는 최대 128자다. idsInput()은 현재 회차 코드에서도 사용하는 공통 함수다. 페이지네이션은 기본 limit=20, 허용 범위 1~100이고 커서의 길이·시각·ID를 검증한다. pageOf()는 limit+1 조회 중 실제 페이지와 다음 위치 커서를 만든다. 멱등 실행은 인증 → 키/본문 검사·성공 재생 → 업무 실행 → 성공 기록 저장을 같은 쓰기 트랜잭션에서 수행한다.
+입력 검증은 문자열 trim·필수/최대 길이, 허용 필드, 중복 없는 참여자 ID를 검사한다. 모임 이름은 최대 100자, 재발급 초대 ID는 최대 128자다. idsInput()은 현재 회차 코드에서도 사용하는 공통 함수다. 페이지네이션은 기본 limit=20, 허용 범위 1~100이고 커서의 길이·시각·ID를 검증한다. pageOf()는 limit+1 조회 중 실제 페이지와 다음 위치 커서를 만든다. 모임 생성은 명시적 트랜잭션 없이 UUIDv7 PK의 모임·생성자 멤버십을 단일 SQL로 저장한다. 다른 쓰기는 domainMutation()에서 인증 → 키/본문 검사·성공 재생 → 업무 실행 → 성공 기록 저장을 같은 쓰기 트랜잭션에서 수행한다.
 
 ## 2. API 목록
 
 ### Health
 
-모두 공개 GET이며 HealthRequestDTO/HealthResponseDTO를 사용한다. 검사 정상은 HTTP 200, 의존 서비스 실패는 503이며 Cache-Control: no-store다. 잘못된 세부 경로는 검사 없이 404다.
+모두 공개 GET/HEAD이며 HealthRequestDTO/HealthResponseDTO를 사용한다. 검사 정상은 HTTP 200, 의존 서비스 실패는 503이며 Cache-Control: no-store다. Guard의 공개 허용은 아래 다섯 경로에 한정한다. 미등록 경로는 JWT가 없으면 Guard에서 401, 유효한 JWT가 있으면 Controller에서 검사 없이 404다.
 
 | 메서드·경로 | 역할 | 정상 검사 시 DB SQL | 외부 검사 |
 |---|---|---:|---|
@@ -40,7 +40,7 @@ SQL은 해당 함수의 실제 query() 문자열을 가져와 PostgreSQL 형식�
 
 ### Group
 
-모두 가입 완료 계정의 현재 세션을 확인한다. 정상은 HTTP 200과 { data: 응답 DTO }, Cache-Control: private, no-store다. 쓰기에는 같은 출처의 Origin과 Idempotency-Key가 필요하다. Group 작업에는 expectedVersion이 없다.
+모두 Access JWT와 회원의 가입·탈퇴 상태를 확인한다. 정상은 HTTP 200과 { data: 응답 DTO }, Cache-Control: private, no-store다. 쓰기에는 같은 출처의 Origin과 Idempotency-Key가 필요하다. Group 작업에는 expectedVersion이 없다.
 
 | 메서드·경로 | Service | 입력 | 응답 DTO | 권한/역할 |
 |---|---|---|---|---|
@@ -57,11 +57,23 @@ GroupSummary는 모임 ID·이름·생성자 ID·생성 시각이다. 목록은 
 
 ## 3. 공통 실행 순서와 SQL 식별자
 
+### Node JWT Guard
+
+모든 `/api/:path*` 요청은 Node.js에서 실행되는 `src/proxy.ts`를 거쳐 Global Auth의 `jwtGuard()`에 도달한다. 기본 정책은 Authorization: Bearer Access JWT의 서명·알고리즘·만료·issuer·audience·토큰 종류 검증이며 누락·실패는 본문/페이지네이션 검사나 DB 접근 전에 `401 unauthorized`, `private, no-store`로 끝난다. JWT 검증은 기존 함수를 재사용하며 SQL이 추가되지 않는다. Controller와 트랜잭션의 기존 검증도 유지한다.
+
+공개 경로는 다섯 Health GET/HEAD, `GET /api/auth/kakao`, `POST /api/auth/test-login`이다. 로그인 시작은 첫 JWT 발급을 위한 예외이고 개발용 로그인은 기존 로컬·개발 환경 제한을 유지한다. `/auth/v1/kakao` 콜백은 API matcher 밖에서 기존 state·nonce·PKCE·OIDC 검증을 수행한다. `POST /api/auth/access-token`·`POST /api/auth/refresh`는 Access JWT 대신 Refresh JWT를 요구하고, 실패 시 기존처럼 두 인증 쿠키를 지운다. `POST /api/auth/logout`은 Refresh 또는 Access JWT를 요구한다. 문서·OpenAPI·미등록 API도 기본 인증 대상이다. 페이지·정적 파일은 API Guard 범위 밖이며 데이터는 인증된 API로만 조회한다.
+
+SQL 기록과 아래 호출 수는 유효한 JWT가 Guard를 통과한 요청 기준이다. Service/Route Handler를 직접 호출하는 테스트는 Proxy를 거치지 않으므로 입력 검증 결과가 HTTP 요청의 인증 우선 결과와 다를 수 있다.
+
+Access JWT는 localStorage에 저장하며 만료는 10분이다. 로그인 완료 시 Refresh JWT를 POST /api/auth/access-token으로 검증해 Access JWT를 받아 저장한다. Refresh는 HttpOnly 쿠키에 저장하고 서명·만료·종류·목적을 확인한다. 로그인·가입·갱신·로그아웃은 refresh_sessions를 읽거나 쓰지 않는다. sid는 JWT 발급 식별자일 뿐 DB 세션이 아니다. 갱신은 목적을 보존하며 onboarding의 원래 만료를 연장하지 않는다. 로그아웃은 클라이언트 Access 토큰과 Refresh 쿠키를 삭제하며 이전 JWT는 자체 만료까지 유효하다. 회원의 가입·탈퇴 상태와 리소스 권한 검사는 유지한다.
+
+실제 Node 서버 통합 검사는 미인증 잘못된 JSON의 401 우선 차단, 변조·만료·토큰 종류 혼동, 공개 Health, Refresh-only 갱신·로그아웃 및 Bearer WebSocket 인증을 검증한다.
+
 ### 읽기 R
 
 1. 공용 pg 풀에서 연결 확보.
 2. R-START: REPEATABLE READ READ ONLY 시작 → 문장/잠금 제한 설정.
-3. AUTH: 현재 세션과 가입 완료 회원 확인.
+3. AUTH: JWT 목적과 가입 완료 회원 상태 확인.
 4. 해당 API의 권한·데이터 SQL 실행. 같은 스냅샷과 Client 사용.
 5. TX-COMMIT → 연결 반환. 실패는 TX-ROLLBACK → 연결 반환; 롤백 실패 연결은 폐기.
 
@@ -69,17 +81,17 @@ GroupSummary는 모임 ID·이름·생성자 ID·생성 시각이다. 목록은 
 
 ### 쓰기 W — 모임 생성 제외
 
-1. 요청 Cookie의 JWT를 readAccessToken()으로 해석하고 Controller가 동일 출처 검사. JSON을 읽는 API는 기존 1MiB 제한·객체 본문 검사.
+1. Node JWT Guard가 먼저 JWT를 검증한다. 통과한 요청은 Controller에서 JWT를 다시 확인하고 동일 출처 검사. JSON을 읽는 API는 기존 1MiB 제한·객체 본문 검사.
 2. 필요한 Service 입력 검증. 모임/초대 생성 입력은 트랜잭션 전에 검사.
 3. 공용 pg 풀에서 연결 확보 → W-START: BEGIN → 제한 설정 → 기존 공통 advisory transaction lock.
-4. AUTH: 현재 세션·가입 완료 회원 확인.
+4. AUTH: JWT 목적·가입 완료 회원 상태 확인.
 5. replayMutation(): UUID 형식 Idempotency-Key 검사 → 정렬한 payload의 SHA-256 → IDEM-READ.
 6. 동일 키·동일 payload의 기존 성공이면 업무 SQL 없이 저장된 결과 재생 → COMMIT. 다른 payload이면 idempotency_conflict·ROLLBACK.
 7. 해당 API의 권한·상태 검사와 업무 SQL. 성공한 경우에만 IDEM-SAVE.
 8. TX-COMMIT → 연결 반환 → Controller 응답. 실패는 전체 ROLLBACK.
 9. 실시간 기능이 켜져 있으면 성공 응답 후 after()에서 모임 무효화 알림. 재생 성공도 현재 Controller에서 알림을 예약한다.
 
-쓰기 트랜잭션 부가 SQL은 W-START 4문장과 COMMIT 1문장으로 총 5회다. 현재 구조 분리에서는 기존 전역 advisory lock을 유지한다. 회차 기록/수정만 명시적 락을 사용하도록 바꾸는 정책 전환은 별도 작업이다.
+쓰기 트랜잭션 부가 SQL은 W-START 4문장과 COMMIT 1문장으로 총 5회다. 모임 생성은 이 경로를 사용하지 않는다. 다른 쓰기의 기존 전역 advisory lock을 회차 기록/수정에만 적용하도록 바꾸는 정책 전환은 별도 작업이다.
 
 | operation | 멱등 payload |
 |---|---|
@@ -114,17 +126,17 @@ GroupSummary는 모임 ID·이름·생성자 ID·생성 시각이다. 목록은 
 
 ### G1. POST /api/groups — 모임 생성
 
-GroupsList.create() → 기존 API Route의 Group 분배 → GroupController.getGroupResponse()의 JSON 입력 → GroupService.createGroup(CreateGroupRequestDTO) → 아래 DB 처리 → GroupMutationResult → 상세 화면 이동.
+GroupsList.create() → Node JWT Guard → 기존 API Route의 Group 분배 → GroupController.getGroupResponse()의 JSON 입력 → GroupService.createGroup(CreateGroupRequestDTO) → 아래 DB 처리 → GroupMutationResult → 상세 화면 이동.
 
 1. onlyKeys(['name'])·textInput(name): trim 후 1~100자. Idempotency-Key는 UUIDv7 형식으로 검사하고 소문자로 정규화한다.
-2. withDatabaseConnection()으로 공용 풀의 연결만 확보 → AUTH로 회원·인증 상태를 한 번 확인한다. 멱등 기록은 조회하지 않는다.
+2. withDatabaseConnection()으로 공용 풀의 연결만 확보 → AUTH: JWT userId로 users를 한 번 읽어 가입·탈퇴 상태와 JWT 목적을 확인한다. 세션·멱등 기록을 조회하지 않는다.
 3. UUIDv7 요청 키를 모임 PK로 사용 → G-CREATE 단일 SQL: 모임 INSERT CTE → 반환된 모임 ID·생성자·시각으로 생성자 멤버십 INSERT.
 4. 문장 자동 커밋 후 연결을 반환하고 { id }를 응답한다. 같은 PK이면 groups_pkey 제약으로 409 group_already_exists를 반환한다. 저장된 성공 응답을 재생하지 않는다.
 5. 활성화 시 해당 모임 ID로 알림 → 프론트 상세 조회.
 
-SQL 순서: AUTH → G-CREATE = **2회**. 같은 PK 중복도 2회다. BEGIN·COMMIT·ROLLBACK·SET LOCAL·명시적 락·mutation_requests 조회/저장을 실행하지 않는다. PostgreSQL 단일 문장 원자성으로 INSERT 실패 시 모임·멤버십 모두 저장되지 않는다. 본문/키 오류는 저장 SQL 전에 400. 기존 모임 PK의 TEXT 타입과 과거 ID는 유지한다.
+SQL 순서: AUTH → G-CREATE = **2회**. 같은 PK 중복도 2회다. BEGIN·COMMIT·ROLLBACK·SET LOCAL·명시적 락·mutation_requests 조회/저장을 실행하지 않는다. PostgreSQL 단일 문장 원자성으로 INSERT 실패 시 모임·멤버십 모두 저장되지 않는다. 본문/키 오류는 저장 SQL 전에 400이며 JWT 오류는 Guard에서 401이다. 기존 모임 PK의 TEXT 타입과 과거 ID는 유지한다.
 
-scripts/group.integration.test.ts는 정상·중복 SQL 2회, 멱등 SQL 및 명시적 트랜잭션 미실행, 같은 키 동시 요청의 성공 1개·중복 409, 생성 실패 시 부분 저장 없음을 검증한다.
+scripts/group.integration.test.ts는 정상·중복 SQL 2회, 세션·멱등 SQL 및 명시적 트랜잭션 미실행, 같은 키 동시 요청의 성공 1개·중복 409, 생성 실패 시 부분 저장 없음을 검증한다.
 
 ### G2. GET /api/groups — 목록/검색/페이지
 
@@ -207,7 +219,7 @@ InviteClient.accept() → POST → Global/Auth → Controller → acceptInvite()
 
 ### 성공 재생·실패·실시간의 별도 순서
 
-모임 쓰기 성공 재생은 W-START(4) → AUTH → IDEM-READ → COMMIT으로 7회다. 업무 SQL·IDEM-SAVE는 반복하지 않는다. 초대 발급 재생에서는 원문 링크를 반환하지 않는다. 본문/키 오류·권한/정원/상태 오류·DB 오류는 성공 기록을 남기지 않으며 트랜잭션 안에서 이미 실행한 변경도 롤백한다. 응답 유실은 같은 키·같은 payload로 재시도한다. 외부 파일 작업은 Group API에 없다.
+모임 생성 중복은 AUTH → G-CREATE로 2회이며 PK 오류를 409로 반환한다. 다른 모임 쓰기 성공 재생은 W-START(4) → AUTH → IDEM-READ → COMMIT으로 7회다. 업무 SQL·IDEM-SAVE는 반복하지 않는다. 초대 발급 재생에서는 원문 링크를 반환하지 않는다. 본문/키 오류·권한/정원/상태 오류·DB 오류는 성공 기록을 남기지 않는다. 모임 생성 실패는 단일 SQL의 원자성, 다른 쓰기 실패는 기존 트랜잭션 ROLLBACK으로 부분 저장을 막는다. 응답 유실은 같은 키·같은 payload로 재시도한다. 외부 파일 작업은 Group API에 없다.
 
 실시간이 켜져 있을 때 DELETE의 선행 수신자 캡처는 R-START(3) → AUTH → RT-CAPTURE → COMMIT으로 6회다. 정상 쓰기/성공 재생 응답 후 발행은 별도 읽기 트랜잭션 R-START(3) → RT-PUBLISH → COMMIT으로 5회다. 변경 전·현재 수신자를 합쳐 groups와 group:{id} 키만 내부 HTTP로 전달한다. 이 후행 발행은 저장 트랜잭션에 속하지 않으며 발행 실패가 커밋된 결과를 롤백하지 않는다. 실시간 환경 변수가 꺼져 있으면 두 경로는 SQL 없이 생략된다.
 
@@ -248,7 +260,7 @@ SELECT
   pg_advisory_xact_lock(1684106607);
 ```
 
-모임 생성을 제외한 기존 쓰기에 적용되는 락이다. 이번 유틸 분리에서 추가하거나 제거하지 않았다.
+모임 생성을 제외한 기존 쓰기에 적용되는 락이다.
 
 ### TX-COMMIT — 성공 종료
 
@@ -279,37 +291,21 @@ SELECT
 
 트랜잭션 없이 공용 풀의 query()로 한 번 호출한다.
 
-### AUTH — 현재 세션/회원 확인
+### AUTH — 회원 상태 확인
 
 출처: [src/lib/authorization.ts](../src/lib/authorization.ts).
 
 ```sql
 SELECT
-  u.id,
-  u.display_name,
-  u.email,
-  u.profile_image_url,
-  u.bank_name,
-  u.account_number,
-  u.account_number_formatted,
-  u.account_holder,
-  u.bank_code,
-  u.bank_verified_at,
-  u.bank_version,
-  u.deleted_at,
-  u.onboarding_completed_at,
-  s.purpose
-FROM
-  refresh_sessions s
-  JOIN users u ON u.id = s.user_id
-WHERE
-  s.id = $1
-  AND s.user_id = $2
-  AND s.revoked_at IS NULL
-  AND s.expires_at > $3;
+  u.id, u.display_name, u.email, u.profile_image_url,
+  u.bank_name, u.account_number, u.account_number_formatted,
+  u.account_holder, u.bank_code, u.bank_verified_at, u.bank_version,
+  u.deleted_at, u.onboarding_completed_at
+FROM users u
+WHERE u.id = $1;
 ```
 
-바인딩: $1=sessionId, $2=userId, $3=현재 초 시각. 조회 뒤 앱 목적 세션·deleted_at·onboarding_completed_at 조건을 코드에서 검사한다.
+$1=검증된 JWT의 userId. 세션 테이블은 읽지 않는다. JWT의 purpose와 회원의 deleted_at·onboarding_completed_at을 코드에서 검사한다.
 
 ### IDEM-READ — 멱등 성공 결과 확인
 
@@ -719,7 +715,7 @@ $1=groupId. 별도 읽기 트랜잭션에 AUTH는 없고, 이미 허가된 커�
 | 초대 발급/재발급/폐기 | 10 / 11 / 10 | 10 / 11 / 10 |
 | 초대 조회 | 6 | 7 |
 | 참여 수락(비멤버/이미 멤버) | 11 / 10 | 12 / 11 |
-| 쓰기 성공 재생 | 7 | 7 |
+| 생성 중복(409) / 다른 쓰기 성공 재생 | 7(이전 재생) / 7 | 2 / 7 |
 
 로컬 앱 SQL 확인:
 
@@ -745,3 +741,5 @@ node --import ./scripts/test-server-only.mjs --import tsx --test scripts/group.i
 공통 유틸 세분화 후 `npm test` 81개, `npm run build`, 격리된 로컬 테스트 DB/MinIO 버킷의 `npm run test:integration` 38개가 모두 통과했다. 기존 입력·페이지네이션·멱등 동작과 Group SQL 호출 수를 유지한다. 이번 후속 변경은 UI를 수정하지 않았다.
 
 이 문서는 현재 코드의 요청/SQL 흐름 기록이며 실제 사용자 쿼리 확인 결과를 대신하지 않는다. 다음 도메인 작업은 [Group-01](srp-query-refactor-plan.md#group-01-구현된-모임초대참여-도메인-분리)의 사용자 쿼리 확인 후 진행한다.
+
+검증 결과(2026-10-02): 단위 85개, 격리된 로컬 DB·MinIO 통합 38개, 프로덕션 빌드 및 전체 모바일 브라우저 회귀 검사 통과. 실제 로그인 완료 페이지의 localStorage/Bearer 전환과 로그아웃 토큰 삭제도 확인했다. 실제 카카오 외부 인증은 이번 자동 검사에 포함하지 않는다.

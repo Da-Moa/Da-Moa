@@ -26,8 +26,8 @@ export async function POST(request: NextRequest) {
       throw new AppError(400, 'invalid_input', '올바른 로그인 요청이 필요합니다')
     }
     const session = await signInTestAccount(form.get('key'))
-    const response = NextResponse.redirect(new URL(safeReturnTo(form.get('returnTo')), expected), 303)
-    response.cookies.set(ACCESS_TOKEN_COOKIE_NAME, session.accessToken, authCookieOptions(session.accessMaxAge))
+    const response = NextResponse.redirect(new URL(`/auth/complete?returnTo=${encodeURIComponent(safeReturnTo(form.get('returnTo')))}`, expected), 303)
+    response.cookies.set(ACCESS_TOKEN_COOKIE_NAME, '', authCookieOptions(0))
     response.cookies.set(REFRESH_TOKEN_COOKIE_NAME, session.refreshToken, refreshCookieOptions(session.refreshMaxAge))
     response.headers.set('Cache-Control', 'private, no-store')
     return response

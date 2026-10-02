@@ -25,7 +25,7 @@ export const OIDC_COOKIE_NAMES = {
   state: 'da_moa_oidc_state',
 } as const
 export const ACCESS_TOKEN_COOKIE_NAME = 'da_moa_access'
-export const ACCESS_TOKEN_MAX_AGE_SECONDS = 5 * 60
+export const ACCESS_TOKEN_MAX_AGE_SECONDS = 10 * 60
 export const REFRESH_TOKEN_COOKIE_NAME = 'da_moa_refresh'
 export const REFRESH_TOKEN_MAX_AGE_SECONDS = 14 * 24 * 60 * 60
 export const ONBOARDING_MAX_AGE_SECONDS = 10 * 60
@@ -49,6 +49,8 @@ export type AccessToken = {
   issuedAt: number
   sessionId: string
   userId: string
+  purpose?: 'app' | 'onboarding'
+  expiresAt?: number
 }
 
 export type RefreshToken = AccessToken
@@ -63,6 +65,7 @@ type TokenPayload = {
   sid: string
   sub: string
   token_type: TokenType
+  purpose?: 'app' | 'onboarding'
 }
 
 type ParsedJwt = {
@@ -388,6 +391,7 @@ function createToken(
   maxAge: number,
   secret = getSessionSecret(),
   issuedAt = currentTimestamp(),
+  purpose?: 'app' | 'onboarding',
 ): string {
   const header = encodeJson({ alg: 'HS256', typ: 'JWT' })
   const payload: TokenPayload = {
@@ -398,6 +402,7 @@ function createToken(
     sid: sessionId,
     sub: userId,
     token_type: tokenType,
+    ...(purpose ? { purpose } : {}),
   }
   const encodedPayload = encodeJson(payload)
   const signingInput = `${header}.${encodedPayload}`
@@ -420,11 +425,12 @@ function verifyToken(
     || !safeEqual(parsed.signature, signHs256(parsed.signingInput, secret))
   ) return null
 
-  const { aud, exp, iat, iss, sid, sub, token_type: payloadTokenType } = parsed.payload
+  const { aud, exp, iat, iss, sid, sub, token_type: payloadTokenType, purpose } = parsed.payload
   if (
     aud !== APP_AUDIENCE
     || iss !== APP_ISSUER
     || payloadTokenType !== tokenType
+    || (purpose !== undefined && purpose !== 'app' && purpose !== 'onboarding')
     || typeof sub !== 'string'
     || !sub
     || typeof sid !== 'string'
@@ -435,7 +441,7 @@ function verifyToken(
     || iat > now + CLOCK_SKEW_SECONDS
   ) return null
 
-  return { issuedAt: iat, sessionId: sid, userId: sub }
+  return { issuedAt: iat, sessionId: sid, userId: sub, ...(purpose ? { purpose } : {}), ...(tokenType === 'refresh' ? { expiresAt: exp } : {}) }
 }
 
 export function createAccessToken(
@@ -444,8 +450,9 @@ export function createAccessToken(
   secret = getSessionSecret(),
   issuedAt = currentTimestamp(),
   maxAge = ACCESS_TOKEN_MAX_AGE_SECONDS,
+  purpose?: 'app' | 'onboarding',
 ) {
-  return createToken('access', userId, sessionId, maxAge, secret, issuedAt)
+  return createToken('access', userId, sessionId, maxAge, secret, issuedAt, purpose)
 }
 
 export function createRefreshToken(
@@ -454,8 +461,16 @@ export function createRefreshToken(
   secret = getSessionSecret(),
   issuedAt = currentTimestamp(),
   maxAge = REFRESH_TOKEN_MAX_AGE_SECONDS,
+  purpose?: 'app' | 'onboarding',
 ) {
-  return createToken('refresh', userId, sessionId, maxAge, secret, issuedAt)
+  return createToken('refresh', userId, sessionId, maxAge, secret, issuedAt, purpose)
+}
+
+export function accessTokenForRefresh(refresh: RefreshToken) {
+  const now = currentTimestamp()
+  const purpose = refresh.purpose ?? 'app'
+  const maxAge = Math.min(ACCESS_TOKEN_MAX_AGE_SECONDS, (refresh.expiresAt ?? now) - now)
+  return { accessToken: createAccessToken(refresh.userId, refresh.sessionId, undefined, now, maxAge, purpose), purpose }
 }
 
 export function verifyAccessToken(
@@ -482,16 +497,17 @@ export function readAccessToken(token: string | undefined): AccessToken | null {
   }
 }
 
+export function readRequestAccessToken(request: Request): AccessToken | null {
+  const authorization = request.headers.get('authorization')
+  return readAccessToken(authorization?.startsWith('Bearer ') ? authorization.slice(7) : undefined)
+}
+
 export function readRefreshToken(token: string | undefined): RefreshToken | null {
   try {
     return verifyRefreshToken(token)
   } catch {
     return null
   }
-}
-
-export function hashRefreshToken(token: string) {
-  return createHash('sha256').update(token).digest('hex')
 }
 
 export function safeReturnTo(value: unknown): string {

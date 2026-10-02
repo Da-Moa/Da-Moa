@@ -4,7 +4,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import test from 'node:test'
 import { NextRequest } from 'next/server'
 import sharp from 'sharp'
-import { ACCESS_TOKEN_COOKIE_NAME, readAccessToken } from '../src/lib/auth.ts'
+import { readAccessToken } from '../src/lib/auth.ts'
 import { signInKakao } from '../src/lib/auth-store.ts'
 import { createDatabaseClient } from '../src/lib/db.ts'
 import { CURRENCY_CODES } from '../src/lib/money.ts'
@@ -26,7 +26,7 @@ async function session(name: string) {
 
 async function request(path: string, token: string | null, method = 'GET', body?: unknown, extraHeaders?: Record<string, string>) {
   const headers = new Headers({ origin, ...extraHeaders })
-  if (token) headers.set('cookie', `${ACCESS_TOKEN_COOKIE_NAME}=${token}`)
+  if (token) headers.set('authorization', `Bearer ${token}`)
   if (method !== 'GET' && !headers.has('Idempotency-Key')) headers.set('Idempotency-Key', path === 'groups' && method === 'POST' ? uuidV7() : randomUUID())
   const multipart = body instanceof FormData
   if (body !== undefined && !multipart) headers.set('content-type', 'application/json')
@@ -35,7 +35,7 @@ async function request(path: string, token: string | null, method = 'GET', body?
   return response
 }
 
-test('Route Handler contracts enforce cookies, origin, idempotency, normalized images and personalized output', async () => {
+test('Route Handler contracts enforce Bearer JWTs, origin, idempotency, normalized images and personalized output', async () => {
   const client = createDatabaseClient(testUrl)
   await client.connect()
   try {
@@ -43,7 +43,7 @@ test('Route Handler contracts enforce cookies, origin, idempotency, normalized i
     const a = await session('API-A'), b = await session('API-B'), outsider = await session('API-외부인')
     assert.equal((await request('groups', null)).status, 401)
     assert.equal((await request('groups', a.accessToken, 'POST', { name: '금지' }, { origin: 'https://attacker.example' })).status, 403)
-    const account = await me(new NextRequest(`${origin}/api/me`, { headers: { cookie: `${ACCESS_TOKEN_COOKIE_NAME}=${a.accessToken}` } }))
+    const account = await me(new NextRequest(`${origin}/api/me`, { headers: { authorization: `Bearer ${a.accessToken}` } }))
     assert.equal(account.headers.get('cache-control'), 'private, no-store')
     assert.equal((await account.json()).data.bankAccount.accountNumber, '12340312345678')
     const groupResult = await request('groups', a.accessToken, 'POST', { name: 'HTTP 계약' })

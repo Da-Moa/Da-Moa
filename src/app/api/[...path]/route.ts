@@ -1,5 +1,5 @@
 import { after, NextRequest } from 'next/server'
-import { ACCESS_TOKEN_COOKIE_NAME, readAccessToken } from '../../../lib/auth'
+import { readRequestAccessToken } from '../../../lib/auth'
 import { AppError, errorResponse } from '../../../lib/errors'
 import { getGroupResponse, isGroupPath } from '../../../Domain/Group/Backend'
 import { readJsonBody as jsonBody, sameOrigin } from '../../../lib/http'
@@ -12,7 +12,7 @@ async function handle(request: NextRequest, context: { params: Promise<{ path: s
   try {
     const method = request.method, { path } = await context.params
     if (isGroupPath(path)) return getGroupResponse(request, path)
-    const access = readAccessToken(request.cookies.get(ACCESS_TOKEN_COOKIE_NAME)?.value)
+    const access = readRequestAccessToken(request)
     if (method !== 'GET' && !sameOrigin(request)) throw new AppError(403, 'forbidden', '허용되지 않은 요청입니다')
     const key = request.headers.get('idempotency-key') ?? ''
     const query = request.nextUrl.searchParams

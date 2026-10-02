@@ -3,7 +3,7 @@ import {
   ACCESS_TOKEN_COOKIE_NAME,
   authCookieOptions,
   OIDC_COOKIE_NAMES,
-  readAccessToken,
+  readRequestAccessToken,
   REFRESH_TOKEN_COOKIE_NAME,
   RETURN_TO_COOKIE_NAME,
   refreshCookieOptions,
@@ -18,7 +18,7 @@ export const runtime = 'nodejs'
 export async function POST(request: NextRequest) {
   try {
     if (!sameOrigin(request)) throw new AppError(403, 'forbidden', '허용되지 않은 요청입니다')
-    const access = readAccessToken(request.cookies.get(ACCESS_TOKEN_COOKIE_NAME)?.value)
+    const access = readRequestAccessToken(request)
     const result = await withdrawAccount(access)
     after(() => publishDepartureInvalidation(result.groupIds))
     const response = NextResponse.json({ ok: true }, { headers: { 'Cache-Control': 'private, no-store' } })

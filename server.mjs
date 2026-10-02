@@ -46,10 +46,10 @@ const app = next({ dev: process.env.NODE_ENV !== 'production', httpServer: serve
 const handle = app.getRequestHandler()
 const websocket = new WebSocketServer({ noServer: true, clientTracking: false })
 
-async function authenticatedUser(cookie) {
-  if (!cookie) return { status: 401 }
+async function authenticatedUser(token) {
+  if (!token) return { status: 401 }
   const response = await fetch(`http://127.0.0.1:${port}/api/me`, {
-    headers: { cookie }, redirect: 'manual', signal: AbortSignal.timeout(10000),
+    headers: { authorization: `Bearer ${token}` }, redirect: 'manual', signal: AbortSignal.timeout(10000),
   })
   if (response.status === 401 || response.status === 403) return { status: response.status }
   if (!response.ok) throw new Error(`Realtime authentication failed (${response.status})`)
@@ -73,8 +73,9 @@ server.on('upgrade', (request, socket, head) => {
       && (!publicOrigin || source.origin === publicOrigin)
   } catch { /* Invalid Origin or Host. */ }
   if (!allowed) { socket.destroy(); return }
-  const cookie = request.headers.cookie
-  void authenticatedUser(cookie).then(auth => {
+  const protocols = request.headers['sec-websocket-protocol']?.split(',').map(value => value.trim()) ?? []
+  const token = protocols.length === 2 && protocols[0] === 'da-moa' ? protocols[1] : null
+  void authenticatedUser(token).then(auth => {
     if (!auth.id || socket.destroyed) { socket.destroy(); return }
     const userId = auth.id
     websocket.handleUpgrade(request, socket, head, connection => {
@@ -83,9 +84,9 @@ server.on('upgrade', (request, socket, head) => {
       let authTimer
       const revalidate = async () => {
         try {
-          const current = await authenticatedUser(cookie)
+          const current = await authenticatedUser(token)
           if (connection.readyState !== connection.OPEN) return
-          // A short-lived access cookie must refresh through the browser before reconnecting.
+          // A short-lived Access JWT must refresh through the browser before reconnecting.
           if (current.status === 401) connection.close(4001)
           else if (current.id !== userId) connection.close(1008)
           else authTimer = setTimeout(revalidate, 60000)

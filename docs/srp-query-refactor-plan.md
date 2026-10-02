@@ -12,7 +12,7 @@
 
 **같은 도메인의 CRUD는 한 파일에 함께 둘 수 있다.** 예를 들어 정산 생성·조회·수정·삭제는 하나의 정산 Service 파일과 하나의 정산 Repository 파일에서 각각 담당할 수 있다. 생성·수정·삭제·조회는 이름 있는 메서드로 구분하며, CRUD별 파일 분리는 필수 조건이 아니다. Controller·Service·Repository처럼 서로 다른 계층의 책임은 구분한다.
 
-**트랜잭션 원자성을 위해 다른 테이블을 함께 조회·변경하는 것은 허용한다.** 회차 기록 시 회차·영수증 관계를 함께 저장하거나, 정산 시 부담금·잔액·송금을 함께 저장하거나, 탈퇴 시 회원·세션·멤버십을 함께 변경하는 것은 각각 하나의 작업이다. 테이블 수를 책임 수로 판단하지 않고 같은 트랜잭션을 유지한다. 해당 작업과 관계없는 사용자 정보·계좌 등을 함께 변경하는 경우에 책임 혼재로 판단한다.
+**트랜잭션 원자성을 위해 다른 테이블을 함께 조회·변경하는 것은 허용한다.** 회차 기록 시 회차·영수증 관계를 함께 저장하거나, 정산 시 부담금·잔액·송금을 함께 저장하거나, 탈퇴 시 회원·멤버십을 함께 변경하는 것은 각각 하나의 작업이다. 테이블 수를 책임 수로 판단하지 않고 같은 트랜잭션을 유지한다. 해당 작업과 관계없는 사용자 정보·계좌 등을 함께 변경하는 경우에 책임 혼재로 판단한다.
 
 새 패키지·범용 Repository·서비스 인터페이스·DI 프레임워크는 필요하지 않다. 기존 함수, `pg`, React 훅과 공유 컴포넌트를 사용한다.
 
@@ -52,7 +52,7 @@ src/
 │       ├── DAO/
 │       └── Exception/
 └── Global/
-    ├── Auth/                   # 카카오 인증·세션·토큰·인증 검사
+    ├── Auth/                   # 카카오 인증·JWT 토큰·인증 검사
     ├── Util/                   # 공통 DB·트랜잭션·입력·페이지네이션 등
     │   └── MinIOUtil.ts         # MinIO 객체 저장·조회·삭제
     └── Websocket/              # 연결·재연결·이벤트·무효화 알림
@@ -83,11 +83,11 @@ Next.js의 `src/app/**/page.tsx`, `layout.tsx`, `route.ts`는 프레임워크 �
 | Domain/Group | 모임 생성·목록·상세, 멤버십·정원·이탈, 초대 링크 생성·조회·폐기·수락 |
 | Domain/Settle | 회차 생성·조회·취소·참여자 제외, 통화·금액·분배 계산, 지출 CRUD·부담자, 영수증 업로드·조회·삭제와 접근 권한, 확정·재오픈·전송·나머지 추첨, 개인별 보낼/받을 금액·송금 안내·수취 확인·일반/강제 종료, 과거 회차·정산 기록 |
 | Domain/User | 내 정보, 가입 완료·재가입·탈퇴, 은행 목록·계좌 입력 검증·표시 형식, 대표 계좌 등록·변경, 허용된 수취인 계좌정보 제공 |
-| Global/Auth | 카카오 인증, 토큰·쿠키·세션 발급·갱신·폐기, 로그아웃, 인증 검사·안전한 복귀 경로, 개발용 테스트 로그인 |
+| Global/Auth | 카카오 인증, JWT 토큰·쿠키 발급·갱신·삭제, 로그아웃, 인증 검사·안전한 복귀 경로, 개발용 테스트 로그인 |
 | Global/Util | DB 연결·트랜잭션·요청 중복 처리, 공통 HTTP·오류·입력·페이지네이션, 서버 전용 파일 변환·MinIO 객체 접근, 공통 UI·요청 훅, SQL 로그·HTTP/DB 지표 |
 | Global/Websocket | 인증된 연결·연결 유지·재연결, 구독, 커밋 후 허용된 사용자에게 재조회 키 전달 |
 
-정산 규칙·금액 계산은 Settle, 은행 규칙은 User가 소유한다. 양쪽 실행 환경에서 필요한 순수 함수는 해당 도메인의 Shared에 둘 수 있지만, Shared/DTO에 구현을 섞지 않는다. 영수증의 권한·메타데이터·저장 순서는 Settle이 결정하고, FileCompressor와 MinIOUtil은 전달받은 파일 변환·객체 작업만 수행한다. User의 가입·탈퇴가 세션이나 멤버십을 함께 바꿀 때도 Auth·Group의 공개 기능을 같은 트랜잭션에서 호출한다.
+정산 규칙·금액 계산은 Settle, 은행 규칙은 User가 소유한다. 양쪽 실행 환경에서 필요한 순수 함수는 해당 도메인의 Shared에 둘 수 있지만, Shared/DTO에 구현을 섞지 않는다. 영수증의 권한·메타데이터·저장 순서는 Settle이 결정하고, FileCompressor와 MinIOUtil은 전달받은 파일 변환·객체 작업만 수행한다. User의 가입·탈퇴가 멤버십을 함께 바꿀 때도 Auth·Group의 공개 기능을 같은 트랜잭션에서 호출한다.
 
 홈·전체·랜딩과 페이지 이동은 `src/app`의 화면 구성으로 유지한다. 여러 도메인을 보여주는 화면은 공개 UI·DTO를 조합하고 도메인 내부 구현을 가져오지 않는다. API 문서도 각 도메인의 공개 계약을 조합한다. 마이그레이션·시드·배포·브라우저 검증은 기존 scripts·운영 설정에 유지하며 업무 도메인으로 만들지 않는다. 금융결제원 연동은 현재 중단된 과거 설계이므로 구현된 기능 목록에 포함하지 않는다.
 
@@ -123,7 +123,7 @@ Global/Util/Backend/MinIOUtil.ts  # 서버 전용 파일 저장 유틸
 - 다른 도메인의 Controller·Service·Repository·DAO·Exception 내부 파일을 직접 import하지 않는다. 다른 도메인의 기능이 필요하면 해당 도메인의 명시적인 공개 진입점과 공개 DTO만 사용한다. 공개 진입점은 Frontend·Backend·Shared별로 구분하고 하나의 barrel 파일에서 함께 export하지 않는다.
 - 공개 진입점도 필요한 메서드와 DTO만 노출한다. Repository·DAO·내부 검증·내부 상태를 통째로 export하지 않는다. 공개 함수에 변경 가능한 내부 객체나 SQL 행을 그대로 반환하지 않는다.
 - 각 Repository는 소유 도메인의 테이블만 처리한다. 다른 도메인의 조회·변경은 그 도메인의 공개 기능으로 요청하며, 다른 도메인의 SQL·권한·상태 규칙을 복사하지 않는다. 같은 트랜잭션이 필요한 협력은 동일한 Global 트랜잭션 컨텍스트를 전달한다.
-- 테이블 소유권은 Group이 `groups`·`group_members`·`group_invites`, Settle이 회차·회차 참여자·지출·부담금·영수증 메타데이터·정산 잔액·송금, User가 `users`, Global/Auth가 세션, Global/Util이 멱등 기록을 담당한다.
+- 테이블 소유권은 Group이 `groups`·`group_members`·`group_invites`, Settle이 회차·회차 참여자·지출·부담금·영수증 메타데이터·정산 잔액·송금, User가 `users`, Global/Auth가 JWT 검증·발급, Global/Util이 멱등 기록을 담당한다.
 - 다른 도메인의 여러 사용자 정보를 읽어야 한다면 공개 일괄 조회를 사용하여 N+1을 만들지 않는다. DAO와 전체 계좌정보를 공개 계약으로 우회 노출하지 않는다.
 - Group 화면이 Settle의 회차 생성 UI를 사용하는 경우도 Settle Frontend의 공개 진입점을 사용한다. 도메인 내부 컴포넌트를 직접 가져오지 않는다. 공통 셸·표시 UI는 Global/Util/Frontend, 공통 요청 훅은 Global/Util/Frontend, 도메인 계산은 소유 Domain 안에 둔다.
 - 수정한 기능의 전체 import 경로를 검사하고 금지된 경계 import가 실패하는 자동 검사를 남긴다. 파일 이동·빌드 성공만으로 캡슐화 완료를 판단하지 않는다.
@@ -133,7 +133,7 @@ Global/Util/Backend/MinIOUtil.ts  # 서버 전용 파일 저장 유틸
 애플리케이션에서 명시적으로 추가하는 DB 락은 **회차 기록과 회차 기록 수정에만 적용한다.** 모든 쓰기에 `pg_advisory_xact_lock`을 붙이는 현재 전역 락은 제거 대상이다. 인메모리 mutex나 전역 애플리케이션 락으로 대체하지 않는다.
 
 - 허용한 기록·수정 작업에서는 해당 회차 행의 DB 락을 획득하고 현재 상태·버전·회차 합계 한도를 같은 트랜잭션에서 확인한다. 관련 없는 회차를 함께 잠그지 않는다.
-- 조회·헬스체크·모임·계좌·인증·세션·탈퇴·정산 확정·전송·추첨·확인·종료 등 나머지 작업에는 별도의 `SELECT ... FOR UPDATE`나 advisory lock을 추가하지 않는다.
+- 조회·헬스체크·모임·계좌·인증·탈퇴·정산 확정·전송·추첨·확인·종료 등 나머지 작업에는 별도의 `SELECT ... FOR UPDATE`나 advisory lock을 추가하지 않는다.
 - DB 트랜잭션과 명시적 락은 구분한다. 락 대상이 아닌 작업도 여러 저장을 함께 성공·롤백해야 하면 트랜잭션을 사용한다. 일반 INSERT·UPDATE·DELETE·제약 검사에서 PostgreSQL이 내부적으로 획득하는 잠금까지 제거할 수 있다는 의미는 아니다.
 - 지출 추가·수정(`saveExpense`의 생성·수정 경로)에 회차 행 락을 적용한다. 새 회차 생성은 아래 UUID v7 티켓 PK로 중복 생성을 거절하며 별도 명시적 락을 추가하지 않는다.
 - 명시적 락을 쓰지 않는 작업도 상태·버전 조건부 UPDATE, 영향받은 행 수 확인, UNIQUE·FK·CHECK, 동일 트랜잭션의 저장·검증으로 기존 정합성을 유지한다. 일반 SELECT로 검사한 뒤 무조건 UPDATE하는 방식으로 바꾸지 않는다.
@@ -163,9 +163,9 @@ Global/Util/Backend/MinIOUtil.ts  # 서버 전용 파일 저장 유틸
 
 설명 예시의 이름은 구현 예정 이름이며 실제 수정 시 최종 코드의 이름으로 갱신한다. 현재 제품의 회차 생성·지출 저장·영수증 업로드는 별도 요청이므로 이를 하나의 요청으로 합친 것처럼 설명하지 않는다.
 
-**새 회차 생성:** 프론트 회차 생성 폼에서 UUID v7 티켓 생성·유지 → `POST /api/groups/{groupId}/rounds` → 인증·출처·티켓 형식 검사 → `SettleController.createRound(CreateRoundRequestDTO)` → `SettleService.createRound(CreateRoundRequestDTO)` → ① DB 트랜잭션 시작 ② 현재 세션·회원·사용한 티켓 확인 ③ Group의 공개 기능으로 현재 모임 참여 권한·후보 확인 ④ 티켓을 PK로 회차 INSERT, 참여자 스냅샷 INSERT ⑤ 성공 요청 기록 저장 ⑥ COMMIT → `CreateRoundResponseDTO` → 프론트 회차 화면 이동. 명시적 락은 추가하지 않으며 같은 티켓은 PK 제약으로 중복 거절·ROLLBACK한다. 기존 성공 요청도 재반환하지 않는다.
+**새 회차 생성:** 프론트 회차 생성 폼에서 UUID v7 티켓 생성·유지 → `POST /api/groups/{groupId}/rounds` → 인증·출처·티켓 형식 검사 → `SettleController.createRound(CreateRoundRequestDTO)` → `SettleService.createRound(CreateRoundRequestDTO)` → ① DB 트랜잭션 시작 ② JWT 목적·회원 상태·사용한 티켓 확인 ③ Group의 공개 기능으로 현재 모임 참여 권한·후보 확인 ④ 티켓을 PK로 회차 INSERT, 참여자 스냅샷 INSERT ⑤ 성공 요청 기록 저장 ⑥ COMMIT → `CreateRoundResponseDTO` → 프론트 회차 화면 이동. 명시적 락은 추가하지 않으며 같은 티켓은 PK 제약으로 중복 거절·ROLLBACK한다. 기존 성공 요청도 재반환하지 않는다.
 
-**지출 기록·수정:** 프론트 지출 폼 → 생성 POST 또는 수정 PATCH → 인증·출처 검사 → `SettleController.createExpense/updateExpense(ExpenseRequestDTO)` → `SettleService.createExpense/updateExpense(ExpenseRequestDTO)` → ① DB 트랜잭션 시작 ② 현재 세션·회원·멱등 요청 검사 ③ 해당 회차의 DB 락 획득 ④ 상태·권한·expectedVersion·기존 지출·부담자·합계 한도 검사 ⑤ 지출 INSERT/UPDATE와 부담금 저장 ⑥ 회차 버전 조건부 갱신·성공 요청 기록 저장 ⑦ COMMIT → `ExpenseResponseDTO` → 프론트 최신 조회. 실패는 ROLLBACK하며 수정 충돌은 입력을 유지한다.
+**지출 기록·수정:** 프론트 지출 폼 → 생성 POST 또는 수정 PATCH → 인증·출처 검사 → `SettleController.createExpense/updateExpense(ExpenseRequestDTO)` → `SettleService.createExpense/updateExpense(ExpenseRequestDTO)` → ① DB 트랜잭션 시작 ② JWT 목적·회원 상태·멱등 요청 검사 ③ 해당 회차의 DB 락 획득 ④ 상태·권한·expectedVersion·기존 지출·부담자·합계 한도 검사 ⑤ 지출 INSERT/UPDATE와 부담금 저장 ⑥ 회차 버전 조건부 갱신·성공 요청 기록 저장 ⑦ COMMIT → `ExpenseResponseDTO` → 프론트 최신 조회. 실패는 ROLLBACK하며 수정 충돌은 입력을 유지한다.
 
 **영수증 업로드:** 지출 저장 완료 후 프론트 파일 업로드 → `POST /api/rounds/{roundId}/expenses/{expenseId}/receipts` → 인증·출처·파일 DTO 검사 → `SettleController.addReceipt(ReceiptRequestDTO)` → `SettleService.addReceipt(ReceiptRequestDTO)` → ① 현재 권한·상태·버전·기존 성공 요청 확인 ② 서버 전용 FileCompressor로 실제 포맷 확인·AVIF 변환 ③ Global의 `MinIOUtil.save()`로 객체 저장 및 Object Key 확보 ④ DB 쓰기 트랜잭션 시작 ⑤ 현재 권한·상태·버전·멱등 요청 재검사와 조건부 갱신 ⑥ `expense_receipts`에 Object Key·MIME·크기·해시 저장 ⑦ 성공 요청 기록·회차 버전 저장 ⑧ COMMIT → `ReceiptResponseDTO` → 프론트 영수증 목록 재조회. 이미지 변환과 MinIO 업로드를 긴 DB 트랜잭션 안에서 수행하지 않는다. DB 저장 실패 시 객체가 남을 수 있는 기존 정리 한계를 설명하고, 성공한 DB 기록이 없는데 업로드 완료로 응답하지 않는다.
 
@@ -201,28 +201,34 @@ User의 공개 `getActiveUserProfiles()`는 필요한 ID를 한 번에 조회하
 
 요청한 후속 세분화에서 기존 공개 진입점과 함수 본문을 유지하고 `domain.ts`를 제거했다. `nowSeconds`는 같은 계산을 하는 기존 `currentTimestamp()`의 공개 별칭을 재사용한다. 작업한 Health/Group API 목록·로직 흐름·바인딩 자리표시자를 유지한 SQL 원문은 [API 흐름·SQL 문서](refactored-api-flows-and-sql.md)에 별도로 기록한다. 후속 유틸 세분화 후에도 `npm test` 81개·`npm run build`·격리된 DB/MinIO의 `npm run test:integration` 38개가 통과했고 SQL 호출 수는 유지된다.
 
+인증 순서 후속 변경: Node.js src/proxy.ts에서 Global Auth의 jwtGuard()를 모든 /api 요청에 먼저 적용한다. 기본은 Bearer Access JWT 검사이고 실패는 입력 검증·DB 접근 전에 401이다. 다섯 Health GET/HEAD와 로그인 시작은 공개하며 토큰 전달·갱신은 Refresh JWT, 로그아웃은 Refresh 또는 Access JWT를 요구한다. Access는 localStorage에 저장하는 10분 JWT이며 Refresh는 HttpOnly 쿠키다. 로그인·가입·갱신·로그아웃에서 DB 세션을 생성하거나 조회하지 않는다. AUTH는 users만 읽어 JWT 목적·가입·탈퇴 상태를 확인한다. 모임·회차 권한 검사는 유지한다. JWT 검증 자체에는 SQL이 없다. 상세 흐름은 [API 흐름과 SQL](refactored-api-flows-and-sql.md)에 기록한다.
+
 실제 요청 흐름:
 
 | 작업 | 프론트 → API → Controller/Service → 번호를 붙인 DB 처리 → DTO/프론트 |
 |---|---|
-| 모임 생성 | `GroupsList.create()` → POST `/api/groups` → Global/Auth의 `readAccessToken()` → `getGroupResponse()` → `createGroup(CreateGroupRequestDTO)` → ① 쓰기 트랜잭션 시작·설정·기존 공통 락 ② `requireAccount()`로 현재 세션/회원 확인 ③ 멱등 기록 SELECT ④ `insertGroup()`의 groups INSERT·생성자 group_members INSERT ⑤ 성공 기록 INSERT ⑥ COMMIT → GroupMutationResult → 상세 이동 |
-| 모임 목록 | `GroupsList`의 `useResource()` → GET `/api/groups` → Controller → `listGroups()` → ① REPEATABLE READ READ ONLY 시작·설정 ② 현재 세션/회원 SELECT ③ `findGroups()`의 검색·커서·limit+1 SELECT ④ 표시할 모임들의 `findActiveMemberships()` SELECT ⑤ User 공개 일괄 프로필 SELECT ⑥ COMMIT → `Page<GroupListItem>` → 목록/다음 커서 반영. 빈 페이지는 ④⑤ 생략 |
-| 모임 상세 | `GroupClient`의 `useResource()` → GET `/api/groups/{id}` → Controller → `getGroup()` → ① 읽기 스냅샷 시작·설정 ② 현재 세션/회원 ③ `findMemberGroup()` 권한 SELECT ④ 활성 멤버십 ⑤ User 일괄 프로필 ⑥ 생성자일 때만 유효 초대 SELECT ⑦ COMMIT → GroupDetail → 멤버·초대·회차 후보 표시 |
-| 초대 발급/재발급 | `GroupClient.inviteMembers()` → POST `/api/groups/{id}/invites` → Controller → `createInvite(CreateInviteRequestDTO)` → ① 쓰기 시작·설정·기존 락 ② 현재 세션/회원 ③ 멱등 검사 ④ 생성자 권한 SELECT ⑤ 재발급이면 기존 초대 조건부 폐기 UPDATE·영향 행 확인 ⑥ token_hash만 group_invites INSERT ⑦ 링크 없는 성공 메타데이터 INSERT ⑧ COMMIT → 새 성공에서만 sharePath가 있는 GroupMutationResult → 링크 표시·모임 재조회. 성공 재생은 linkUnavailable=true |
-| 초대 폐기 | `GroupClient.revoke()` → DELETE `/api/groups/{id}/invites/{inviteId}` → Controller → `revokeInvite()` → ① 쓰기 시작·설정·기존 락 ② 현재 세션/회원 ③ 멱등 검사 ④ 생성자 권한 ⑤ 모임/초대 ID 조건 UPDATE·영향 행 확인 ⑥ 성공 기록 ⑦ COMMIT → GroupMutationResult → 초대 목록 재조회. 기존 참여자는 유지 |
-| 초대 조회 | `InviteClient`의 `useResource()` → GET `/api/invites/{token}` → Controller → `getInvite()` → ① 읽기 스냅샷 시작·설정 ② 현재 세션/회원 ③ 토큰 형식 검사 후 해시로 유효 초대·활성 생성자 멤버십·조회자의 참여 여부 SELECT ④ User 공개 조회로 생성자의 활성 회원 상태 확인 ⑤ COMMIT → InvitePreview → 직접 수락 버튼 또는 이미 참여한 모임 링크. 조회만으로 멤버십을 저장하지 않음 |
-| 참여 수락 | `InviteClient.accept()` → POST `/api/invites/{token}/accept` → Controller → `acceptInvite()` → ① 쓰기 시작·설정·기존 락 ② 현재 세션/회원 ③ tokenHash를 본문으로 멱등 검사 ④ 초대/생성자 검사(초대 SELECT·User SELECT) ⑤ 비멤버이면 활성 정원 COUNT ⑥ `joinGroup()` 멤버십 UPSERT ⑦ 성공 기록 ⑧ COMMIT → GroupMutationResult → 모임 상세 이동. 기존 멤버는 정원 COUNT 생략하며 재참여는 기존 이탈 행을 갱신; 기존 회차 구성은 바꾸지 않음 |
-| 이탈/생성자 닫기 | `GroupClient.leave()` → DELETE `/api/groups/{id}` → Controller가 필요 시 변경 전 수신자 확보 → `leaveGroup()` → ① 쓰기 시작·설정·기존 락 ② 현재 세션/회원 ③ 멱등 검사 ④ 활성 멤버십/역할 SELECT ⑤ Settle 공개 미종료 SELECT ⑥ 일반 이탈은 본인 left_at UPDATE; 생성자 닫기는 모든 초대 폐기·멤버십 이탈 UPDATE ⑦ 성공 기록 ⑧ COMMIT → GroupMutationResult → 목록 이동. groups·완료 rounds·과거 참여 기록은 삭제하지 않음 |
+| 모임 생성 | `GroupsList.create()` → POST `/api/groups` → Node JWT Guard → `getGroupResponse()` → `createGroup(CreateGroupRequestDTO)` → ① 공용 풀 연결 확보 ② `requireAccount()`로 JWT 목적/회원 상태 확인 ③ UUIDv7 요청 키를 PK로 groups INSERT·생성자 group_members INSERT를 한 SQL로 저장 ④ 자동 커밋·연결 반환; 같은 PK는 409 → GroupMutationResult → 상세 이동. 명시적 트랜잭션·락 없음 |
+| 모임 목록 | `GroupsList`의 `useResource()` → GET `/api/groups` → Controller → `listGroups()` → ① REPEATABLE READ READ ONLY 시작·설정 ② JWT 목적/회원 상태 SELECT ③ `findGroups()`의 검색·커서·limit+1 SELECT ④ 표시할 모임들의 `findActiveMemberships()` SELECT ⑤ User 공개 일괄 프로필 SELECT ⑥ COMMIT → `Page<GroupListItem>` → 목록/다음 커서 반영. 빈 페이지는 ④⑤ 생략 |
+| 모임 상세 | `GroupClient`의 `useResource()` → GET `/api/groups/{id}` → Controller → `getGroup()` → ① 읽기 스냅샷 시작·설정 ② JWT 목적/회원 상태 ③ `findMemberGroup()` 권한 SELECT ④ 활성 멤버십 ⑤ User 일괄 프로필 ⑥ 생성자일 때만 유효 초대 SELECT ⑦ COMMIT → GroupDetail → 멤버·초대·회차 후보 표시 |
+| 초대 발급/재발급 | `GroupClient.inviteMembers()` → POST `/api/groups/{id}/invites` → Controller → `createInvite(CreateInviteRequestDTO)` → ① 쓰기 시작·설정·기존 락 ② JWT 목적/회원 상태 ③ 멱등 검사 ④ 생성자 권한 SELECT ⑤ 재발급이면 기존 초대 조건부 폐기 UPDATE·영향 행 확인 ⑥ token_hash만 group_invites INSERT ⑦ 링크 없는 성공 메타데이터 INSERT ⑧ COMMIT → 새 성공에서만 sharePath가 있는 GroupMutationResult → 링크 표시·모임 재조회. 성공 재생은 linkUnavailable=true |
+| 초대 폐기 | `GroupClient.revoke()` → DELETE `/api/groups/{id}/invites/{inviteId}` → Controller → `revokeInvite()` → ① 쓰기 시작·설정·기존 락 ② JWT 목적/회원 상태 ③ 멱등 검사 ④ 생성자 권한 ⑤ 모임/초대 ID 조건 UPDATE·영향 행 확인 ⑥ 성공 기록 ⑦ COMMIT → GroupMutationResult → 초대 목록 재조회. 기존 참여자는 유지 |
+| 초대 조회 | `InviteClient`의 `useResource()` → GET `/api/invites/{token}` → Controller → `getInvite()` → ① 읽기 스냅샷 시작·설정 ② JWT 목적/회원 상태 ③ 토큰 형식 검사 후 해시로 유효 초대·활성 생성자 멤버십·조회자의 참여 여부 SELECT ④ User 공개 조회로 생성자의 활성 회원 상태 확인 ⑤ COMMIT → InvitePreview → 직접 수락 버튼 또는 이미 참여한 모임 링크. 조회만으로 멤버십을 저장하지 않음 |
+| 참여 수락 | `InviteClient.accept()` → POST `/api/invites/{token}/accept` → Controller → `acceptInvite()` → ① 쓰기 시작·설정·기존 락 ② JWT 목적/회원 상태 ③ tokenHash를 본문으로 멱등 검사 ④ 초대/생성자 검사(초대 SELECT·User SELECT) ⑤ 비멤버이면 활성 정원 COUNT ⑥ `joinGroup()` 멤버십 UPSERT ⑦ 성공 기록 ⑧ COMMIT → GroupMutationResult → 모임 상세 이동. 기존 멤버는 정원 COUNT 생략하며 재참여는 기존 이탈 행을 갱신; 기존 회차 구성은 바꾸지 않음 |
+| 이탈/생성자 닫기 | `GroupClient.leave()` → DELETE `/api/groups/{id}` → Controller가 필요 시 변경 전 수신자 확보 → `leaveGroup()` → ① 쓰기 시작·설정·기존 락 ② JWT 목적/회원 상태 ③ 멱등 검사 ④ 활성 멤버십/역할 SELECT ⑤ Settle 공개 미종료 SELECT ⑥ 일반 이탈은 본인 left_at UPDATE; 생성자 닫기는 모든 초대 폐기·멤버십 이탈 UPDATE ⑦ 성공 기록 ⑧ COMMIT → GroupMutationResult → 목록 이동. groups·완료 rounds·과거 참여 기록은 삭제하지 않음 |
 
-변경 요청의 동일 출처 검사는 Controller가 수행하고 JSON 입력은 기존 공통 제한을 사용한다. Group 작업에는 expectedVersion 검사가 없으며 기존 Idempotency-Key·본문 일치 검사를 유지한다. 쓰기 성공 뒤 `after()`로 `publishGroupInvalidation()`을 호출한다. 삭제 전 수신자 캡처는 기존 별도 읽기 스냅샷이고 발행도 기존 공통 구현을 사용한다. 수신자·재조회 키만 전송하고 토큰·계좌·금액은 보내지 않는다. Group 작업 자체에는 외부 파일 I/O가 없다.
+변경 요청의 동일 출처 검사는 Controller가 수행하고 JSON 입력은 기존 공통 제한을 사용한다. Group 작업에는 expectedVersion 검사가 없다. 모임 생성은 UUIDv7 요청 키의 PK 중복을 거절하고 다른 변경은 기존 Idempotency-Key·본문 일치 검사를 유지한다. 쓰기 성공 뒤 `after()`로 `publishGroupInvalidation()`을 호출한다. 삭제 전 수신자 캡처는 기존 별도 읽기 스냅샷이고 발행도 기존 공통 구현을 사용한다. 수신자·재조회 키만 전송하고 토큰·계좌·금액은 보내지 않는다. Group 작업 자체에는 외부 파일 I/O가 없다.
 
-쓰기 트랜잭션 부가 SQL은 BEGIN·SET LOCAL 2회·공통 advisory lock·COMMIT의 5회다. 읽기는 BEGIN REPEATABLE READ READ ONLY·SET LOCAL 2회·COMMIT의 4회다. 실패 시 COMMIT 대신 ROLLBACK하고 DB 변경과 성공 기록을 모두 되돌린다. 재발급 실패는 기존 초대 변경도 롤백한다. 네트워크/커밋 응답 유실 시 같은 키·본문으로 재시도하며 초대 재생은 원문 링크를 반환하지 않으므로 기존 재발급 안내를 사용한다. 원래 쓰기 락이 현재 정원 직전 동시 수락·탈퇴 경합을 보호한다. 전역 락 제거와 조건부 정합성 전환은 별도 7단계다.
+모임 생성은 사용자 요청에 따라 명시적 트랜잭션·SET LOCAL·전역 락 없이 실행한다. UUIDv7 Idempotency-Key를 모임 PK로 사용하고 AUTH 회원 조회 1회 + 모임·생성자 멤버십 CTE INSERT 1회, 총 2회다. 세션·멱등 기록을 조회하거나 저장하지 않는다. 같은 PK는 409 group_already_exists이며 성공 결과를 재생하지 않는다. PostgreSQL 단일 문장 원자성으로 생성 실패 시 모임·멤버십 모두 저장되지 않는다. 기존 PK 타입·과거 모임은 유지한다.
+
+모임 생성 통합 검사는 SQL 2회, 명시적 트랜잭션·락·세션·멱등 SQL 미실행, 같은 키 동시 요청의 단일 생성·중복 거절 및 부분 저장 방지를 확인한다.
+
+다른 쓰기 트랜잭션 부가 SQL은 BEGIN·SET LOCAL 2회·공통 advisory lock·COMMIT의 5회다. 읽기는 BEGIN REPEATABLE READ READ ONLY·SET LOCAL 2회·COMMIT의 4회다. 실패 시 COMMIT 대신 ROLLBACK하고 DB 변경과 성공 기록을 모두 되돌린다. 재발급 실패는 기존 초대 변경도 롤백한다. 네트워크/저장 응답 유실 시 같은 키·본문으로 재시도하며 초대 재생은 원문 링크를 반환하지 않으므로 기존 재발급 안내를 사용한다. 기존 초대 수락·탈퇴 경로의 쓰기 락은 유지하며 나머지 전역 락 제거와 조건부 정합성 전환은 별도 7단계다.
 
 쿼리 수는 같은 정상 작업의 공통 트랜잭션 SQL을 포함하고, 실시간 알림·다음 화면 재조회는 제외한다. 이전 수는 변경 전 함수의 SQL 호출 순서 기준이며 변경 후 수는 `scripts/group.integration.test.ts`에서 실제 PostgreSQL SQL 로그를 수집해 검증했다. 사용자 JOIN을 도메인별 조회로 나눠 4개 조회/참여 경로가 각 1회 늘었고 조회 수는 회원 수와 무관하게 일정하다. 성능 개선 수치는 주장하지 않는다.
 
 | 정상 작업 | 이전 → 현재 SQL 호출 수 |
 |---|---|
-| 모임 생성 / 같은 키 성공 재생 | 10 → 10 / 7 → 7 |
+| 모임 생성 / 같은 PK 중복(409) | 10 → 2 / 7(이전 재생) → 2 |
 | 모임 목록(비어 있지 않음) / 빈 목록 | 7 → 8 / 6 → 6 |
 | 모임 상세(생성자 / 일반 멤버) | 8 → 9 / 7 → 8 |
 | 초대 발급 / 재발급 / 폐기 | 10 → 10 / 11 → 11 / 10 → 10 |
@@ -316,7 +322,7 @@ User의 공개 `getActiveUserProfiles()`는 필요한 ID를 한 번에 조회하
 | `health.ts`, 헬스체크 Route Handler | `Domain/Health`에 검사 규칙·결과 DTO·오류 처리 배치. DB 검사 SQL은 Health Repository, MinIO 검사는 Global Util 사용 |
 | `group-store.ts` | 모임·멤버십·초대의 규칙은 Group Service, SQL은 Group Repository, 입출력·DB 레코드·오류는 Group DTO·DAO·Exception에 배치 |
 | `round-store.ts`, `split.ts` | 회차·지출·부담자·영수증·정산 규칙은 Settle Service, SQL은 Settle Repository, 입출력·DB 레코드·오류는 Settle DTO·DAO·Exception에 배치. 같은 도메인 CRUD는 같은 계층의 한 파일에 유지 가능 |
-| `auth-store.ts`, `authorization.ts` | 가입·탈퇴·프로필·대표 계좌는 Domain/User, 로그인·세션 발급·회전·폐기·인증 검사는 Global/Auth에 배치. 사용자 정보의 DB 접근은 User 경계를 사용 |
+| `auth-store.ts`, `authorization.ts` | 가입·탈퇴·프로필·대표 계좌는 Domain/User, 로그인·JWT 발급·갱신·인증 검사는 Global/Auth에 배치. 사용자 정보의 DB 접근은 User 경계를 사용 |
 | `auth.ts` | 카카오 인증·자체 JWT·쿠키·복귀 경로 처리는 Global/Auth에 배치. 필요에 따라 같은 디렉터리 안에서 파일 분리 |
 | `receipt-storage.ts` | 객체 I/O는 Global/Util/Backend/MinIOUtil.ts로 이동. 영수증 권한·변환·DB 메타데이터·정리 순서는 Settle Backend의 Service·Repository가 담당 |
 | `realtime.ts`, `realtime-server.ts`, `server.mjs`의 실시간 구현 | Global/Websocket에 배치. 도메인의 커밋 후 알림과 브라우저 재조회 연결 유지 |
@@ -329,7 +335,7 @@ User의 공개 `getActiveUserProfiles()`는 필요한 ID를 한 번에 조회하
 - Settle Controller는 명령을 선택하고 Service의 확정·재오픈·전송·추첨·종료·취소 메서드를 호출한다. Service가 하나의 트랜잭션을 열고 여러 Repository 메서드에 같은 Client를 전달한다.
 - Group Service의 일반 이탈과 생성자 닫기는 각각 메서드로 분리한다. 현재 DELETE API의 역할별 선택은 유지한다.
 - 각 도메인 안에서 여러 메서드가 공유하는 접근·상태·버전 검사는 해당 Service에서 재사용한다. 도메인 전용 기능을 공통 Util에 넣지 않는다.
-- User의 탈퇴와 가입 작업은 Group과 Global/Auth의 공개 기능에 같은 트랜잭션 컨텍스트를 전달하여 원자성을 유지한다. User 내부에 Group 테이블 SQL이나 Auth 세션 구현을 넣지 않는다.
+- User의 탈퇴와 가입 작업은 Group과 Global/Auth의 공개 기능에 같은 트랜잭션 컨텍스트를 전달하여 원자성을 유지한다. User 내부에 Group 테이블 SQL이나 Auth JWT 구현을 넣지 않는다.
 - 같은 도메인·같은 계층의 파일 추가는 독립된 변경 이유가 있을 때 결정한다. 기존 계획의 `expense-store.ts`·`receipt-store.ts` 같은 기능별 파일 분리를 필수로 삼지 않는다.
 
 완료 기준:
@@ -387,7 +393,7 @@ User의 공개 `getActiveUserProfiles()`는 필요한 ID를 한 번에 조회하
 대상: 회차 조회 저장소, `src/app/api/[...path]/route.ts`, `RoundClient.loadMore()`, `openapi.ts`.
 
 - 지출 더 보기에는 지출 페이지·다음 커서·회차 버전만 반환하는 조회 경로를 추가한다. 기존 POST가 있는 `/api/rounds/{roundId}/expenses` 경로에 GET을 추가한다.
-- 같은 읽기 스냅샷에서 세션·회차 참여 권한·버전·지출 페이지를 확인한다.
+- 같은 읽기 스냅샷에서 회원 상태·회차 참여 권한·버전·지출 페이지를 확인한다.
 - 전체 참여자 목록·총액·잔액·전체 예상 정산은 이 경로에서 재조회·재계산하지 않는다.
 - 화면이 가진 회차 버전과 페이지 버전이 다르면 페이지를 합치지 않고 기존 최신 조회 흐름으로 처리한다.
 - 기존 회차 상세 API와 과거 참여자의 조회 권한은 유지한다. 새 계약을 OpenAPI와 Route Handler 테스트에 반영한다.
@@ -415,7 +421,7 @@ User의 공개 `getActiveUserProfiles()`는 필요한 ID를 한 번에 조회하
 
 - 같은 회차의 지출 추가·수정 ↔ 확정, 재오픈 ↔ 전송, 취소 ↔ 확정 경합.
 - 같은 지출의 두 편집자 수정과 새 지출 생성의 1회 재시도.
-- 회차 생성·초대 수락·세션 발급 ↔ 탈퇴 경합.
+- 회차 생성·초대 수락·로그인 ↔ 탈퇴 경합.
 - 한도 직전 동시 추가·수정, 수정 시 기존 금액을 제외한 합계 검사.
 - 같은 멱등 키의 동시 요청·커밋 응답 유실·다른 본문 충돌.
 - 추첨 1회, 일괄 저장 중 실패의 전체 롤백, 부담금 합계·개인 잔액·송금 보존식.

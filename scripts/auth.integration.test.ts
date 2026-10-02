@@ -1,14 +1,14 @@
 import { uuidV7 } from '../src/lib/uuid.ts'
 import assert from 'node:assert/strict'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { before, test } from 'node:test'
 import {
-  createAccessToken, createRefreshToken, currentTimestamp, hashRefreshToken, readAccessToken, readRefreshToken,
+  accessTokenForRefresh, createAccessToken, createRefreshToken, currentTimestamp, readAccessToken, readRefreshToken,
   type AccessToken,
 } from '../src/lib/auth.ts'
 import {
-  deleteRefreshSession, rotateRefreshSession, signInKakao, withdrawAccount,
+  signInKakao, withdrawAccount,
   type AuthSession,
 } from '../src/lib/auth-store.ts'
 import { getAccount } from '../src/lib/authorization.ts'
@@ -56,7 +56,7 @@ async function assertCurrencyUpgrade(client: ReturnType<typeof createDatabaseCli
     await client.query(`INSERT INTO users(id,provider,provider_subject,created_at,updated_at,bank_name,account_number,account_holder,bank_updated_at,onboarding_completed_at)
       VALUES($1,'kakao',$1,$2,$2,'기존 은행','005678','기존 참여자',$2,$2)`, [legacyMemberId, now])
     await client.query(`INSERT INTO refresh_sessions(id,user_id,token_hash,issued_at,expires_at,purpose)
-      VALUES($1,$2,$3,$4,$5,'app')`, [sessionId, userId, hashRefreshToken(sessionId), now, now + 1000])
+      VALUES($1,$2,$3,$4,$5,'app')`, [sessionId, userId, createHash('sha256').update(sessionId).digest('hex'), now, now + 1000])
     let missingCreatorRoundId = '', lateJoinedRoundId = ''
     for (const currency of ['KRW', 'USD', 'JPY']) {
       const groupId = randomUUID(), roundId = randomUUID()
@@ -116,7 +116,7 @@ before(async () => {
   } finally { await client.end() }
 })
 
-test('onboarding purpose, bank normalization, request replay, logout, and one-time session migration', async () => {
+test('onboarding purpose, bank normalization, request replay, stateless authentication, and historical migration', async () => {
   const subject = `integration-${randomUUID()}`
   const limited = await signInKakao(subject, profile)
   const limitedAccess = accessOf(limited)
@@ -148,8 +148,7 @@ test('onboarding purpose, bank normalization, request replay, logout, and one-ti
     await assertCurrencyUpgrade(client)
   } finally { await client.end() }
   assert.equal((await getAccount(access)).id, app.userId, 'repeated migrations must not revoke newer sessions')
-  await deleteRefreshSession(app.userId, access.sessionId)
-  await assert.rejects(getAccount(access), codeIs('unauthorized'))
+  assert.equal((await getAccount(access)).id, app.userId)
 })
 
 test('withdrawal checks all unfinished history including excluded members; rejoin preserves identity but never memberships', async () => {
@@ -219,7 +218,7 @@ test('withdrawal checks all unfinished history including excluded members; rejoi
   assert.equal(restored.userId, participant.session.userId)
   assert.equal((await listGroups(restoredAccess, new URLSearchParams())).items.length, 0)
   await assert.rejects(getGroup(restoredAccess, group.id), codeIs('not_found'))
-  await assert.rejects(getAccount(participant.access), codeIs('unauthorized'))
+  assert.equal((await getAccount(participant.access)).id, restored.userId)
   const retained = await withReadTransaction(client => client.query('SELECT round_id FROM round_members WHERE user_id=$1', [restored.userId]))
   assert.deepEqual(retained.rows.map(row => row.round_id), [roundIds[1]])
   assert.equal((await getInvite(restoredAccess, token)).isMember, false)
@@ -234,43 +233,34 @@ test('withdrawal checks all unfinished history including excluded members; rejoi
   await assert.rejects(getInvite(restoredAccess, token), codeIs('not_found'), 'an inactive creator membership makes old invitations unusable')
 })
 
-test('refresh rotation is single-use and cannot upgrade onboarding or resurrect revoked sessions', async () => {
+test('refresh JWTs can be reused without stored sessions and preserve onboarding purpose', async () => {
   const user = await newAccount()
   const refresh = readRefreshToken(user.session.refreshToken)!
-  const now = currentTimestamp()
-  const replacements = [randomUUID(), randomUUID()].map(id => {
-    const token = createRefreshToken(user.session.userId, id, undefined, now)
-    return { id, token, input: {
-      expiresAt: now + 1000, id, issuedAt: now, now, previousSessionId: refresh.sessionId,
-      previousTokenHash: hashRefreshToken(user.session.refreshToken), tokenHash: hashRefreshToken(token), userId: user.session.userId,
-    } }
-  })
-  const results = await Promise.all(replacements.map(item => rotateRefreshSession(item.input)))
-  assert.equal(results.filter(Boolean).length, 1)
-  await assert.rejects(getAccount(user.access), codeIs('unauthorized'))
-  const winner = replacements[results.findIndex(Boolean)]
-  const nextAccess = readAccessToken(createAccessToken(user.session.userId, winner.id, undefined, now))!
-  assert.equal((await getAccount(nextAccess)).id, user.session.userId)
-  await withdrawAccount(nextAccess)
-  assert.equal(await rotateRefreshSession({ ...winner.input, id: randomUUID(), tokenHash: randomUUID(), previousSessionId: winner.id, previousTokenHash: hashRefreshToken(winner.token) }), false)
+  for (let i = 0; i < 2; i++) {
+    const renewed = readAccessToken(accessTokenForRefresh(refresh).accessToken)!
+    assert.equal((await getAccount(renewed)).id, user.session.userId)
+  }
+  const stored = await withReadTransaction(client => client.query('SELECT COUNT(*) FROM refresh_sessions WHERE user_id=$1', [user.session.userId]))
+  assert.equal(stored.rows[0].count, '0', 'login and onboarding never store JWT sessions')
+  await withdrawAccount(user.access)
+  const renewed = readAccessToken(accessTokenForRefresh(refresh).accessToken)!
+  await assert.rejects(getAccount(renewed), codeIs('unauthorized'))
 
   const limited = await signInKakao(`integration-${randomUUID()}`, profile)
-  assert.equal(await rotateRefreshSession({
-    expiresAt: now + 1000, id: randomUUID(), issuedAt: now, now,
-    previousSessionId: accessOf(limited).sessionId, previousTokenHash: hashRefreshToken(limited.refreshToken),
-    tokenHash: randomUUID(), userId: limited.userId,
-  }), false)
+  const limitedRefresh = readRefreshToken(limited.refreshToken)!
+  const limitedAccess = readAccessToken(accessTokenForRefresh(limitedRefresh).accessToken)!
+  assert.equal(limitedAccess.purpose, 'onboarding')
+  await assert.rejects(getAccount(limitedAccess), codeIs('onboarding_required'))
+  await completeOnboarding(limitedAccess, bank)
+  await assert.rejects(getAccount(limitedAccess, true), codeIs('unauthorized'))
 })
 
-test('sign-in racing withdrawal cannot leave a valid app session for a deleted account', async () => {
+test('sign-in racing withdrawal cannot leave a API access for a deleted account', async () => {
   const user = await newAccount()
   const [login] = await Promise.all([signInKakao(user.subject, profile), withdrawAccount(user.access)])
   const state = await withReadTransaction(client => client.query(`
-    SELECT u.deleted_at,
-      (SELECT COUNT(*) FROM refresh_sessions s WHERE s.user_id=u.id AND s.purpose='app' AND s.revoked_at IS NULL AND s.expires_at>$2) AS app_sessions
-    FROM users u WHERE u.id=$1
-  `, [user.session.userId, currentTimestamp()]))
+    SELECT u.deleted_at FROM users u WHERE u.id=$1
+  `, [user.session.userId]))
   assert.notEqual(state.rows[0].deleted_at, null)
-  assert.equal(state.rows[0].app_sessions, '0')
   await assert.rejects(getAccount(accessOf(login)), error => error instanceof AppError && ['unauthorized', 'onboarding_required'].includes(error.code))
 })

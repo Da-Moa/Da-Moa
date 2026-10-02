@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import {
   ACCESS_TOKEN_COOKIE_NAME,
@@ -7,13 +6,11 @@ import {
   createAccessToken,
   createRefreshToken,
   currentTimestamp,
-  hashRefreshToken,
   readRefreshToken,
   REFRESH_TOKEN_COOKIE_NAME,
   REFRESH_TOKEN_MAX_AGE_SECONDS,
   refreshCookieOptions,
 } from '../../../../lib/auth'
-import { rotateRefreshSession } from '../../../../lib/auth-store'
 import { sameOrigin } from '../../../../lib/http'
 
 export const runtime = 'nodejs'
@@ -49,31 +46,17 @@ export async function POST(request: NextRequest) {
 
   try {
     const now = currentTimestamp()
-    const sessionId = randomUUID()
-    const nextRefreshToken = createRefreshToken(refresh.userId, sessionId, undefined, now)
-    if (!(await rotateRefreshSession({
-      expiresAt: now + REFRESH_TOKEN_MAX_AGE_SECONDS,
-      id: sessionId,
-      issuedAt: now,
-      now,
-      previousSessionId: refresh.sessionId,
-      previousTokenHash: hashRefreshToken(token),
-      tokenHash: hashRefreshToken(nextRefreshToken),
-      userId: refresh.userId,
-    }))) {
-      return unauthorizedResponse()
-    }
-
-    const response = NextResponse.json({ ok: true })
-    response.cookies.set(
-      ACCESS_TOKEN_COOKIE_NAME,
-      createAccessToken(refresh.userId, sessionId, undefined, now),
-      authCookieOptions(ACCESS_TOKEN_MAX_AGE_SECONDS),
-    )
+    const purpose = refresh.purpose ?? 'app'
+    const remaining = (refresh.expiresAt ?? now) - now
+    const refreshMaxAge = purpose === 'onboarding' ? remaining : REFRESH_TOKEN_MAX_AGE_SECONDS
+    const accessMaxAge = Math.min(ACCESS_TOKEN_MAX_AGE_SECONDS, remaining)
+    const nextRefreshToken = createRefreshToken(refresh.userId, refresh.sessionId, undefined, now, refreshMaxAge, purpose)
+    const response = NextResponse.json({ data: { accessToken: createAccessToken(refresh.userId, refresh.sessionId, undefined, now, accessMaxAge, purpose) } })
+    response.cookies.set(ACCESS_TOKEN_COOKIE_NAME, '', authCookieOptions(0))
     response.cookies.set(
       REFRESH_TOKEN_COOKIE_NAME,
       nextRefreshToken,
-      refreshCookieOptions(REFRESH_TOKEN_MAX_AGE_SECONDS),
+      refreshCookieOptions(refreshMaxAge),
     )
     response.headers.set('Cache-Control', 'private, no-store')
     return response

@@ -1,6 +1,6 @@
 import 'server-only'
 import { after, type NextRequest } from 'next/server'
-import { ACCESS_TOKEN_COOKIE_NAME, readAccessToken } from '../../../../Global/Auth/Backend'
+import { readRequestAccessToken } from '../../../../Global/Auth/Backend'
 import { AppError, errorResponse, readJsonBody, sameOrigin } from '../../../../Global/Util/Backend'
 import { captureGroupAudience, publishGroupInvalidation, realtimeEnabled } from '../../../../Global/Websocket/Backend'
 import type { GroupMutationResult } from '../../Shared'
@@ -13,7 +13,7 @@ export function isGroupPath(path: string[]) {
 export async function getGroupResponse(request: NextRequest, path: string[]): Promise<Response> {
   try {
     const method = request.method
-    const access = readAccessToken(request.cookies.get(ACCESS_TOKEN_COOKIE_NAME)?.value)
+    const access = readRequestAccessToken(request)
     if (method !== 'GET' && !sameOrigin(request)) throw new AppError(403, 'forbidden', '허용되지 않은 요청입니다')
     const key = request.headers.get('idempotency-key') ?? ''
     const departingAudience = path[0] === 'groups' && path.length === 2 && method === 'DELETE' ? await captureGroupAudience(access, path[1]) : undefined

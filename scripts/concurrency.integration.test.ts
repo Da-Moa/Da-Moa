@@ -128,9 +128,8 @@ test('round creation racing participant withdrawal never creates unfinished part
   assert.equal(outcomes.filter(outcome => outcome.status === 'fulfilled').length, 1)
   const state = await inspect(async client => (await client.query(`
     SELECT u.deleted_at,
-      (SELECT COUNT(*)::int FROM round_members m JOIN rounds r ON r.id=m.round_id WHERE m.user_id=u.id AND r.status<>'COMPLETED') AS unfinished,
-      (SELECT COUNT(*)::int FROM refresh_sessions s WHERE s.user_id=u.id AND s.purpose='app' AND s.revoked_at IS NULL AND s.expires_at>$2) AS sessions
-    FROM users u WHERE u.id=$1`, [fixture.participant.userId, currentTimestamp()])).rows[0])
+      (SELECT COUNT(*)::int FROM round_members m JOIN rounds r ON r.id=m.round_id WHERE m.user_id=u.id AND r.status<>'COMPLETED') AS unfinished
+    FROM users u WHERE u.id=$1`, [fixture.participant.userId])).rows[0])
   if (outcomes[0].status === 'fulfilled') {
     assert.equal(state.deleted_at, null)
     assert.equal(state.unfinished, 1)
@@ -142,11 +141,10 @@ test('round creation racing participant withdrawal never creates unfinished part
     assert.equal(outcomes[0].reason.code, 'invalid_participants')
     assert.notEqual(state.deleted_at, null)
     assert.equal(state.unfinished, 0)
-    assert.equal(state.sessions, 0)
   }
 })
 
-test('invite acceptance racing withdrawal leaves no active membership or app session on a deleted user', async () => {
+test('invite acceptance racing withdrawal leaves no active membership on a deleted user', async () => {
   const fixture = await group(false)
   const outcomes = await Promise.allSettled([
     acceptInvite(fixture.participant, key(), fixture.token),
@@ -159,12 +157,10 @@ test('invite acceptance racing withdrawal leaves no active membership or app ses
   }
   const state = await inspect(async client => (await client.query(`
     SELECT u.deleted_at,
-      (SELECT COUNT(*)::int FROM group_members m WHERE m.user_id=u.id AND m.left_at IS NULL) AS memberships,
-      (SELECT COUNT(*)::int FROM refresh_sessions s WHERE s.user_id=u.id AND s.purpose='app' AND s.revoked_at IS NULL AND s.expires_at>$2) AS sessions
-    FROM users u WHERE u.id=$1`, [fixture.participant.userId, currentTimestamp()])).rows[0])
+      (SELECT COUNT(*)::int FROM group_members m WHERE m.user_id=u.id AND m.left_at IS NULL) AS memberships
+    FROM users u WHERE u.id=$1`, [fixture.participant.userId])).rows[0])
   assert.notEqual(state.deleted_at, null)
   assert.equal(state.memberships, 0)
-  assert.equal(state.sessions, 0)
 })
 
 test('simultaneous invite acceptance never exceeds ten active group members', async () => {

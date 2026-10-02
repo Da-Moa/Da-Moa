@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import sharp from 'sharp'
 import { signInKakao } from '../src/lib/auth-store.ts'
-import { ACCESS_TOKEN_COOKIE_NAME, REFRESH_TOKEN_COOKIE_NAME } from '../src/lib/auth.ts'
+import { REFRESH_TOKEN_COOKIE_NAME } from '../src/lib/auth.ts'
 import { withWriteTransaction } from '../src/lib/db.ts'
 import { BANKS, formatAccountNumber } from '../src/lib/bank-account.ts'
 import { CURRENCIES, CURRENCY_CODES } from '../src/lib/money.ts'
@@ -91,12 +91,15 @@ async function fill(selector, value) {
 async function setSession(session) {
   await cdp('Network.clearBrowserCookies')
   await cdp('Network.setCookies', { cookies: [
-    { name: ACCESS_TOKEN_COOKIE_NAME, value: session.accessToken, url: origin, path: '/', httpOnly: true, sameSite: 'Lax' },
     { name: REFRESH_TOKEN_COOKIE_NAME, value: session.refreshToken, url: origin, path: '/api/auth', httpOnly: true, sameSite: 'Lax' },
   ] })
+  const script = await cdp('Page.addScriptToEvaluateOnNewDocument', { source: `localStorage.setItem('da_moa_access', ${JSON.stringify(session.accessToken)})` })
+  await cdp('Page.navigate', { url: origin })
+  await waitFor(`location.origin === ${JSON.stringify(origin)} && document.readyState === 'complete'`)
+  await cdp('Page.removeScriptToEvaluateOnNewDocument', { identifier: script.identifier })
 }
 async function api(session, path, method = 'GET', body) {
-  const response = await fetch(`${origin}${path}`, { method, headers: { Origin: origin, Cookie: `${ACCESS_TOKEN_COOKIE_NAME}=${session.accessToken}`, 'Content-Type': 'application/json', 'Idempotency-Key': path === '/api/groups' && method === 'POST' ? uuidV7() : randomUUID() }, body: body === undefined ? undefined : JSON.stringify(body) })
+  const response = await fetch(`${origin}${path}`, { method, headers: { Origin: origin, Authorization: `Bearer ${session.accessToken}`, 'Content-Type': 'application/json', 'Idempotency-Key': path === '/api/groups' && method === 'POST' ? uuidV7() : randomUUID() }, body: body === undefined ? undefined : JSON.stringify(body) })
   const result = await response.json()
   assert.ok(response.ok, `${method} ${path}: ${response.status} ${result.message ?? ''}`)
   return result.data ?? result
@@ -126,6 +129,14 @@ try {
   await cdp('Fetch.enable', { patterns: [{ urlPattern: `${origin}/api/rounds/*/expenses`, requestStage: 'Response' }] })
   await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
   await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
+  await navigate('/login', '첫 가입 온보딩 보기')
+  await click('첫 가입 온보딩 보기')
+  await waitFor("location.pathname === '/onboarding' && localStorage.getItem('da_moa_access') !== null")
+  const loginCookies = (await cdp('Network.getAllCookies')).cookies
+  assert.equal(loginCookies.some(cookie => cookie.name === 'da_moa_access'), false)
+  assert.ok(loginCookies.some(cookie => cookie.name === REFRESH_TOKEN_COOKIE_NAME && cookie.httpOnly))
+  assert.equal(await evaluate("JSON.parse(atob(localStorage.getItem('da_moa_access').split('.')[1].replaceAll('-', '+').replaceAll('_', '/'))).purpose"), 'onboarding')
+  console.log('PASS login completion stores Access JWT locally and only Refresh JWT in an HttpOnly cookie')
   const newcomer = await user('신규', '', true)
   await setSession(newcomer.session)
   await navigate('/onboarding', '검증 신규님, 반가워요')
@@ -160,7 +171,7 @@ try {
   assert.equal(await evaluate("new FormData(document.querySelector('form')).get('bankCode')"), '004')
   await evaluate("document.querySelector('form').requestSubmit()")
   await waitFor("location.pathname.startsWith('/home')")
-  const savedAccount = await evaluate("fetch('/api/me').then(response => response.json()).then(result => ({ purpose: result.data.purpose, verifiedAt: result.data.bankAccount.verifiedAt }))")
+  const savedAccount = await evaluate("fetch('/api/me', { headers: { Authorization: 'Bearer ' + localStorage.getItem('da_moa_access') } }).then(response => response.json()).then(result => ({ purpose: result.data.purpose, verifiedAt: result.data.bankAccount.verifiedAt }))")
   assert.deepEqual(savedAccount, { purpose: 'app', verifiedAt: null })
   console.log('PASS onboarding saves a manually entered account')
   if (process.argv.includes('--forms-only')) {
@@ -248,7 +259,7 @@ try {
     await click('이 멤버로 기록 시작')
     await waitFor("location.pathname.startsWith('/home/rounds/')")
     const customRoundId = (await evaluate('location.pathname')).split('/').at(-1)
-    const customRound = await evaluate(`fetch('/api/rounds/${customRoundId}').then(response => response.json()).then(result => result.data)`)
+    const customRound = await evaluate(`fetch('/api/rounds/${customRoundId}', { headers: { Authorization: 'Bearer ' + localStorage.getItem('da_moa_access') } }).then(response => response.json()).then(result => result.data)`)
     assert.equal(customRound.name, '통화 입력 검증')
     assert.equal(customRound.currency, 'USD')
     await click('지출 추가')
@@ -283,7 +294,7 @@ try {
     await fill(`[name="customAmount:${roundPartner.session.userId}"]`, '6.04')
     await click('지출 저장')
     await waitFor("!document.querySelector('#expense-editor')")
-    const savedExpense = await evaluate(`fetch('/api/rounds/${customRoundId}').then(response => response.json()).then(result => result.data.expenses[0])`)
+    const savedExpense = await evaluate(`fetch('/api/rounds/${customRoundId}', { headers: { Authorization: 'Bearer ' + localStorage.getItem('da_moa_access') } }).then(response => response.json()).then(result => result.data.expenses[0])`)
     assert.equal(savedExpense.description, '지출 입력 검증')
     assert.equal(savedExpense.amountMinor, '1005')
     assert.equal(savedExpense.payerId, roundPartner.session.userId)
@@ -337,7 +348,7 @@ try {
     assert.equal(await evaluate("document.querySelectorAll('section.stack > article.domain-card').length"), 0)
     await navigate(`/settlements/${pendingRoundId}`, '내가 보낼 금액')
     await waitFor(`${sendingAmount} === '000'`, 'confirmed amount remains zero after reload')
-    assert.equal(await evaluate(`fetch('/api/rounds/${pendingRoundId}/settlement').then(response => response.json()).then(result => result.data.balanceMinor)`), '1000')
+    assert.equal(await evaluate(`fetch('/api/rounds/${pendingRoundId}/settlement', { headers: { Authorization: 'Bearer ' + localStorage.getItem('da_moa_access') } }).then(response => response.json()).then(result => result.data.balanceMinor)`), '1000')
     await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
     await navigate('/home/account', '내 정보')
     await click('계좌 수정하기')
@@ -751,7 +762,7 @@ try {
   assert.equal(await evaluate("document.querySelector('form').checkValidity()"), true)
   await click('재가입하기')
   await waitFor("location.pathname === '/home'")
-  const rejoined = await evaluate("fetch('/api/me').then(response => response.json()).then(result => ({ id: result.data.id, purpose: result.data.purpose, deletedAt: result.data.deletedAt, accountNumber: result.data.bankAccount.accountNumber, verifiedAt: result.data.bankAccount.verifiedAt }))")
+  const rejoined = await evaluate("fetch('/api/me', { headers: { Authorization: 'Bearer ' + localStorage.getItem('da_moa_access') } }).then(response => response.json()).then(result => ({ id: result.data.id, purpose: result.data.purpose, deletedAt: result.data.deletedAt, accountNumber: result.data.bankAccount.accountNumber, verifiedAt: result.data.bankAccount.verifiedAt }))")
   assert.deepEqual(rejoined, { id: payer.session.userId, purpose: 'app', deletedAt: null, accountNumber: '0002223333', verifiedAt: null })
   const retained = await withWriteTransaction(async client => {
     const memberships = await client.query('SELECT 1 FROM group_members WHERE user_id=$1 AND left_at IS NULL', [payer.session.userId])
@@ -781,6 +792,12 @@ try {
   assert.deepEqual(exceptions, [])
   console.log('PASS Group UI member departure and creator closure')
 
+  await navigate('/home/account', '로그아웃')
+  await click('로그아웃')
+  await waitFor("location.pathname === '/login'")
+  assert.equal(await evaluate("localStorage.getItem('da_moa_access')"), null)
+  assert.equal((await cdp('Network.getAllCookies')).cookies.some(cookie => cookie.name === REFRESH_TOKEN_COOKIE_NAME), false)
+  console.log('PASS logout deletes local Access JWT and Refresh cookie')
   console.log(`Browser evidence: ${join(artifactDir, 'settlement.png')}`)
 } finally {
   ws.close()

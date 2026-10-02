@@ -1,6 +1,8 @@
 'use client'
 
 import { uuidV7 } from './uuid'
+import { clearAccessToken, getAccessToken, setAccessToken } from '../Global/Auth/Frontend'
+
 export class ApiError extends Error {
   recover?: () => Promise<unknown>
   constructor(public status: number, public code: string, message: string, public details?: unknown) {
@@ -83,6 +85,8 @@ export async function apiRequest<T>(path: string, options: { method?: string; bo
   const multipart = body instanceof FormData
   const forget = () => { if (pending && unfinishedRequests.get(operation) === pending) discardPendingRequest(path, method) }
   const headers = new Headers()
+  const accessToken = getAccessToken()
+  if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`)
   if (body !== undefined && !multipart) headers.set('Content-Type', 'application/json')
   if (pending) headers.set('Idempotency-Key', pending.key)
   const init: RequestInit = {
@@ -94,9 +98,20 @@ export async function apiRequest<T>(path: string, options: { method?: string; bo
     response = await fetch(path, init)
     if (response.status === 401 && !path.startsWith('/api/auth/')) {
       refreshRequest ??= fetch('/api/auth/refresh', { method: 'POST', credentials: 'same-origin', cache: 'no-store' })
+        .then(async response => {
+          if (response.ok) {
+            const result = await response.clone().json()
+            if (typeof result.data?.accessToken !== 'string') throw new ApiError(503, 'refresh_unavailable', '로그인 상태를 확인하지 못했어요. 다시 시도해 주세요.')
+            setAccessToken(result.data.accessToken)
+          }
+          return response
+        })
         .finally(() => { refreshRequest = undefined })
       const refresh = await refreshRequest
-      if (refresh.ok) response = await fetch(path, init)
+      if (refresh.ok) {
+        headers.set('Authorization', `Bearer ${getAccessToken()}`)
+        response = await fetch(path, init)
+      }
       else if (refresh.status !== 401) throw new ApiError(refresh.status, 'storage_unavailable', '로그인 상태를 확인하지 못했어요. 입력을 유지했으니 다시 시도해 주세요.')
     }
   } catch (error) {
@@ -106,6 +121,7 @@ export async function apiRequest<T>(path: string, options: { method?: string; bo
   if (response.ok && options.response === 'blob') return await response.blob() as T
   const result = await response.json().catch(() => null) as { data?: T; error?: string; message?: string; details?: unknown } | null
   if (response.status === 401) {
+    clearAccessToken()
     discardBankAccountRequests()
     window.location.assign(`/login?returnTo=${encodeURIComponent(destination())}`)
     throw new ApiError(401, 'unauthorized', '로그인이 필요해요.')
@@ -119,6 +135,9 @@ export async function apiRequest<T>(path: string, options: { method?: string; bo
     throw new ApiError(response.status, result?.error ?? 'request_failed', result?.message ?? '요청을 처리하지 못했어요. 다시 시도해 주세요.', result?.details)
   }
   if (!result) throw new ApiError(503, 'response_unavailable', '처리 결과를 확인하지 못했어요. 같은 작업으로 다시 확인해 주세요.')
+  const issuedToken = (result.data as { accessToken?: unknown } | undefined)?.accessToken
+  if (typeof issuedToken === 'string') setAccessToken(issuedToken)
+  if (path === '/api/auth/logout' || path === '/api/auth/withdraw') clearAccessToken()
   forget()
   return (result.data ?? result) as T
 }
