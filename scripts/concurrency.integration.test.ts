@@ -195,7 +195,7 @@ test('simultaneous invite acceptance never exceeds ten active group members', as
   assert.equal(failure.reason.code, 'group_member_limit_exceeded')
   const winner = candidates[outcomes.findIndex(outcome => outcome.status === 'fulfilled')]!
   const loser = candidates[outcomes.findIndex(outcome => outcome.status === 'rejected')]!
-  await acceptInvite(winner, key(), fixture.token)
+  await assert.rejects(acceptInvite(winner, key(), fixture.token), error => error instanceof AppError && error.code === 'group_already_member')
   await leaveGroup(winner, key(), fixture.groupId)
   await acceptInvite(loser, key(), fixture.token)
   await assert.rejects(acceptInvite(winner, key(), fixture.token), error => error instanceof AppError && error.code === 'group_member_limit_exceeded')

@@ -34,7 +34,7 @@ test('authenticated WebSocket receives only its own committed invalidations', as
   const origin = `http://127.0.0.1:${port}`
   const secret = 'isolated-realtime-test-secret-at-least-32-bytes'
   const app = spawn(process.execPath, ['server.mjs', '--port', String(port)], {
-    cwd: process.cwd(), env: { ...process.env, NODE_ENV: 'development', HOST: '127.0.0.1', DATABASE_URL: database, AUTH_JWT_SECRET: secret },
+    cwd: process.cwd(), env: { ...process.env, NODE_ENV: 'development', HOST: '127.0.0.1', DATABASE_URL: database, AUTH_JWT_SECRET: secret, DB_QUERY_LOG: 'true' },
   })
   let output = ''
   const ready = new Promise((resolve, reject) => {
@@ -162,6 +162,21 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     assert.deepEqual((await revokedDetail.json()).data.invites, [])
     await new Promise(resolve => setTimeout(resolve, 250))
     assert.equal(leaked, false, 'invite revocation invalidation is sent only to the creator')
+    const newInvite = await fetch(`${origin}/api/groups/${groupId}/invites`, { method: 'POST', headers: { origin, authorization: `Bearer ${mine.accessToken}`, 'content-type': 'application/json', 'idempotency-key': randomUUID() }, body: '{}' })
+    const acceptPath = (await newInvite.json()).data.sharePath
+    await new Promise(resolve => setTimeout(resolve, 250))
+    const creatorAcceptance = once(mine.socket, 'message', { signal: AbortSignal.timeout(10000) })
+    const memberAcceptance = once(other.socket, 'message', { signal: AbortSignal.timeout(10000) })
+    const acceptOutput = output.length
+    const acceptResponse = await fetch(`${origin}/api${acceptPath}/accept`, { method: 'POST', headers: { origin, authorization: `Bearer ${other.accessToken}`, 'content-type': 'application/json', 'idempotency-key': randomUUID() }, body: '{}' })
+    assert.equal(acceptResponse.status, 200)
+    for (const received of await Promise.all([creatorAcceptance, memberAcceptance])) {
+      assert.deepEqual(JSON.parse(received[0].toString()), { type: 'invalidate', keys: ['groups', `group:${groupId}`] })
+    }
+    assert.equal((output.slice(acceptOutput).match(/SQL:/g) ?? []).length, 5, 'accept uses five SQL calls, including session lock release and publication')
+    assert.doesNotMatch(output.slice(acceptOutput), /BEGIN|COMMIT|ROLLBACK|pg_advisory_xact_lock|FOR UPDATE|FOR SHARE/)
+    assert.match(output.slice(acceptOutput), /pg_advisory_lock/)
+    assert.match(output.slice(acceptOutput), /pg_advisory_unlock/)
     assert.doesNotMatch(output, /GET \/api\/me /, 'WebSocket authentication must not issue internal HTTP me requests')
     const refreshCookie = mine.cookie.split('; ').find(value => value.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`))
     const refreshed = await fetch(`${origin}/api/auth/refresh`, { method: 'POST', headers: { origin, cookie: refreshCookie } })

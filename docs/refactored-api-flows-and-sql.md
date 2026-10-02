@@ -104,7 +104,7 @@ WebSocket 최초 연결은 이미 확인한 AccountContext와 저장된 JWT를 �
 8. TX-COMMIT → 연결 반환 → Controller 응답. 실패는 전체 ROLLBACK.
 9. 실시간 기능이 켜져 있으면 성공 응답 후 after()에서 모임 무효화 알림. 재생 성공도 현재 Controller에서 알림을 예약한다.
 
-쓰기 트랜잭션 부가 SQL은 W-START의 BEGIN·락 2문장과 COMMIT 1문장으로 총 3회다. 모임 생성과 초대 발급/폐기는 이 경로를 사용하지 않는다. 다른 쓰기의 기존 전역 advisory lock을 회차 기록/수정에만 적용하도록 바꾸는 정책 전환은 별도 작업이다.
+쓰기 트랜잭션 부가 SQL은 W-START의 BEGIN·락 2문장과 COMMIT 1문장으로 총 3회다. 모임 생성과 초대 발급/폐기/수락은 이 경로를 사용하지 않는다. 다른 쓰기의 기존 전역 advisory lock을 회차 기록/수정에만 적용하도록 바꾸는 정책 전환은 별도 작업이다.
 
 | operation | 멱등 payload |
 |---|---|
@@ -220,21 +220,22 @@ InviteClient.useResource() → GET → Node Proxy → JWT Guard(Access JWT 검�
 
 ### G8. POST /api/invites/{token}/accept — 참여 수락
 
-InviteClient.accept() → POST → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 Group 분배 → GroupController → acceptInvite() → GroupMutationResult → 모임 상세 이동.
+InviteClient.accept() → POST → Node Proxy → JWT Guard → GroupController → acceptInvite() → 참여 완료 상태·모임으로 가기 링크 표시. POST 성공에서 GET이나 자동 이동을 실행하지 않으며 모임 자료는 WebSocket invalidation으로 재조회한다.
 
-1. W-START → AUTH → IDEM-READ(operation=invite.accept, payload={ tokenHash }).
-2. validInvite(): 토큰 형식 → G-VALID-INVITE의 JOIN으로 현재 유효 초대/활성 생성자 검사.
-3. 현재 멤버가 아니면 G-COUNT로 활성 정원 확인. 생성자 포함 10명 이상이면 group_member_limit_exceeded·ROLLBACK. 이미 멤버인 경우 COUNT 생략.
-4. G-JOIN UPSERT: 신규 멤버십 생성; 이탈 행이 있으면 joined_at 갱신·left_at=NULL; 이미 활성인 경우 기존 joined_at 유지.
-5. IDEM-SAVE({ id: groupId }) → COMMIT → 모임 알림 → 프론트 상세 이동.
+1. AUTH로 회원 상태 확인 → 43자 URL-safe 토큰 형식 검사 → Idempotency-Key와 tokenHash digest 검사.
+2. G-ACCEPT-READ로 유효 초대·활성 생성자·본인 멤버십·이전 성공 기록을 함께 조회. 같은 키 성공은 재생하며 다른 본문은 idempotency_conflict. 초대가 없으면 not_found, 새 키의 활성 멤버는 group_already_member.
+3. 같은 풀 연결에서 SELECT pg_advisory_lock(1684106607)로 세션 락 획득. 기존 쓰기의 pg_advisory_xact_lock과 같은 키를 사용해 수락·탈퇴·모임 닫기를 직렬화한다.
+4. G-JOIN 한 SQL에서 회원 활성 상태·초대/생성자·현재 멤버십·정원·알림 수신자를 다시 확인하고 조건부 INSERT·이탈자 재참여 UPDATE·성공 기록 INSERT를 함께 자동 커밋. 실패하면 문장 전체가 취소된다. 락을 기다리는 동안 달라진 회원·초대 상태를 신뢰하지 않는다.
+5. finally에서 SELECT pg_advisory_unlock(1684106607) AS unlocked로 락 해제. 획득·해제 실패 또는 해제 결과가 false면 연결을 폐기해 세션 락이 풀에 남지 않게 한다.
+6. 저장 SQL에서 확보한 기존 멤버와 수락자에게 groups·group:{id} invalidation만 발행. 수신자 후속 SELECT는 없다. 성공 재생은 알림을 반복하지 않는다.
 
-신규/재참여 SQL: W-START(2) → AUTH → IDEM-READ → G-VALID-INVITE → G-COUNT → G-JOIN → IDEM-SAVE → COMMIT = 9회. 이미 멤버는 8회. round_members를 INSERT/UPDATE하지 않는다. 정원 직전 동시 수락·탈퇴와의 경합은 현재 기존 공통 쓰기 락을 사용한다.
+정상 SQL: AUTH → G-ACCEPT-READ → 세션 락 획득 → G-JOIN → 락 해제 = 5회. 성공 재생·조회 시 활성 멤버 거절은 2회, 형식 오류는 1회다. 명시적 BEGIN/COMMIT·트랜잭션 advisory lock·FOR UPDATE/SHARE는 없다. 기존 회차는 변경하지 않으며 스키마 변경도 없다. [PostgreSQL 세션 락](https://www.postgresql.org/docs/17/explicit-locking.html#ADVISORY-LOCKS)은 명시적 해제 또는 연결 종료까지 유지되므로 모든 SQL을 같은 연결에서 실행한다.
 
 ### 성공 재생·실패·실시간의 별도 순서
 
-모임 생성 중복은 AUTH → G-CREATE로 2회이며 PK 오류를 409로 반환한다. 초대 발급 성공 재생은 AUTH → G-INVITE-MUTATION으로 2회다. 나머지 모임 쓰기 성공 재생은 W-START(2) → AUTH → IDEM-READ → COMMIT으로 5회다. 업무 SQL·IDEM-SAVE는 반복하지 않는다. 초대 발급 재생에서는 원문 링크를 반환하지 않는다. 본문/키 오류·권한/정원/상태 오류·DB 오류는 성공 기록을 남기지 않는다. 모임 생성·초대 발급 실패는 단일 SQL의 원자성, 다른 쓰기 실패는 기존 트랜잭션 ROLLBACK으로 부분 저장을 막는다. 응답 유실은 같은 키·같은 payload로 재시도한다. 외부 파일 작업은 Group API에 없다.
+모임 생성 중복은 AUTH → G-CREATE로 2회이며 PK 오류를 409로 반환한다. 초대 발급 성공 재생은 AUTH → G-INVITE-MUTATION으로 2회다. 초대 수락 성공 재생은 AUTH → G-ACCEPT-READ로 2회다. 나머지 모임 쓰기 성공 재생은 W-START(2) → AUTH → IDEM-READ → COMMIT으로 5회다. 업무 SQL·IDEM-SAVE는 반복하지 않는다. 초대 발급 재생에서는 원문 링크를 반환하지 않는다. 본문/키 오류·권한/정원/상태 오류·DB 오류는 성공 기록을 남기지 않는다. 모임 생성·초대 발급·폐기·수락 실패는 단일 SQL의 원자성, 다른 쓰기 실패는 기존 트랜잭션 ROLLBACK으로 부분 저장을 막는다. 응답 유실은 같은 키·같은 payload로 재시도한다. 외부 파일 작업은 Group API에 없다.
 
-DELETE는 G-DEPARTURE에서 확보한 변경 전 수신자에게, 초대 발급은 AUTH에서 확보한 생성자에게 추가 SQL 없이 groups·group:{id} 키만 내부 HTTP로 전달한다. 다른 모임 변경의 발행은 기존 별도 읽기 트랜잭션 R-START(1) → RT-PUBLISH → COMMIT으로 3회다. 이 후행 발행은 저장 트랜잭션에 속하지 않으며 발행 실패가 커밋된 결과를 롤백하지 않는다. 실시간 환경 변수가 꺼져 있으면 두 경로는 SQL 없이 생략된다.
+DELETE는 G-DEPARTURE에서 확보한 변경 전 수신자에게, 초대 발급·폐기는 AUTH에서 확보한 생성자에게, 초대 수락은 G-JOIN의 기존 멤버와 수락자에게 추가 SQL 없이 groups·group:{id} 키만 내부 HTTP로 전달한다. 다른 모임 변경의 발행은 기존 별도 읽기 트랜잭션 R-START(1) → RT-PUBLISH → COMMIT으로 3회다. 이 후행 발행은 저장 트랜잭션에 속하지 않으며 발행 실패가 커밋된 결과를 롤백하지 않는다. 실시간 환경 변수가 꺼져 있으면 두 경로는 SQL 없이 생략된다.
 
 ## 5. 실제 SQL 카탈로그
 
@@ -586,41 +587,60 @@ WHERE
 
 $1=토큰 SHA-256, $2=현재 초 시각, $3=조회자/수락자 ID. 생성자의 활성 회원 상태와 조회자 참여 여부를 같은 SQL에서 확인한다.
 
-### G-COUNT — 활성 모임 정원
+### G-ACCEPT-READ — 초대·멱등 결과 조회
 
-출처: [src/Domain/Group/Backend/Repository/GroupRepository.ts](../src/Domain/Group/Backend/Repository/GroupRepository.ts).
-
-```sql
-SELECT
-  COUNT(*)::int AS count
-FROM
-  group_members
-WHERE
-  group_id = $1
-  AND left_at IS NULL;
-```
-
-$1=groupId. 비멤버의 참여 수락에서만 실행한다.
-
-### G-JOIN — 신규/기존 멤버십 참여
-
-출처: [src/Domain/Group/Backend/Repository/GroupRepository.ts](../src/Domain/Group/Backend/Repository/GroupRepository.ts).
+출처: [GroupRepository](../src/Domain/Group/Backend/Repository/GroupRepository.ts).
 
 ```sql
-INSERT INTO
-  group_members (group_id, user_id, joined_at)
-VALUES
-  ($1, $2, $3)
-ON CONFLICT (group_id, user_id) DO UPDATE
-SET
-  joined_at = CASE
-    WHEN group_members.left_at IS NOT NULL THEN EXCLUDED.joined_at
-    ELSE group_members.joined_at
-  END,
-  left_at = NULL;
+SELECT CASE WHEN u.id IS NOT NULL THEN g.id END AS group_id,
+    viewer.user_id IS NOT NULL AS is_member,
+    previous.request_digest,previous.response_metadata
+    FROM (SELECT $1::text AS token_hash) requested
+    LEFT JOIN group_invites i ON i.token_hash=requested.token_hash AND i.revoked_at IS NULL AND i.expires_at>$3
+    LEFT JOIN groups g ON g.id=i.group_id
+    LEFT JOIN group_members creator ON creator.group_id=g.id AND creator.user_id=g.creator_id AND creator.left_at IS NULL
+    LEFT JOIN users u ON u.id=creator.user_id AND u.deleted_at IS NULL AND u.onboarding_completed_at IS NOT NULL
+    LEFT JOIN group_members viewer ON viewer.group_id=g.id AND viewer.user_id=$2 AND viewer.left_at IS NULL
+    LEFT JOIN mutation_requests previous ON previous.actor_id=$2 AND previous.operation='invite.accept' AND previous.request_key=$4;
 ```
 
-$1=groupId, $2=참여자 ID, $3=현재 초 시각. 과거 회차 참여 행은 변경하지 않는다.
+### G-JOIN — 락 내부 재검증·조건부 참여·성공 기록 저장
+
+출처: [GroupRepository](../src/Domain/Group/Backend/Repository/GroupRepository.ts).
+
+```sql
+WITH eligible AS (
+    SELECT g.id,
+      EXISTS(SELECT 1 FROM group_members WHERE group_id=g.id AND user_id=$2 AND left_at IS NULL) AS is_member,
+      (SELECT COUNT(*)::int FROM group_members WHERE group_id=g.id AND left_at IS NULL) AS member_count,
+      ARRAY(SELECT user_id FROM group_members WHERE group_id=g.id AND left_at IS NULL) AS member_ids
+    FROM group_invites i
+    JOIN groups g ON g.id=i.group_id
+    JOIN group_members creator ON creator.group_id=g.id AND creator.user_id=g.creator_id AND creator.left_at IS NULL
+    JOIN users u ON u.id=creator.user_id AND u.deleted_at IS NULL AND u.onboarding_completed_at IS NOT NULL
+    WHERE i.token_hash=$1 AND i.revoked_at IS NULL AND i.expires_at>$3
+  ), actor AS (
+    SELECT id FROM users WHERE id=$2 AND deleted_at IS NULL AND onboarding_completed_at IS NOT NULL
+  ), joined AS (
+    INSERT INTO group_members(group_id,user_id,joined_at)
+    SELECT eligible.id,actor.id,$3 FROM eligible CROSS JOIN actor
+    WHERE NOT eligible.is_member AND eligible.member_count<$6
+    ON CONFLICT(group_id,user_id) DO UPDATE SET joined_at=EXCLUDED.joined_at,left_at=NULL
+      WHERE group_members.left_at IS NOT NULL
+    RETURNING group_id
+  ), saved AS (
+    INSERT INTO mutation_requests(actor_id,operation,request_key,request_digest,resource_id,response_metadata,created_at)
+    SELECT $2,'invite.accept',$4,$5,group_id,jsonb_build_object('id',group_id),$3 FROM joined
+    RETURNING resource_id
+  ) SELECT EXISTS(SELECT 1 FROM actor) AS actor_active,
+    (SELECT id FROM eligible) AS group_id,
+    COALESCE((SELECT is_member FROM eligible),false) AS is_member,
+    COALESCE((SELECT member_count FROM eligible),0) AS member_count,
+    COALESCE((SELECT member_ids FROM eligible),'{}'::text[]) AS member_ids,
+    EXISTS(SELECT 1 FROM saved) AS joined;
+```
+
+G-ACCEPT-READ: $1=토큰 해시, $2=회원 ID, $3=현재 초 시각, $4=요청 키. G-JOIN은 같은 순서에 $5=digest, $6=MAX_GROUP_MEMBERS(10)를 추가한다. 세션 락을 확보한 뒤 현재 활성 멤버 수를 검사해 정원을 보장한다. 이미 활성인 멤버의 새 키는 409 group_already_member, 정원 초과는 409 group_member_limit_exceeded. 저장 실패 시 멤버십·성공 기록이 함께 취소되고 락은 finally에서 해제한다.
 
 ### U-PROFILES — User 공개 일괄 활성 프로필 조회
 
@@ -712,7 +732,7 @@ $1=groupId. 별도 읽기 트랜잭션에 AUTH는 없고, 이미 허가된 커�
 | 일반 이탈/생성자 닫기 | 11 / 12 | 6 / 6 |
 | 초대 발급/재발급/폐기 | 10 / 11 / 10 | 3 / 3 / 3 |
 | 초대 조회 | 6 | 2 |
-| 참여 수락(비멤버/이미 멤버) | 11 / 10 | 9 / 8 |
+| 참여 수락(신규·재참여/조회 시 활성 멤버 거절) | 11 / 10 | 5 / 2 |
 | 생성 중복(409) / 초대 발급·폐기 성공 재생 / 나머지 쓰기 성공 재생 | 7(이전 재생) / 7 / 7 | 2 / 2 / 5 |
 
 로컬 앱 SQL 확인:

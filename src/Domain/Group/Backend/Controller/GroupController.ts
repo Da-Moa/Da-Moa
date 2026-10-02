@@ -25,7 +25,7 @@ export async function getGroupResponse(request: NextRequest, path: string[]): Pr
     else if (path[0] === 'groups' && path.length === 3 && path[2] === 'invites' && method === 'POST') data = await createInvite(access, key, path[1], await readJsonBody(request), userIds => { affectedAudience = userIds })
     else if (path[0] === 'groups' && path.length === 4 && path[2] === 'invites' && method === 'DELETE') data = await revokeInvite(access, key, path[1], path[3], userIds => { affectedAudience = userIds })
     else if (path[0] === 'invites' && path.length === 2 && method === 'GET') data = await getInvite(access, path[1])
-    else if (path[0] === 'invites' && path.length === 3 && path[2] === 'accept' && method === 'POST') data = await acceptInvite(access, key, path[1])
+    else if (path[0] === 'invites' && path.length === 3 && path[2] === 'accept' && method === 'POST') data = await acceptInvite(access, key, path[1], userIds => { affectedAudience = userIds })
     else throw new AppError(404, 'not_found', '요청한 API를 찾을 수 없어요')
     if (method !== 'GET' && realtimeEnabled()) {
       const groupId = path.length === 1 || path[0] === 'invites' ? (data as GroupMutationResult).id : path[1]

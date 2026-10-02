@@ -1,6 +1,6 @@
 import 'server-only'
 import type { Database } from '../../../../Global/Util/Backend'
-import type { GroupRow, GroupListRow, InviteRow, InviteSummaryRow, InviteMutationRow, GroupMemberRow, GroupDepartureRow } from '../DAO/GroupDAO'
+import type { GroupRow, GroupListRow, InviteRow, InviteSummaryRow, InviteMutationRow, InviteAcceptanceRow, GroupMemberRow, GroupDepartureRow } from '../DAO/GroupDAO'
 
 type Cursor = { createdAt: string; id: string } | null
 
@@ -117,11 +117,47 @@ export async function findValidInvite(client: Database, tokenHash: string, userI
     WHERE i.token_hash=$1 AND i.revoked_at IS NULL AND i.expires_at>$2`, [tokenHash, now, userId])).rows[0]
 }
 
-export async function countActiveMembers(client: Database, groupId: string) {
-  return Number((await client.query('SELECT COUNT(*)::int AS count FROM group_members WHERE group_id=$1 AND left_at IS NULL', [groupId])).rows[0].count)
+export async function findInviteAcceptance(client: Database, tokenHash: string, userId: string, now: number, key: string) {
+  return (await client.query<InviteAcceptanceRow>(`SELECT CASE WHEN u.id IS NOT NULL THEN g.id END AS group_id,
+    viewer.user_id IS NOT NULL AS is_member,
+    previous.request_digest,previous.response_metadata
+    FROM (SELECT $1::text AS token_hash) requested
+    LEFT JOIN group_invites i ON i.token_hash=requested.token_hash AND i.revoked_at IS NULL AND i.expires_at>$3
+    LEFT JOIN groups g ON g.id=i.group_id
+    LEFT JOIN group_members creator ON creator.group_id=g.id AND creator.user_id=g.creator_id AND creator.left_at IS NULL
+    LEFT JOIN users u ON u.id=creator.user_id AND u.deleted_at IS NULL AND u.onboarding_completed_at IS NOT NULL
+    LEFT JOIN group_members viewer ON viewer.group_id=g.id AND viewer.user_id=$2 AND viewer.left_at IS NULL
+    LEFT JOIN mutation_requests previous ON previous.actor_id=$2 AND previous.operation='invite.accept' AND previous.request_key=$4`, [tokenHash, userId, now, key])).rows[0]
 }
 
-export async function joinGroup(client: Database, groupId: string, userId: string, now: number) {
-  await client.query(`INSERT INTO group_members(group_id,user_id,joined_at) VALUES($1,$2,$3) ON CONFLICT(group_id,user_id)
-    DO UPDATE SET joined_at=CASE WHEN group_members.left_at IS NOT NULL THEN EXCLUDED.joined_at ELSE group_members.joined_at END,left_at=NULL`, [groupId, userId, now])
+export async function joinGroup(client: Database, tokenHash: string, userId: string, now: number, key: string, digest: string, memberLimit: number) {
+  return (await client.query<{ actor_active: boolean; group_id: string | null; is_member: boolean; member_count: number; member_ids: string[]; joined: boolean }>(`WITH eligible AS (
+    SELECT g.id,
+      EXISTS(SELECT 1 FROM group_members WHERE group_id=g.id AND user_id=$2 AND left_at IS NULL) AS is_member,
+      (SELECT COUNT(*)::int FROM group_members WHERE group_id=g.id AND left_at IS NULL) AS member_count,
+      ARRAY(SELECT user_id FROM group_members WHERE group_id=g.id AND left_at IS NULL) AS member_ids
+    FROM group_invites i
+    JOIN groups g ON g.id=i.group_id
+    JOIN group_members creator ON creator.group_id=g.id AND creator.user_id=g.creator_id AND creator.left_at IS NULL
+    JOIN users u ON u.id=creator.user_id AND u.deleted_at IS NULL AND u.onboarding_completed_at IS NOT NULL
+    WHERE i.token_hash=$1 AND i.revoked_at IS NULL AND i.expires_at>$3
+  ), actor AS (
+    SELECT id FROM users WHERE id=$2 AND deleted_at IS NULL AND onboarding_completed_at IS NOT NULL
+  ), joined AS (
+    INSERT INTO group_members(group_id,user_id,joined_at)
+    SELECT eligible.id,actor.id,$3 FROM eligible CROSS JOIN actor
+    WHERE NOT eligible.is_member AND eligible.member_count<$6
+    ON CONFLICT(group_id,user_id) DO UPDATE SET joined_at=EXCLUDED.joined_at,left_at=NULL
+      WHERE group_members.left_at IS NOT NULL
+    RETURNING group_id
+  ), saved AS (
+    INSERT INTO mutation_requests(actor_id,operation,request_key,request_digest,resource_id,response_metadata,created_at)
+    SELECT $2,'invite.accept',$4,$5,group_id,jsonb_build_object('id',group_id),$3 FROM joined
+    RETURNING resource_id
+  ) SELECT EXISTS(SELECT 1 FROM actor) AS actor_active,
+    (SELECT id FROM eligible) AS group_id,
+    COALESCE((SELECT is_member FROM eligible),false) AS is_member,
+    COALESCE((SELECT member_count FROM eligible),0) AS member_count,
+    COALESCE((SELECT member_ids FROM eligible),'{}'::text[]) AS member_ids,
+    EXISTS(SELECT 1 FROM saved) AS joined`, [tokenHash, userId, now, key, digest, memberLimit])).rows[0]
 }

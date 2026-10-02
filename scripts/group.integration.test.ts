@@ -4,7 +4,8 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import test from 'node:test'
 import { readAccessToken } from '../src/lib/auth.ts'
 import { signInKakao } from '../src/lib/auth-store.ts'
-import { createDatabaseClient } from '../src/lib/db.ts'
+import { createDatabaseClient, withDatabaseConnection } from '../src/lib/db.ts'
+import { getDatabasePool } from '../src/lib/db-client.mjs'
 import { acceptInvite, createGroup, createInvite, getGroup, getInvite, leaveGroup, listGroups, revokeInvite } from '../src/Domain/Group/Backend/index.ts'
 import { applyMigrations } from './migrations.mjs'
 import { completeTestOnboarding } from './bank-test-support.ts'
@@ -30,12 +31,16 @@ test('Group autocommit reads, group/invite creation/revocation and atomic replay
     process.env.DB_QUERY_LOG = 'true'
     let statements: string[] = []
     const logger = t.mock.method(console, 'info', (message: string) => { statements.push(message.replace(/^SQL:\s*/, '').replace(/\s+/g, ' ').trim()) })
-    const trace = async <T>(expected: number, write: boolean | null, work: () => Promise<T>) => {
+    const trace = async <T>(expected: number, write: boolean | 'session' | null, work: () => Promise<T>) => {
       statements = []
       const result = await work()
       assert.equal(statements.length, expected, statements.join('\n'))
       if (write === null) {
         assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b/.test(sql) && !/pg_advisory_xact_lock|FOR UPDATE|FOR SHARE/.test(sql)))
+      } else if (write === 'session') {
+        assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b/.test(sql) && !/pg_advisory_xact_lock|FOR UPDATE|FOR SHARE/.test(sql)))
+        assert.equal(statements[2], 'SELECT pg_advisory_lock(1684106607)')
+        assert.equal(statements.at(-1), 'SELECT pg_advisory_unlock(1684106607) AS unlocked')
       } else {
         assert.equal(statements[0], write ? 'BEGIN' : 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
         assert.equal(statements.at(-1), 'COMMIT')
@@ -111,10 +116,63 @@ test('Group autocommit reads, group/invite creation/revocation and atomic replay
         finally { await client.query(restore, [...values]) }
       }
       const acceptKey = randomUUID()
-      await trace(9, true, () => acceptInvite(participant, acceptKey, token))
+      let acceptAudience: string[] = []
+      await trace(5, 'session', () => acceptInvite(participant, acceptKey, token, ids => { acceptAudience = ids }))
+      assert.deepEqual(acceptAudience.sort(), [owner.userId, participant.userId].sort())
       assert.equal((await trace(2, null, () => getInvite(participant, token))).isMember, true)
-      await trace(5, true, () => acceptInvite(participant, acceptKey, token))
-      await trace(8, true, () => acceptInvite(participant, randomUUID(), token))
+      await trace(2, null, () => acceptInvite(participant, acceptKey, token))
+      await trace(2, null, () => assert.rejects(acceptInvite(participant, acceptKey, randomBytes(32).toString('base64url')), (error: { code: string }) => error.code === 'idempotency_conflict'))
+      await trace(2, null, () => assert.rejects(acceptInvite(participant, randomUUID(), token), (error: { code: string }) => error.code === 'group_already_member'))
+      const concurrentMember = await member('동시 초대 수락')
+      const concurrentAcceptKeys = Array.from({ length: 5 }, () => randomUUID())
+      statements = []
+      const accepts = await Promise.allSettled(concurrentAcceptKeys.map(key => acceptInvite(concurrentMember, key, token)))
+      assert.equal(accepts.filter(result => result.status === 'fulfilled').length, 1)
+      assert.ok(accepts.filter(result => result.status === 'rejected').every(result => result.reason.code === 'group_already_member'))
+      assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b/.test(sql) && !/pg_advisory_xact_lock|FOR UPDATE|FOR SHARE/.test(sql)))
+      assert.equal(statements.filter(sql => sql.includes('pg_advisory_lock(')).length, statements.filter(sql => sql.includes('pg_advisory_unlock(')).length)
+      const winningKey = concurrentAcceptKeys[accepts.findIndex(result => result.status === 'fulfilled')]
+      await trace(2, null, () => acceptInvite(concurrentMember, winningKey, token))
+      assert.equal((await client.query('SELECT COUNT(*)::int AS count FROM group_members WHERE group_id=$1 AND left_at IS NULL', [group.id])).rows[0].count, 3)
+      await leaveGroup(concurrentMember, randomUUID(), group.id)
+      for (const [actor, input, key, expected, count] of [
+        [outsider, 'invalid', randomUUID(), 'not_found', 1],
+        [outsider, randomBytes(32).toString('base64url'), randomUUID(), 'not_found', 2],
+        [outsider, token, 'invalid', 'invalid_request_key', 1],
+        [null, 'invalid', randomUUID(), 'unauthorized', 0],
+      ] as const) {
+        await trace(count, null, () => assert.rejects(acceptInvite(actor, key, input), (error: { code: string }) => error.code === expected))
+      }
+      const failedAcceptKey = randomUUID(), acceptConstraint = `invite_accept_test_${randomUUID().replaceAll('-', '')}`
+      await client.query(`ALTER TABLE mutation_requests ADD CONSTRAINT ${acceptConstraint} CHECK (request_key <> '${failedAcceptKey}') NOT VALID`)
+      try {
+        await trace(5, 'session', () => assert.rejects(acceptInvite(outsider, failedAcceptKey, token), (error: { code: string }) => error.code === '23514'))
+        assert.equal((await client.query('SELECT 1 FROM group_members WHERE group_id=$1 AND user_id=$2', [group.id, outsider.userId])).rowCount, 0)
+        assert.equal((await client.query('SELECT COUNT(*)::int AS count FROM group_members WHERE group_id=$1 AND left_at IS NULL', [group.id])).rows[0].count, 2)
+      } finally { await client.query(`ALTER TABLE mutation_requests DROP CONSTRAINT ${acceptConstraint}`) }
+      const pool = getDatabasePool(database), connect = pool.connect.bind(pool)
+      const releases: boolean[] = []
+      const releaseFailure = new Error('simulated advisory unlock failure')
+      const brokenUnlock = t.mock.method(pool, 'connect', async () => {
+        const borrowed = await connect()
+        const query = borrowed.query.bind(borrowed), release = borrowed.release.bind(borrowed)
+        borrowed.query = new Proxy(query, { apply(target, receiver, args) {
+          if (String(args[0]).includes('pg_advisory_unlock')) return Promise.reject(releaseFailure)
+          return Reflect.apply(target, receiver, args)
+        } })
+        borrowed.release = discarded => { releases.push(Boolean(discarded)); release(discarded) }
+        return borrowed
+      })
+      const recoveryKey = randomUUID()
+      try { await assert.rejects(acceptInvite(concurrentMember, recoveryKey, token), error => error === releaseFailure) }
+      finally { brokenUnlock.mock.restore() }
+      assert.deepEqual(releases, [true], 'never return a connection with an uncertain session lock to the pool')
+      await withDatabaseConnection(async borrowed => {
+        assert.equal((await borrowed.query('SELECT pg_try_advisory_lock(1684106607) AS acquired')).rows[0].acquired, true)
+        await borrowed.query('SELECT pg_advisory_unlock(1684106607)')
+      })
+      await trace(2, null, () => acceptInvite(concurrentMember, recoveryKey, token))
+      await leaveGroup(concurrentMember, randomUUID(), group.id)
       for (const [actor, code] of [[participant, 'forbidden'], [outsider, 'not_found']] as const) {
         statements = []
         await assert.rejects(createInvite(actor, randomUUID(), group.id, {}), (error: { code: string }) => error.code === code)

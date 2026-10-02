@@ -1,13 +1,13 @@
 import 'server-only'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { requireAccount } from '../../../../Global/Auth/Backend'
-import { badInput, domainMutation, nowSeconds, onlyKeys, pageOf, pagination, textInput, withDatabaseConnection, withWriteTransaction, type Database, type Identity } from '../../../../Global/Util/Backend'
+import { AppError, badInput, nowSeconds, onlyKeys, pageOf, pagination, textInput, withDatabaseConnection, withWriteTransaction, withWriteLock, type Database, type Identity } from '../../../../Global/Util/Backend'
 import { mutationDigest, mutationResult } from '../../../../lib/mutations'
 import { getActiveUserProfiles } from '../../../User/Backend'
 import { MAX_GROUP_MEMBERS, type GroupDetail, type GroupListItem, type GroupSummary, type InvitePreview, type GroupMutationResult, type CreateGroupRequestDTO, type CreateInviteRequestDTO } from '../../Shared'
 import type { Page } from '../../../../lib/domain-types'
 import type { GroupRow } from '../DAO/GroupDAO'
-import { creatorOnly, duplicateGroup, memberLimitExceeded, missing, unfinishedGroupRounds, unfinishedRounds } from '../Exception/GroupException'
+import { alreadyMember, creatorOnly, duplicateGroup, memberLimitExceeded, missing, unfinishedGroupRounds, unfinishedRounds } from '../Exception/GroupException'
 import * as repository from '../Repository/GroupRepository'
 
 function groupDTO(row: GroupRow): GroupSummary {
@@ -151,11 +151,26 @@ export async function getInvite(access: Identity, token: string): Promise<Invite
   })
 }
 
-export async function acceptInvite(access: Identity, key: string, token: string): Promise<GroupMutationResult> {
-  return domainMutation(access, key, 'invite.accept', { tokenHash: createHash('sha256').update(token).digest('hex') }, async (client, userId) => {
-    const row = await validInvite(client, token, userId)
-    if (!row.is_member && await repository.countActiveMembers(client, row.group_id) >= MAX_GROUP_MEMBERS) throw memberLimitExceeded()
-    await repository.joinGroup(client, row.group_id, userId, nowSeconds())
-    return { id: row.group_id }
+export async function acceptInvite(access: Identity, key: string, token: string, captureAudience?: (userIds: string[]) => void): Promise<GroupMutationResult> {
+  return withDatabaseConnection(async (client, discardConnection) => {
+    const account = await requireAccount(client, access)
+    if (!/^[\w-]{43}$/.test(token)) throw missing()
+    const tokenHash = createHash('sha256').update(token).digest('hex')
+    const digest = mutationDigest(key, { tokenHash })
+    const row = await repository.findInviteAcceptance(client, tokenHash, account.id, nowSeconds(), key)
+    const replay = mutationResult<GroupMutationResult>(row, digest)
+    if (replay) { captureAudience?.([]); return replay }
+    if (!row.group_id) throw missing()
+    if (row.is_member) throw alreadyMember()
+    return withWriteLock(client, discardConnection, async () => {
+      const joined = await repository.joinGroup(client, tokenHash, account.id, nowSeconds(), key, digest, MAX_GROUP_MEMBERS)
+      if (!joined.actor_active) throw new AppError(401, 'unauthorized', '로그인이 필요합니다')
+      if (!joined.group_id) throw missing()
+      if (joined.is_member) throw alreadyMember()
+      if (joined.member_count >= MAX_GROUP_MEMBERS) throw memberLimitExceeded()
+      if (!joined.joined) throw alreadyMember()
+      captureAudience?.([...joined.member_ids, account.id])
+      return { id: joined.group_id }
+    })
   })
 }

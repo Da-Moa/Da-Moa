@@ -52,7 +52,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       assert.equal('currency' in (await getGroup(a, g.id)), false)
       assert.equal((await getInvite(b, token)).isMember, true)
       assert.equal('currency' in (await getInvite(b, token)), false)
-      await acceptInvite(b, key(), token)
+      await assert.rejects(acceptInvite(b, key(), token), code('group_already_member'))
       const group = await getGroup(a, g.id)
       assert.equal(group.members.length, 4)
       assert.equal(group.members[0].userId, a.userId)

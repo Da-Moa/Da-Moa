@@ -47,7 +47,7 @@ npm run dev
 
 헬스체크 구현은 `src/Domain/Health/Backend`의 Controller·Service·Repository와 `src/Domain/Health/Shared/DTO`로 분리합니다. Next.js Route Handler는 Backend의 공개 진입점만 호출합니다. DB 검사는 공용 연결 풀에서 `SELECT 1`을 한 번 실행하며 별도 트랜잭션·명시적 락·`SET LOCAL`을 사용하지 않습니다.
 
-모임 구현은 `src/Domain/Group`의 Frontend(목록·상세·초대 수락), Backend(Controller·Service·Repository·DAO·Exception), Shared(공개 DTO)로 분리합니다. 기존 생성·조회·닫기/이탈·초대 발급/폐기/수락 API를 유지하고 모임 수정 기능은 추가하지 않습니다. 회차 생성·목록 UI는 Settle Frontend 공개 진입점으로 조합하며, 목록·초대의 회원 프로필과 미종료 회차 조회는 User/Settle 공개 기능에 동일 DB Client를 전달합니다. 모임 상세는 모임·활성 멤버십·회원 이름을 한 SQL로 JOIN한 뒤 본인의 참여 여부를 비교하여 멤버 목록까지 함께 반환합니다. 공통 입력·페이지네이션·멱등 실행은 Global Util의 `input-validation-util.ts`·`pagenation-util.ts`·`idempotency-util.ts`로 나눴고, Auth/Websocket과 공통 프론트 UI의 공개 진입점은 기존 구현을 사용합니다. 초대 발급·재발급·폐기는 AUTH → 생성자 권한/재시도 조회 → 단일 저장 SQL의 3회로 처리하며 명시적 트랜잭션·락을 사용하지 않습니다. 나머지 기존 쓰기의 공통 락은 유지합니다. 실제 요청 흐름·SQL 호출 수·검증 방법은 [Group-01 실행 기록](docs/srp-query-refactor-plan.md#group-01-구현된-모임초대참여-도메인-분리)에 기록합니다. API 목록·요청별 로직·실제 SQL은 [분리한 API 흐름과 SQL](docs/refactored-api-flows-and-sql.md)에서 확인합니다.
+모임 구현은 `src/Domain/Group`의 Frontend(목록·상세·초대 수락), Backend(Controller·Service·Repository·DAO·Exception), Shared(공개 DTO)로 분리합니다. 기존 생성·조회·닫기/이탈·초대 발급/폐기/수락 API를 유지하고 모임 수정 기능은 추가하지 않습니다. 회차 생성·목록 UI는 Settle Frontend 공개 진입점으로 조합하며, 목록·초대의 회원 프로필과 미종료 회차 조회는 User/Settle 공개 기능에 동일 DB Client를 전달합니다. 모임 상세는 모임·활성 멤버십·회원 이름을 한 SQL로 JOIN한 뒤 본인의 참여 여부를 비교하여 멤버 목록까지 함께 반환합니다. 공통 입력·페이지네이션·멱등 실행은 Global Util의 `input-validation-util.ts`·`pagenation-util.ts`·`idempotency-util.ts`로 나눴고, Auth/Websocket과 공통 프론트 UI의 공개 진입점은 기존 구현을 사용합니다. 초대 발급·재발급·폐기는 AUTH → 생성자 권한/재시도 조회 → 단일 저장 SQL의 3회로 처리하며 명시적 트랜잭션·락을 사용하지 않습니다. 초대 수락은 AUTH → 토큰 형식 검사 → 유효 초대/성공 기록 조회 → 세션 advisory lock 획득 → 조건부 멤버십·성공 기록 저장 → 락 해제의 SQL 5회이며 명시적 트랜잭션은 없습니다. 기존 쓰기와 같은 락으로 정원·탈퇴·모임 닫기 경합을 보호하고 삽입 SQL에서 현재 상태를 다시 확인합니다. 새 키의 중복 수락은 409, 이미 성공한 같은 키는 기존 결과를 반환합니다. 실패해도 락을 해제하며 획득·해제 결과가 불확실한 연결은 풀에 돌려주지 않고 폐기합니다. 나머지 기존 쓰기의 트랜잭션 락은 유지합니다. 실제 요청 흐름·SQL 호출 수·검증 방법은 [Group-01 실행 기록](docs/srp-query-refactor-plan.md#group-01-구현된-모임초대참여-도메인-분리)에 기록합니다. API 목록·요청별 로직·실제 SQL은 [분리한 API 흐름과 SQL](docs/refactored-api-flows-and-sql.md)에서 확인합니다.
 
 공용 `pg.Pool`은 새 PostgreSQL 연결의 startup parameter로 `statement_timeout=15000`(15초), `lock_timeout=10000`(10초)을 설정합니다. 풀의 일반 조회와 읽기·쓰기 트랜잭션에 같은 제한을 적용하며 요청마다 `SET LOCAL`을 실행하지 않습니다. 풀 설정 변경 후에는 앱 서버를 재시작해야 기존 풀 연결도 새 기본값을 사용합니다. 마이그레이션용 독립 연결의 별도 제한 설정은 유지합니다.
 
@@ -120,6 +120,8 @@ npm run dev -- --port 3087
 
 # 다른 터미널: 같은 TEST_DATABASE_URL과 AUTH_JWT_SECRET을 설정한 뒤 실행
 node --import tsx scripts/browser-check.mjs
+# 초대 수락 후 GET 미실행·WebSocket 목록 갱신만 검증
+node --import tsx scripts/browser-check.mjs --invites-only
 ```
 
 `BROWSER_APP_ORIGIN` 기본값은 `http://localhost:3087`, `CHROME_DEBUG_ORIGIN`은 `http://127.0.0.1:9223`입니다. 스크립트는 테스트 DB에 기존 가입 완료 회원을 만들고 모바일 크기의 Chrome에서 초대·지출·증빙·제외·확정·추첨·최신 수취 계좌 표시·링크 복사·종료와 응답 유실 재시도를 검사합니다. 가입·재가입 화면은 계좌 직접 입력 폼을 검사합니다. 카카오 실제 인증은 별도로 확인해야 합니다. 결과 이미지는 시스템 임시 디렉터리의 `da-moa-browser-artifacts/settlement.png`에 저장하며 `BROWSER_ARTIFACT_DIR`로 위치를 지정할 수 있습니다.

@@ -1,17 +1,15 @@
 'use client'
 
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 import type { InvitePreview, GroupMutationResult as MutationResult } from '../../Shared'
 import { apiRequest, ErrorNotice, Loading, useAction, useResource } from '../../../../Global/Util/Frontend'
 
 export default function InviteClient({ token }: { token: string }) {
-  const router = useRouter()
   const invite = useResource<InvitePreview>(`/api/invites/${encodeURIComponent(token)}`)
   const action = useAction()
   async function accept() {
     const result = await action.run(() => apiRequest<MutationResult>(`/api/invites/${encodeURIComponent(token)}/accept`, { method: 'POST', body: {} }))
-    if (result) router.push(`/home/groups/${result.id}`)
+    if (result) invite.setData(current => current ? { ...current, isMember: true } : current)
   }
   return <><section className="tab-heading"><h1>함께 정산해요</h1></section><ErrorNotice error={invite.error} retry={() => void invite.reload()} />
     {!invite.data ? invite.loading && <Loading /> : <section className="domain-card stack"><h2>{invite.data.groupName}</h2><p className="help-text">{new Date(invite.data.expiresAt * 1000).toLocaleString('ko-KR')}까지 수락할 수 있어요.</p>
