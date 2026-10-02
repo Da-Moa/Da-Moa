@@ -436,3 +436,11 @@ User의 공개 `getActiveUserProfiles()`는 필요한 ID를 한 번에 조회하
 - 각 기능의 실행 문단·실제 요청 흐름·SQL 확인 결과·사용자 확인 여부 기록. 사용자 확인 대기 중 다음 기능 수정 금지.
 
 최종 리뷰에서는 파일 이동량보다 독립된 변경 이유가 분리됐는지 확인한다. SQL 호출 수는 같은 시나리오의 전·후 결과로 제시하고, 성능 개선 수치는 실제 측정한 경우에만 보고한다.
+
+### 2026-10-02 DELETE 모임 조회 최적화
+
+앞선 Group-01 이탈 경로의 별도 Settle 조회와 실시간 수신자 읽기 트랜잭션을 대체했다. GroupRepository.findGroupDeparture()가 권한·역할별 미종료 여부·멱등 성공 기록·변경 전 수신자를 한 SQL로 JOIN하고 leaveGroup()이 멤버십·초대·성공 기록을 한 CTE로 저장한다. 회차 데이터는 읽기만 하며 상태 변경은 Settle 구현에 남는다. AUTH를 락 전에 수행하고 기존 쓰기 트랜잭션과 락은 유지한다. 업무 SQL은 거절 2회·성공 3회, 풀 startup parameter로 제한을 적용하여 제어 SQL 포함 총 5회·6회다. 상세 SQL과 현재 흐름은 [G4](refactored-api-flows-and-sql.md#g4-delete-apigroupsgroupid--일반-이탈생성자-닫기)에 기록한다.
+
+### 2026-10-02 풀 기본 타임아웃
+
+공용 pg.Pool에 statement_timeout=15000·lock_timeout=10000을 지정했다. PostgreSQL 연결 시작 단계에서 적용하므로 앞선 트랜잭션당 SET LOCAL 두 문장은 제거하며 마이그레이션용 독립 연결은 기존 별도 제한을 유지한다. 쓰기 부가 SQL은 BEGIN·락·COMMIT의 3회, 읽기는 BEGIN·COMMIT의 2회다. 앱 서버 재시작 후 기존 풀도 새 기본값을 사용한다.

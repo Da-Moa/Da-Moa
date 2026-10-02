@@ -49,6 +49,8 @@ npm run dev
 
 모임 구현은 `src/Domain/Group`의 Frontend(목록·상세·초대 수락), Backend(Controller·Service·Repository·DAO·Exception), Shared(공개 DTO)로 분리합니다. 기존 생성·조회·닫기/이탈·초대 발급/폐기/수락 API를 유지하고 모임 수정 기능은 추가하지 않습니다. 회차 생성·목록 UI는 Settle Frontend 공개 진입점으로 조합하며, 목록·초대의 회원 프로필과 미종료 회차 조회는 User/Settle 공개 기능에 동일 DB Client를 전달합니다. 모임 상세는 모임·활성 멤버십·회원 이름을 한 SQL로 JOIN한 뒤 본인의 참여 여부를 비교하여 멤버 목록까지 함께 반환합니다. 공통 입력·페이지네이션·멱등 실행은 Global Util의 `input-validation-util.ts`·`pagenation-util.ts`·`idempotency-util.ts`로 나눴고, Auth/Websocket과 공통 프론트 UI의 공개 진입점은 기존 구현을 사용합니다. 기존 공통 쓰기 락은 이번 구조 분리에서 유지합니다. 실제 요청 흐름·SQL 호출 수·검증 방법은 [Group-01 실행 기록](docs/srp-query-refactor-plan.md#group-01-구현된-모임초대참여-도메인-분리)에 기록합니다. API 목록·요청별 로직·실제 SQL은 [분리한 API 흐름과 SQL](docs/refactored-api-flows-and-sql.md)에서 확인합니다.
 
+공용 `pg.Pool`은 새 PostgreSQL 연결의 startup parameter로 `statement_timeout=15000`(15초), `lock_timeout=10000`(10초)을 설정합니다. 풀의 일반 조회와 읽기·쓰기 트랜잭션에 같은 제한을 적용하며 요청마다 `SET LOCAL`을 실행하지 않습니다. 풀 설정 변경 후에는 앱 서버를 재시작해야 기존 풀 연결도 새 기본값을 사용합니다. 마이그레이션용 독립 연결의 별도 제한 설정은 유지합니다.
+
 ## 사용자 흐름
 
 1. 카카오 로그인 후 전체 계좌번호를 입력하고 제안된 은행을 선택한 다음 예금주를 입력해 가입합니다. 선택 은행의 알려진 계좌번호 형식을 찾지 못하면 하이픈 없이 숫자로 저장합니다. 계좌 자동 연동·실명조회는 제공하지 않으며, 송금 전 계좌번호와 예금주를 직접 확인해야 합니다.

@@ -52,6 +52,25 @@ async function inspect<T>(work: (client: ReturnType<typeof createDatabaseClient>
 
 before(async () => { await inspect(client => applyMigrations(client)) })
 
+test('group departure and round creation serialize for participants and creators', async () => {
+  for (const creatorDeparture of [false, true]) {
+    const fixture = await group()
+    const actor = creatorDeparture ? fixture.owner : fixture.participant
+    const outcomes = await Promise.allSettled([
+      createRound(fixture.owner, key(), fixture.groupId, { name: '탈퇴 경합 회차', currency: 'KRW', participantIds: [fixture.owner.userId, fixture.participant.userId] }),
+      leaveGroup(actor, key(), fixture.groupId),
+    ])
+    assert.equal(outcomes.filter(outcome => outcome.status === 'fulfilled').length, 1)
+    if (outcomes[0].status === 'fulfilled') {
+      assert.equal((outcomes[1] as PromiseRejectedResult).reason.code, creatorDeparture ? 'unfinished_group_rounds' : 'unfinished_rounds')
+      const active = await inspect(async client => (await client.query('SELECT left_at FROM group_members WHERE group_id=$1 AND user_id=$2', [fixture.groupId, actor.userId])).rows[0])
+      assert.equal(active.left_at, null)
+    } else {
+      assert.equal(outcomes[0].reason.code, creatorDeparture ? 'not_found' : 'invalid_participants')
+    }
+  }
+})
+
 test('reopen racing send commits exactly one state transition', async () => {
   const fixture = await recordingRound()
   const confirmed = await roundCommand(fixture.owner, key(), fixture.roundId, 'confirm', { expectedVersion: fixture.version })

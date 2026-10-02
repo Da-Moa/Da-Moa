@@ -34,6 +34,8 @@ export function getDatabasePool(value) {
     const pool = new Pool({
       connectionString: value, max: 10, connectionTimeoutMillis: 10_000,
       idleTimeoutMillis: 30_000, allowExitOnIdle: true,
+      // PostgreSQL startup parameters; no SET queries when borrowing a connection.
+      statement_timeout: 15_000, lock_timeout: 10_000,
     })
     pool.on('connect', client => instrumentQueries(client))
     pool.on('error', error => console.error('Database pool idle client error', error))

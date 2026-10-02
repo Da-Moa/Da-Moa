@@ -20,7 +20,7 @@ SQL은 해당 함수의 실제 query() 문자열을 가져와 PostgreSQL 형식�
 | 현재 시각 | nowSeconds는 기존 currentTimestamp()의 공개 별칭. 같은 초 단위 계산을 중복 구현하지 않음 |
 | 인증 | [Node Proxy](../src/proxy.ts) → [JwtGuard](../src/Global/Auth/Backend/Guard/JwtGuard.ts). Controller 진입 전 JWT 검증. Service의 requireAccount()는 회원 상태 조회에 사용 |
 | 협력 조회 | [User Backend](../src/Domain/User/Backend/index.ts)의 getActiveUserProfiles(), [Settle Backend](../src/Domain/Settle/Backend/index.ts)의 미종료 여부 조회. Service가 같은 DB Client 전달 |
-| 실시간 | [Global Websocket Backend](../src/Global/Websocket/Backend/index.ts). 기존 captureGroupAudience()·publishGroupInvalidation() 구현에 위임 |
+| 실시간 | [Global Websocket Backend](../src/Global/Websocket/Backend/index.ts). publishGroupInvalidation() 구현에 위임; DELETE 수신자는 업무 조회에서 확보 |
 
 입력 검증은 문자열 trim·필수/최대 길이, 허용 필드, 중복 없는 참여자 ID를 검사한다. 모임 이름은 최대 100자, 재발급 초대 ID는 최대 128자다. idsInput()은 현재 회차 코드에서도 사용하는 공통 함수다. 페이지네이션은 기본 limit=20, 허용 범위 1~100이고 커서의 길이·시각·ID를 검증한다. pageOf()는 limit+1 조회 중 실제 페이지와 다음 위치 커서를 만든다. 모임 생성은 명시적 트랜잭션 없이 UUIDv7 PK의 모임·생성자 멤버십을 단일 SQL로 저장한다. 다른 쓰기는 domainMutation()에서 인증 → 키/본문 검사·성공 재생 → 업무 실행 → 성공 기록 저장을 같은 쓰기 트랜잭션에서 수행한다.
 
@@ -85,18 +85,18 @@ WebSocket 최초 연결은 이미 확인한 AccountContext와 저장된 JWT를 �
 
 1. HTTP 요청 → Node Proxy → JWT Guard에서 Access JWT 검증 → Route Handler/Controller → Service 입력 검증.
 2. 공용 pg 풀에서 연결 확보.
-3. R-START: REPEATABLE READ READ ONLY 시작 → 문장/잠금 제한 설정.
+3. R-START: REPEATABLE READ READ ONLY 시작. 문장 15초·잠금 10초 제한은 풀의 PostgreSQL startup parameter로 적용한다.
 4. AUTH: JWT 목적과 가입 완료 회원 상태 확인.
 5. 해당 API의 권한·데이터 SQL 실행. 같은 스냅샷과 Client 사용.
 6. TX-COMMIT → 연결 반환. 실패는 TX-ROLLBACK → 연결 반환; 롤백 실패 연결은 폐기.
 
-읽기 트랜잭션 자체는 R-START의 3문장과 COMMIT 1문장으로 총 4회다. 도메인용 명시적 락은 없다.
+읽기 트랜잭션 자체는 R-START의 BEGIN 1문장과 COMMIT 1문장으로 총 2회다. 도메인용 명시적 락은 없다.
 
 ### 쓰기 W — 모임 생성 제외
 
 1. Node Proxy → JWT Guard가 Route Handler/Controller 진입 전에 Access JWT를 검증한다. 통과한 요청은 Controller에서 JWT를 다시 확인하고 동일 출처 검사. JSON을 읽는 API는 기존 1MiB 제한·객체 본문 검사.
 2. 필요한 Service 입력 검증. 모임/초대 생성 입력은 트랜잭션 전에 검사.
-3. 공용 pg 풀에서 연결 확보 → W-START: BEGIN → 제한 설정 → 기존 공통 advisory transaction lock.
+3. 공용 pg 풀에서 연결 확보 → W-START: BEGIN → 기존 공통 advisory transaction lock. 제한은 풀 연결의 기본값을 사용한다.
 4. AUTH: JWT 목적·가입 완료 회원 상태 확인.
 5. replayMutation(): UUID 형식 Idempotency-Key 검사 → 정렬한 payload의 SHA-256 → IDEM-READ.
 6. 동일 키·동일 payload의 기존 성공이면 업무 SQL 없이 저장된 결과 재생 → COMMIT. 다른 payload이면 idempotency_conflict·ROLLBACK.
@@ -104,7 +104,7 @@ WebSocket 최초 연결은 이미 확인한 AccountContext와 저장된 JWT를 �
 8. TX-COMMIT → 연결 반환 → Controller 응답. 실패는 전체 ROLLBACK.
 9. 실시간 기능이 켜져 있으면 성공 응답 후 after()에서 모임 무효화 알림. 재생 성공도 현재 Controller에서 알림을 예약한다.
 
-쓰기 트랜잭션 부가 SQL은 W-START 4문장과 COMMIT 1문장으로 총 5회다. 모임 생성은 이 경로를 사용하지 않는다. 다른 쓰기의 기존 전역 advisory lock을 회차 기록/수정에만 적용하도록 바꾸는 정책 전환은 별도 작업이다.
+쓰기 트랜잭션 부가 SQL은 W-START의 BEGIN·락 2문장과 COMMIT 1문장으로 총 3회다. 모임 생성은 이 경로를 사용하지 않는다. 다른 쓰기의 기존 전역 advisory lock을 회차 기록/수정에만 적용하도록 바꾸는 정책 전환은 별도 작업이다.
 
 | operation | 멱등 payload |
 |---|---|
@@ -177,15 +177,16 @@ GroupClient.useResource() → GET /api/groups/{groupId} → Node Proxy → JWT G
 
 ### G4. DELETE /api/groups/{groupId} — 일반 이탈/생성자 닫기
 
-GroupClient.leave()의 역할별 확인 창 → DELETE → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 Group 분배 → GroupController가 실시간 활성화 시 변경 전 수신자 확보 → leaveGroup() → 역할별 규칙/SQL → GroupMutationResult → 모임 목록 이동.
+GroupClient.leave()의 확인 창 → DELETE → Node Proxy/JWT Guard → GroupController → leaveGroup() → 역할별 검사/변경 → GroupMutationResult → 모임 목록 이동.
 
-1. 실시간 기능이 켜져 있으면 별도 읽기 트랜잭션으로 R-START → AUTH → RT-CAPTURE → COMMIT. 성공 변경 전 활성 멤버를 확보한다.
-2. 업무 쓰기는 W-START → AUTH → IDEM-READ(operation=group.leave) → G-ACCESS.
-3. 일반 멤버: leaveMembership() → S-UNFINISHED-MEMBER. 제외되지 않은 현재 참여 회차가 미종료이면 unfinished_rounds·ROLLBACK. 없으면 G-LEAVE로 본인 left_at 갱신.
-4. 생성자: closeGroup() → S-UNFINISHED-GROUP. 모임의 미종료 회차가 있으면 unfinished_group_rounds·ROLLBACK. 없으면 G-CLOSE-1로 모든 초대 폐기, G-CLOSE-2로 모든 멤버십 이탈 처리.
-5. IDEM-SAVE({ id: groupId }) → COMMIT → 변경 전 수신자까지 합쳐 RT-PUBLISH 알림.
+1. BEGIN으로 쓰기 트랜잭션을 시작한다. 풀의 문장 15초·잠금 10초 제한을 사용하며 SET LOCAL은 실행하지 않는다.
+2. AUTH로 본인의 가입·탈퇴 상태를 확인한 뒤 기존 공통 advisory transaction lock을 획득한다. 인증 실패는 락을 획득하지 않고 ROLLBACK한다.
+3. G-DEPARTURE 한 조회에서 활성 멤버십·생성자 여부·역할별 미종료 회차·기존 멱등 성공 기록·변경 전 실시간 수신자를 가져온다. 동일 키 재시도는 성공 응답을 재생하며 다른 모임에 키를 재사용하면 idempotency_conflict로 거부한다.
+4. 일반 멤버는 본인이 제외되지 않은 미종료 참여 회차가 있으면 unfinished_rounds, 생성자는 본인 참여 여부와 무관하게 모임 전체 미종료 회차가 있으면 unfinished_group_rounds로 거부한다. 실패는 ROLLBACK으로 락을 해제한다.
+5. 없으면 G-DEPARTURE-WRITE 한 CTE에서 본인 멤버십 종료 또는 생성자의 전체 활성 멤버십 종료·초대 폐기와 멱등 성공 기록을 함께 저장한다. COMMIT이 락을 자동 해제하며 별도 unlock SQL은 없다.
+6. Controller가 커밋 후 확보한 수신자로 groups·group:{id} 무효화를 발행한다. 선행·후행 실시간 DB 조회는 없다.
 
-일반 이탈의 업무 SQL: W-START(4) → AUTH → IDEM-READ → G-ACCESS → S-UNFINISHED-MEMBER → G-LEAVE → IDEM-SAVE → COMMIT = 11회. 생성자 닫기는 미종료 조회 뒤 UPDATE 2회로 12회. groups 행·완료 회차·과거 round_members는 삭제하지 않는다. 실시간의 선행 6회와 후행 5회는 위 업무 횟수에서 제외한다.
+업무 SQL은 AUTH·G-DEPARTURE로 거절 2회, 여기에 G-DEPARTURE-WRITE를 더해 성공 3회다. 락 획득과 COMMIT/ROLLBACK 포함 4회·5회이며 BEGIN까지 포함한 실제 총 SQL은 거절 5회·성공 6회다. 성공 재생은 5회다. groups·rounds·과거 round_members는 삭제하지 않는다.
 
 ### G5. POST /api/groups/{groupId}/invites — 초대 발급/재발급
 
@@ -199,13 +200,13 @@ GroupClient.inviteMembers() → POST → Node Proxy → JWT Guard(Access JWT 검
 6. IDEM-SAVE에 { id, inviteId, linkUnavailable: true }만 저장 → COMMIT.
 7. 실제 신규 실행이 성공한 요청에만 메모리의 토큰으로 sharePath=/invites/{token}을 응답. 성공 재생은 링크 없는 저장 결과를 그대로 반환.
 
-신규 발급 SQL: W-START(4) → AUTH → IDEM-READ → G-ACCESS → G-INSERT-INVITE → IDEM-SAVE → COMMIT = 10회. 재발급은 G-REVOKE가 추가되어 11회. 새 초대/성공 기록 저장 실패 시 기존 초대 폐기도 롤백한다.
+신규 발급 SQL: W-START(2) → AUTH → IDEM-READ → G-ACCESS → G-INSERT-INVITE → IDEM-SAVE → COMMIT = 8회. 재발급은 G-REVOKE가 추가되어 9회. 새 초대/성공 기록 저장 실패 시 기존 초대 폐기도 롤백한다.
 
 ### G6. DELETE /api/groups/{groupId}/invites/{inviteId} — 초대 폐기
 
 GroupClient.revoke() 확인 창 → DELETE → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 Group 분배 → GroupController → revokeInvite() → GroupMutationResult → 초대 목록 재조회.
 
-W-START → AUTH → IDEM-READ(operation=invite.revoke) → G-ACCESS의 생성자 검사 → G-REVOKE의 모임/초대 ID UPDATE·영향 행 확인 → IDEM-SAVE({ id: inviteId }) → COMMIT. 정상은 10회. 이미 폐기된 같은 초대는 COALESCE로 기존 폐기 시각을 유지한다. 초대가 없으면 not_found·ROLLBACK이며 이미 참여한 멤버십은 건드리지 않는다.
+W-START → AUTH → IDEM-READ(operation=invite.revoke) → G-ACCESS의 생성자 검사 → G-REVOKE의 모임/초대 ID UPDATE·영향 행 확인 → IDEM-SAVE({ id: inviteId }) → COMMIT. 정상은 8회. 이미 폐기된 같은 초대는 COALESCE로 기존 폐기 시각을 유지한다. 초대가 없으면 not_found·ROLLBACK이며 이미 참여한 멤버십은 건드리지 않는다.
 
 ### G7. GET /api/invites/{token} — 초대 조회
 
@@ -217,7 +218,7 @@ InviteClient.useResource() → GET → Node Proxy → JWT Guard(Access JWT 검�
 4. 초대가 있으면 U-PROFILES(생성자 ID 하나)로 생성자의 미탈퇴·가입 완료 확인. 없으면 not_found·ROLLBACK.
 5. groupId·groupName·isMember·expiresAt만 구성 → COMMIT.
 
-정상 SQL: R-START(3) → AUTH → G-VALID-INVITE → U-PROFILES → COMMIT = 7회. GET은 group_members를 쓰지 않으며 기존 회차 참여를 만들지 않는다.
+정상 SQL: R-START(1) → AUTH → G-VALID-INVITE → U-PROFILES → COMMIT = 5회. GET은 group_members를 쓰지 않으며 기존 회차 참여를 만들지 않는다.
 
 ### G8. POST /api/invites/{token}/accept — 참여 수락
 
@@ -229,46 +230,34 @@ InviteClient.accept() → POST → Node Proxy → JWT Guard(Access JWT 검사) �
 4. G-JOIN UPSERT: 신규 멤버십 생성; 이탈 행이 있으면 joined_at 갱신·left_at=NULL; 이미 활성인 경우 기존 joined_at 유지.
 5. IDEM-SAVE({ id: groupId }) → COMMIT → 모임 알림 → 프론트 상세 이동.
 
-신규/재참여 SQL: W-START(4) → AUTH → IDEM-READ → G-VALID-INVITE → U-PROFILES → G-COUNT → G-JOIN → IDEM-SAVE → COMMIT = 12회. 이미 멤버는 11회. round_members를 INSERT/UPDATE하지 않는다. 정원 직전 동시 수락·탈퇴와의 경합은 현재 기존 공통 쓰기 락을 사용한다.
+신규/재참여 SQL: W-START(2) → AUTH → IDEM-READ → G-VALID-INVITE → U-PROFILES → G-COUNT → G-JOIN → IDEM-SAVE → COMMIT = 10회. 이미 멤버는 9회. round_members를 INSERT/UPDATE하지 않는다. 정원 직전 동시 수락·탈퇴와의 경합은 현재 기존 공통 쓰기 락을 사용한다.
 
 ### 성공 재생·실패·실시간의 별도 순서
 
-모임 생성 중복은 AUTH → G-CREATE로 2회이며 PK 오류를 409로 반환한다. 다른 모임 쓰기 성공 재생은 W-START(4) → AUTH → IDEM-READ → COMMIT으로 7회다. 업무 SQL·IDEM-SAVE는 반복하지 않는다. 초대 발급 재생에서는 원문 링크를 반환하지 않는다. 본문/키 오류·권한/정원/상태 오류·DB 오류는 성공 기록을 남기지 않는다. 모임 생성 실패는 단일 SQL의 원자성, 다른 쓰기 실패는 기존 트랜잭션 ROLLBACK으로 부분 저장을 막는다. 응답 유실은 같은 키·같은 payload로 재시도한다. 외부 파일 작업은 Group API에 없다.
+모임 생성 중복은 AUTH → G-CREATE로 2회이며 PK 오류를 409로 반환한다. 다른 모임 쓰기 성공 재생은 W-START(2) → AUTH → IDEM-READ → COMMIT으로 5회다. 업무 SQL·IDEM-SAVE는 반복하지 않는다. 초대 발급 재생에서는 원문 링크를 반환하지 않는다. 본문/키 오류·권한/정원/상태 오류·DB 오류는 성공 기록을 남기지 않는다. 모임 생성 실패는 단일 SQL의 원자성, 다른 쓰기 실패는 기존 트랜잭션 ROLLBACK으로 부분 저장을 막는다. 응답 유실은 같은 키·같은 payload로 재시도한다. 외부 파일 작업은 Group API에 없다.
 
-실시간이 켜져 있을 때 DELETE의 선행 수신자 캡처는 R-START(3) → AUTH → RT-CAPTURE → COMMIT으로 6회다. 정상 쓰기/성공 재생 응답 후 발행은 별도 읽기 트랜잭션 R-START(3) → RT-PUBLISH → COMMIT으로 5회다. 변경 전·현재 수신자를 합쳐 groups와 group:{id} 키만 내부 HTTP로 전달한다. 이 후행 발행은 저장 트랜잭션에 속하지 않으며 발행 실패가 커밋된 결과를 롤백하지 않는다. 실시간 환경 변수가 꺼져 있으면 두 경로는 SQL 없이 생략된다.
+DELETE는 G-DEPARTURE에서 확보한 변경 전 수신자에게 추가 SQL 없이 groups·group:{id} 키만 내부 HTTP로 전달한다. 다른 모임 변경의 발행은 기존 별도 읽기 트랜잭션 R-START(1) → RT-PUBLISH → COMMIT으로 3회다. 이 후행 발행은 저장 트랜잭션에 속하지 않으며 발행 실패가 커밋된 결과를 롤백하지 않는다. 실시간 환경 변수가 꺼져 있으면 두 경로는 SQL 없이 생략된다.
 
 ## 5. 실제 SQL 카탈로그
 
 한 식별자 블록에 여러 문장이 있으면 표기한 순서대로 각각 query()로 호출한다. 바인딩 의미는 문서 설명이며 로그에 실제 값을 출력하라는 뜻이 아니다. 아래 공통 인증 쿼리는 기존 구현대로 계좌 컬럼도 읽지만, Group은 account.id만 사용하고 계좌를 응답 DTO나 실시간 메시지에 넣지 않는다.
 
-### R-START — 읽기 트랜잭션 시작/설정
+### R-START — 읽기 트랜잭션 시작
 
 출처: [src/lib/db.ts](../src/lib/db.ts).
 
 ```sql
 BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
-
-SET
-  LOCAL statement_timeout = '15s';
-
-SET
-  LOCAL lock_timeout = '10s';
 ```
 
 같은 조회의 인증·권한·하위 데이터에 같은 읽기 스냅샷을 사용한다.
 
-### W-START — 쓰기 트랜잭션 시작/설정/현재 공통 락
+### W-START — 쓰기 트랜잭션 시작/현재 공통 락
 
 출처: [src/lib/db.ts](../src/lib/db.ts).
 
 ```sql
 BEGIN;
-
-SET
-  LOCAL statement_timeout = '15s';
-
-SET
-  LOCAL lock_timeout = '10s';
 
 SELECT
   pg_advisory_xact_lock(1684106607);
@@ -475,49 +464,44 @@ SELECT id, creator_id, created_at FROM created_group;
 
 $1=UUIDv7 요청 키, $2=생성자 ID, $3=trim된 이름, $4=현재 초 시각. PK 중복은 409로 변환한다. PostgreSQL의 문장 원자성으로 둘 중 하나라도 실패하면 모임·멤버십 저장 전체가 취소된다.
 
-### G-CLOSE-1 — 생성자 닫기 1
+### G-DEPARTURE — 권한·역할별 미종료·멱등·수신자 통합 조회
 
-출처: [src/Domain/Group/Backend/Repository/GroupRepository.ts](../src/Domain/Group/Backend/Repository/GroupRepository.ts).
-
-```sql
-UPDATE group_invites
-SET
-  revoked_at = COALESCE(revoked_at, $2)
-WHERE
-  group_id = $1;
-```
-
-$1=groupId, $2=현재 초 시각. 두 SQL은 같은 트랜잭션에서 수행한다.
-
-### G-CLOSE-2 — 생성자 닫기 2
-
-출처: [src/Domain/Group/Backend/Repository/GroupRepository.ts](../src/Domain/Group/Backend/Repository/GroupRepository.ts).
+출처: [GroupRepository.findGroupDeparture()](../src/Domain/Group/Backend/Repository/GroupRepository.ts).
 
 ```sql
-UPDATE group_members
-SET
-  left_at = COALESCE(left_at, $2)
-WHERE
-  group_id = $1;
+SELECT g.creator_id,viewer.user_id,
+    EXISTS(SELECT 1 FROM rounds r WHERE r.group_id=$1 AND r.status<>'COMPLETED'
+      AND (g.creator_id=$2 OR EXISTS(SELECT 1 FROM round_members m
+        WHERE m.round_id=r.id AND m.user_id=$2 AND m.excluded_at IS NULL))) AS has_unfinished,
+    ARRAY(SELECT user_id FROM group_members WHERE group_id=$1 AND left_at IS NULL) AS member_ids,
+    previous.request_digest,previous.response_metadata
+    FROM (SELECT $1::text AS id) requested
+    LEFT JOIN groups g ON g.id=requested.id
+    LEFT JOIN group_members viewer ON viewer.group_id=g.id AND viewer.user_id=$2 AND viewer.left_at IS NULL
+    LEFT JOIN mutation_requests previous ON previous.actor_id=$2 AND previous.operation='group.leave' AND previous.request_key=$3;
 ```
 
-$1=groupId, $2=현재 초 시각. 두 SQL은 같은 트랜잭션에서 수행한다.
+$1=groupId, $2=인증한 사용자 ID, $3=멱등 키. 생성자는 모임 전체 회차를 검사하고 일반 참여자는 제외되지 않은 본인 참여 회차만 검사한다. 종료된 멤버십에도 기존 성공 응답을 재생할 수 있도록 LEFT JOIN한다. Service가 활성 멤버십과 요청 digest를 검사한다.
 
-### G-LEAVE — 일반 멤버 이탈
+### G-DEPARTURE-WRITE — 멤버십·초대·성공 기록 원자적 저장
 
-출처: [src/Domain/Group/Backend/Repository/GroupRepository.ts](../src/Domain/Group/Backend/Repository/GroupRepository.ts).
+출처: [GroupRepository.leaveGroup()](../src/Domain/Group/Backend/Repository/GroupRepository.ts).
 
 ```sql
-UPDATE group_members
-SET
-  left_at = $3
-WHERE
-  group_id = $1
-  AND user_id = $2
-  AND left_at IS NULL;
+WITH departed AS (
+    UPDATE group_members SET left_at=$3
+    WHERE group_id=$1 AND left_at IS NULL AND ($4::boolean OR user_id=$2)
+    RETURNING user_id
+  ), revoked AS (
+    UPDATE group_invites SET revoked_at=$3
+    WHERE group_id=$1 AND revoked_at IS NULL AND $4::boolean AND EXISTS(SELECT 1 FROM departed)
+    RETURNING id
+  ) INSERT INTO mutation_requests(actor_id,operation,request_key,request_digest,resource_id,response_metadata,created_at)
+    SELECT $2,'group.leave',$5,$6,$1,jsonb_build_object('id',$1::text),$3
+    WHERE EXISTS(SELECT 1 FROM departed);
 ```
 
-$1=groupId, $2=본인 ID, $3=현재 초 시각.
+$1=groupId, $2=사용자 ID, $3=현재 초 시각, $4=생성자 여부, $5=멱등 키, $6=요청 digest. 생성자만 전체 활성 멤버십과 초대를 종료한다. 단일 CTE와 쓰기 트랜잭션으로 변경·성공 기록을 함께 커밋한다.
 
 ### G-REVOKE — 초대 폐기/재발급 시 이전 초대 폐기
 
@@ -685,25 +669,6 @@ LIMIT
 
 $1=groupId, $2=이탈 요청자 ID. 제외된 회차 참여는 이 이탈 제한 조회의 대상에서 빠진다.
 
-### RT-CAPTURE — DELETE 전 활성 수신자 확보
-
-출처: [src/lib/realtime-server.ts](../src/lib/realtime-server.ts).
-
-```sql
-SELECT
-  member.user_id
-FROM
-  group_members viewer
-  JOIN group_members member ON member.group_id = viewer.group_id
-  AND member.left_at IS NULL
-WHERE
-  viewer.group_id = $1
-  AND viewer.user_id = $2
-  AND viewer.left_at IS NULL;
-```
-
-$1=groupId, $2=요청자 ID. 읽기 트랜잭션에서 AUTH 이후 호출한다.
-
 ### RT-PUBLISH — 커밋 후 현재 활성 수신자 조회
 
 출처: [src/lib/realtime-server.ts](../src/lib/realtime-server.ts).
@@ -724,18 +689,18 @@ $1=groupId. 별도 읽기 트랜잭션에 AUTH는 없고, 이미 허가된 커�
 
 ## 6. SQL 호출 수와 재현
 
-트랜잭션 시작·설정·락·종료를 포함한다. 실시간 선행/후행 쿼리와 프론트 후속 GET은 별도로 센다. 아래 이전 수는 변경 전 코드의 호출 순서, 현재 수는 scripts/group.integration.test.ts의 실제 DB SQL 로그 검증 기준이다. 사용자 JOIN을 일괄 공개 조회로 분리해 일부 경로가 1회 증가했으며 성능 개선 수치를 뜻하지 않는다.
+트랜잭션 시작·락·종료를 포함한다. 풀 연결 생성 시 적용되는 타임아웃 startup parameter는 SQL 호출이 아니다. 실시간 선행/후행 쿼리와 프론트 후속 GET은 별도로 센다. 아래 이전 수는 변경 전 코드의 호출 순서, 현재 수는 scripts/group.integration.test.ts의 실제 DB SQL 로그 검증 기준이다. 사용자 JOIN을 일괄 공개 조회로 분리해 일부 경로가 1회 증가했으며 성능 개선 수치를 뜻하지 않는다.
 
 | Group 정상 작업 | 이전 | 현재 |
 |---|---:|---:|
 | 생성 | 10 | 2 |
 | 목록·검색(비빈/빈) | 7 / 6 | 3 / 2 |
-| 상세(생성자/일반 멤버) | 8 / 7 | 9 / 8 |
-| 일반 이탈/생성자 닫기 | 11 / 12 | 11 / 12 |
-| 초대 발급/재발급/폐기 | 10 / 11 / 10 | 10 / 11 / 10 |
-| 초대 조회 | 6 | 7 |
-| 참여 수락(비멤버/이미 멤버) | 11 / 10 | 12 / 11 |
-| 생성 중복(409) / 다른 쓰기 성공 재생 | 7(이전 재생) / 7 | 2 / 7 |
+| 상세(생성자/일반 멤버) | 8 / 7 | 3 / 2 |
+| 일반 이탈/생성자 닫기 | 11 / 12 | 6 / 6 |
+| 초대 발급/재발급/폐기 | 10 / 11 / 10 | 8 / 9 / 8 |
+| 초대 조회 | 6 | 5 |
+| 참여 수락(비멤버/이미 멤버) | 11 / 10 | 10 / 9 |
+| 생성 중복(409) / 다른 쓰기 성공 재생 | 7(이전 재생) / 7 | 2 / 5 |
 
 로컬 앱 SQL 확인:
 

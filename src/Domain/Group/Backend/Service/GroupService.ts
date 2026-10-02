@@ -1,9 +1,9 @@
 import 'server-only'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { requireAccount } from '../../../../Global/Auth/Backend'
-import { badInput, domainMutation, nowSeconds, onlyKeys, pageOf, pagination, textInput, withDatabaseConnection, withReadTransaction, type Database, type Identity } from '../../../../Global/Util/Backend'
+import { badInput, domainMutation, nowSeconds, onlyKeys, pageOf, pagination, textInput, withDatabaseConnection, withReadTransaction, withWriteTransaction, type Database, type Identity } from '../../../../Global/Util/Backend'
+import { mutationDigest, mutationResult } from '../../../../lib/mutations'
 import { getActiveUserProfiles } from '../../../User/Backend'
-import { hasUnfinishedGroupParticipation, hasUnfinishedGroupRounds } from '../../../Settle/Backend'
 import { MAX_GROUP_MEMBERS, type GroupDetail, type GroupListItem, type GroupSummary, type InvitePreview, type GroupMutationResult, type CreateGroupRequestDTO, type CreateInviteRequestDTO } from '../../Shared'
 import type { Page } from '../../../../lib/domain-types'
 import type { GroupRow } from '../DAO/GroupDAO'
@@ -69,23 +69,23 @@ export async function createGroup(access: Identity, key: string, body: CreateGro
   })
 }
 
-async function closeGroup(client: Database, groupId: string) {
-  if (await hasUnfinishedGroupRounds(client, groupId)) throw unfinishedGroupRounds()
-  await repository.closeGroup(client, groupId, nowSeconds())
-}
-
-async function leaveMembership(client: Database, groupId: string, userId: string) {
-  if (await hasUnfinishedGroupParticipation(client, groupId, userId)) throw unfinishedRounds()
-  await repository.leaveGroup(client, groupId, userId, nowSeconds())
-}
-
-export async function leaveGroup(access: Identity, key: string, groupId: string): Promise<GroupMutationResult> {
-  return domainMutation(access, key, 'group.leave', { groupId }, async (client, userId) => {
-    const group = await memberGroup(client, groupId, userId)
-    if (group.creator_id === userId) await closeGroup(client, groupId)
-    else await leaveMembership(client, groupId, userId)
+export async function leaveGroup(access: Identity, key: string, groupId: string, captureAudience?: (userIds: string[]) => void): Promise<GroupMutationResult> {
+  let audience: string[] = []
+  let userId: string
+  const result = await withWriteTransaction(async client => {
+    const digest = mutationDigest(key, { groupId })
+    const group = await repository.findGroupDeparture(client, groupId, userId, key)
+    audience = group.member_ids
+    const replay = mutationResult<GroupMutationResult>(group, digest)
+    if (replay) return replay
+    if (!group.user_id) throw missing()
+    const isCreator = group.creator_id === userId
+    if (group.has_unfinished) throw isCreator ? unfinishedGroupRounds() : unfinishedRounds()
+    await repository.leaveGroup(client, groupId, userId, nowSeconds(), isCreator, key, digest)
     return { id: groupId }
-  })
+  }, async client => { userId = (await requireAccount(client, access)).id })
+  captureAudience?.(audience)
+  return result
 }
 
 export async function createInvite(access: Identity, key: string, groupId: string, body: CreateInviteRequestDTO | Record<string, unknown>): Promise<GroupMutationResult> {

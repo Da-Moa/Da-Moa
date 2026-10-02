@@ -1,6 +1,6 @@
 import 'server-only'
 import type { Database } from '../../../../Global/Util/Backend'
-import type { GroupRow, GroupListRow, InviteRow, InviteSummaryRow, GroupMemberRow } from '../DAO/GroupDAO'
+import type { GroupRow, GroupListRow, InviteRow, InviteSummaryRow, GroupMemberRow, GroupDepartureRow } from '../DAO/GroupDAO'
 
 type Cursor = { createdAt: string; id: string } | null
 
@@ -45,13 +45,31 @@ export async function insertGroup(client: Database, id: string, userId: string, 
     SELECT id,creator_id,created_at FROM created_group`, [id, userId, name, now])
 }
 
-export async function closeGroup(client: Database, groupId: string, now: number) {
-  await client.query('UPDATE group_invites SET revoked_at=COALESCE(revoked_at,$2) WHERE group_id=$1', [groupId, now])
-  await client.query('UPDATE group_members SET left_at=COALESCE(left_at,$2) WHERE group_id=$1', [groupId, now])
+export async function findGroupDeparture(client: Database, groupId: string, userId: string, key: string) {
+  return (await client.query<GroupDepartureRow>(`SELECT g.creator_id,viewer.user_id,
+    EXISTS(SELECT 1 FROM rounds r WHERE r.group_id=$1 AND r.status<>'COMPLETED'
+      AND (g.creator_id=$2 OR EXISTS(SELECT 1 FROM round_members m
+        WHERE m.round_id=r.id AND m.user_id=$2 AND m.excluded_at IS NULL))) AS has_unfinished,
+    ARRAY(SELECT user_id FROM group_members WHERE group_id=$1 AND left_at IS NULL) AS member_ids,
+    previous.request_digest,previous.response_metadata
+    FROM (SELECT $1::text AS id) requested
+    LEFT JOIN groups g ON g.id=requested.id
+    LEFT JOIN group_members viewer ON viewer.group_id=g.id AND viewer.user_id=$2 AND viewer.left_at IS NULL
+    LEFT JOIN mutation_requests previous ON previous.actor_id=$2 AND previous.operation='group.leave' AND previous.request_key=$3`, [groupId, userId, key])).rows[0]
 }
 
-export async function leaveGroup(client: Database, groupId: string, userId: string, now: number) {
-  await client.query('UPDATE group_members SET left_at=$3 WHERE group_id=$1 AND user_id=$2 AND left_at IS NULL', [groupId, userId, now])
+export async function leaveGroup(client: Database, groupId: string, userId: string, now: number, isCreator: boolean, key: string, digest: string) {
+  await client.query(`WITH departed AS (
+    UPDATE group_members SET left_at=$3
+    WHERE group_id=$1 AND left_at IS NULL AND ($4::boolean OR user_id=$2)
+    RETURNING user_id
+  ), revoked AS (
+    UPDATE group_invites SET revoked_at=$3
+    WHERE group_id=$1 AND revoked_at IS NULL AND $4::boolean AND EXISTS(SELECT 1 FROM departed)
+    RETURNING id
+  ) INSERT INTO mutation_requests(actor_id,operation,request_key,request_digest,resource_id,response_metadata,created_at)
+    SELECT $2,'group.leave',$5,$6,$1,jsonb_build_object('id',$1::text),$3
+    WHERE EXISTS(SELECT 1 FROM departed)`, [groupId, userId, now, isCreator, key, digest])
 }
 
 export async function revokeInvite(client: Database, groupId: string, inviteId: string, now: number) {

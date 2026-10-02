@@ -30,14 +30,12 @@ test('PostgreSQL pool reuses connections, rolls back safely, and isolates concur
     (await client.query('SELECT pg_backend_pid() AS pid')).rows[0].pid)
   const pid = await backend()
   assert.equal(await backend(), pid)
-  assert.equal(queries, 10, 'reused connections must count each query exactly once')
-  assert.equal(logs.length, 10)
+  assert.equal(queries, 6, 'reused connections must count each query exactly once without SET queries')
+  assert.equal(logs.length, 6)
   assert.equal(logs[0], 'SQL:\n    BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
-  assert.match(logs[1], /statement_timeout = '15s'/)
-  assert.match(logs[2], /lock_timeout = '10s'/)
-  assert.match(logs[3], /^SQL:\n    SELECT\n        pg_backend_pid\(\) AS pid$/)
-  assert.equal(logs[4], 'SQL:\n    COMMIT')
-  assert.deepEqual(logs.slice(0, 5), logs.slice(5, 10))
+  assert.match(logs[1], /^SQL:\n    SELECT\n        pg_backend_pid\(\) AS pid$/)
+  assert.equal(logs[2], 'SQL:\n    COMMIT')
+  assert.deepEqual(logs.slice(0, 3), logs.slice(3, 6))
   assert.equal(pool.totalCount, 1)
   assert.equal(pool.idleCount, 1)
 
@@ -53,7 +51,8 @@ test('PostgreSQL pool reuses connections, rolls back safely, and isolates concur
   assert.equal(state.probe, null)
   const client = await pool.connect()
   try {
-    assert.equal((await client.query('SHOW statement_timeout')).rows[0].statement_timeout, '0')
+    assert.equal((await client.query('SHOW statement_timeout')).rows[0].statement_timeout, '15s')
+    assert.equal((await client.query('SHOW lock_timeout')).rows[0].lock_timeout, '10s')
     assert.equal((await client.query('SHOW transaction_read_only')).rows[0].transaction_read_only, 'off')
   } finally { client.release() }
 
@@ -63,6 +62,8 @@ test('PostgreSQL pool reuses connections, rolls back safely, and isolates concur
   const concurrent = () => withReadTransaction(async client => {
     if (++arrived === 2) resume()
     await ready
+    assert.equal((await client.query('SHOW statement_timeout')).rows[0].statement_timeout, '15s')
+    assert.equal((await client.query('SHOW lock_timeout')).rows[0].lock_timeout, '10s')
     assert.equal((await client.query('SHOW transaction_read_only')).rows[0].transaction_read_only, 'on')
     return (await client.query('SELECT pg_backend_pid() AS pid')).rows[0].pid
   })

@@ -39,14 +39,12 @@ test('pooled transactions release connections and discard them when rollback fai
     assert.equal(connection, client)
     return 42
   }), 42)
-  assert.deepEqual(statements, ['BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY',
-    "SET LOCAL statement_timeout = '15s'", "SET LOCAL lock_timeout = '10s'", 'COMMIT'])
+  assert.deepEqual(statements, ['BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY', 'COMMIT'])
   assert.deepEqual(release.mock.calls.at(-1)!.arguments, [false])
 
   statements.length = 0
   await assert.rejects(withWriteTransaction(async () => { throw failure }), error => error === failure)
-  assert.deepEqual(statements, ['BEGIN', "SET LOCAL statement_timeout = '15s'",
-    "SET LOCAL lock_timeout = '10s'", 'SELECT pg_advisory_xact_lock(1684106607)', 'ROLLBACK'])
+  assert.deepEqual(statements, ['BEGIN', 'SELECT pg_advisory_xact_lock(1684106607)', 'ROLLBACK'])
   assert.deepEqual(release.mock.calls.at(-1)!.arguments, [false])
 
   failCommit = true

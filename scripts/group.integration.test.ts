@@ -8,13 +8,15 @@ import { createDatabaseClient } from '../src/lib/db.ts'
 import { acceptInvite, createGroup, createInvite, getGroup, getInvite, leaveGroup, listGroups, revokeInvite } from '../src/Domain/Group/Backend/index.ts'
 import { applyMigrations } from './migrations.mjs'
 import { completeTestOnboarding } from './bank-test-support.ts'
+import { createRound, getRound, roundCommand } from '../src/lib/round-store.ts'
+import { publishGroupInvalidation } from '../src/lib/realtime-server.ts'
 
 const database = process.env.TEST_DATABASE_URL
 if (!database || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(database).hostname) || !new URL(database).pathname.toLowerCase().includes('test')) throw new Error('TEST_DATABASE_URL must name an isolated local test database')
 process.env.DATABASE_URL = database
 process.env.AUTH_JWT_SECRET ||= 'isolated-group-test-secret-at-least-32-bytes'
 
-test('Group creation, lists and details use autocommit SQL; other operations preserve transactions, replay and rollback', async t => {
+test('Group autocommit reads and creation; departure uses 2/3 business queries with atomic writes, replay and rollback', async t => {
   const client = createDatabaseClient(database)
   await client.connect()
   try {
@@ -23,7 +25,7 @@ test('Group creation, lists and details use autocommit SQL; other operations pre
       const onboarding = await signInKakao(`group-test:${randomUUID()}`, { displayName: name, email: null, profileImageUrl: null })
       return readAccessToken((await completeTestOnboarding(readAccessToken(onboarding.accessToken), { bankName: '테스트 은행', accountNumber: '12340312345678', accountHolder: name })).accessToken)!
     }
-    const owner = await member('모임 생성자'), participant = await member('모임 참여자')
+    const owner = await member('모임 생성자'), participant = await member('모임 참여자'), outsider = await member('외부인')
     const previous = process.env.DB_QUERY_LOG
     process.env.DB_QUERY_LOG = 'true'
     let statements: string[] = []
@@ -75,17 +77,17 @@ test('Group creation, lists and details use autocommit SQL; other operations pre
       await assert.rejects(getGroup(participant, group.id), (error: { code: string }) => error.code === 'not_found')
       assert.equal(statements.length, 2)
       const inviteKey = randomUUID()
-      const invite = await trace(10, true, () => createInvite(owner, inviteKey, group.id, {}))
+      const invite = await trace(8, true, () => createInvite(owner, inviteKey, group.id, {}))
       assert.deepEqual((await trace(3, null, () => getGroup(owner, group.id))).invites.map(item => item.id), [invite.id])
-      const replay = await trace(7, true, () => createInvite(owner, inviteKey, group.id, {}))
+      const replay = await trace(5, true, () => createInvite(owner, inviteKey, group.id, {}))
       assert.deepEqual(replay, { id: invite.id, inviteId: invite.id, linkUnavailable: true })
       assert.ok(!JSON.stringify(replay).includes(invite.sharePath!))
       const token = invite.sharePath!.split('/').at(-1)!
-      assert.equal((await trace(7, false, () => getInvite(participant, token))).isMember, false)
+      assert.equal((await trace(5, false, () => getInvite(participant, token))).isMember, false)
       const acceptKey = randomUUID()
-      await trace(12, true, () => acceptInvite(participant, acceptKey, token))
-      await trace(7, true, () => acceptInvite(participant, acceptKey, token))
-      await trace(11, true, () => acceptInvite(participant, randomUUID(), token))
+      await trace(10, true, () => acceptInvite(participant, acceptKey, token))
+      await trace(5, true, () => acceptInvite(participant, acceptKey, token))
+      await trace(9, true, () => acceptInvite(participant, randomUUID(), token))
       const second = await createGroup(owner, uuidV7(), { name: `${body.name} %_\\` })
       const secondInvite = await createInvite(owner, randomUUID(), second.id, {})
       await acceptInvite(participant, randomUUID(), secondInvite.sharePath!.split('/').at(-1)!)
@@ -122,6 +124,9 @@ test('Group creation, lists and details use autocommit SQL; other operations pre
       await assert.rejects(getGroup(withdrawn, group.id), (error: { code: string }) => error.code === 'unauthorized')
       await assert.rejects(getGroup(incomplete, group.id), (error: { code: string }) => error.code === 'onboarding_required')
       statements = []
+      await assert.rejects(leaveGroup(withdrawn, randomUUID(), group.id), (error: { code: string }) => error.code === 'unauthorized')
+      assert.ok(statements.every(sql => !sql.includes('pg_advisory_xact_lock')))
+      statements = []
       await assert.rejects(getGroup(participant, randomUUID()), (error: { code: string }) => error.code === 'not_found')
       assert.equal(statements.length, 2)
       const failedKey = randomUUID()
@@ -129,18 +134,84 @@ test('Group creation, lists and details use autocommit SQL; other operations pre
       await assert.rejects(createInvite(owner, failedKey, group.id, { replaceInviteId: randomUUID() }), (error: { code: string }) => error.code === 'not_found')
       assert.equal(statements.at(-1), 'ROLLBACK')
       assert.equal((await client.query('SELECT 1 FROM mutation_requests WHERE request_key=$1', [failedKey])).rows.length, 0)
-      const replaced = await trace(11, true, () => createInvite(owner, randomUUID(), group.id, { replaceInviteId: invite.id }))
+      const replaced = await trace(9, true, () => createInvite(owner, randomUUID(), group.id, { replaceInviteId: invite.id }))
       await assert.rejects(getInvite(participant, token), (error: { code: string }) => error.code === 'not_found')
-      await trace(10, true, () => revokeInvite(owner, randomUUID(), group.id, replaced.id))
+      await trace(8, true, () => revokeInvite(owner, randomUUID(), group.id, replaced.id))
       assert.deepEqual((await trace(3, null, () => getGroup(owner, group.id))).invites, [])
-      await trace(11, true, () => leaveGroup(participant, randomUUID(), group.id))
+      const unfinished = await createRound(owner, randomUUID(), group.id, { name: '미종료 검사', currency: 'KRW', participantIds: [owner.userId, participant.userId] })
+      for (const status of ['RECORDING', 'CONFIRMED', 'LOCKED']) {
+        await client.query(`UPDATE rounds SET status=$2,
+          confirmed_at=CASE WHEN $2='RECORDING' THEN NULL ELSE created_at END,
+          locked_at=CASE WHEN $2='LOCKED' THEN created_at ELSE NULL END WHERE id=$1`, [unfinished.id, status])
+        for (const actor of [owner, participant]) {
+          statements = []
+          await assert.rejects(leaveGroup(actor, randomUUID(), group.id), (error: { code: string }) => error.code === (actor === owner ? 'unfinished_group_rounds' : 'unfinished_rounds'))
+          assert.equal(statements.length, 5, statements.join('\n'))
+          assert.equal(statements.at(-1), 'ROLLBACK')
+          assert.match(statements[1], /FROM users/)
+          assert.ok(statements[2].includes('pg_advisory_xact_lock'))
+        }
+      }
+      await client.query("UPDATE rounds SET status='COMPLETED',finalized_at=created_at,completed_at=created_at WHERE id=$1", [unfinished.id])
+      const rollbackInvite = await createInvite(owner, randomUUID(), group.id, {})
+      const failedDepartureKey = randomUUID(), departureConstraint = `group_leave_test_${randomUUID().replaceAll('-', '')}`
+      await client.query(`ALTER TABLE mutation_requests ADD CONSTRAINT ${departureConstraint} CHECK (request_key <> '${failedDepartureKey}') NOT VALID`)
+      try {
+        await assert.rejects(leaveGroup(owner, failedDepartureKey, group.id), (error: { code: string }) => error.code === '23514')
+        assert.equal((await client.query('SELECT COUNT(*)::int AS count FROM group_members WHERE group_id=$1 AND left_at IS NULL', [group.id])).rows[0].count, 4)
+        assert.equal((await client.query('SELECT revoked_at FROM group_invites WHERE id=$1', [rollbackInvite.id])).rows[0].revoked_at, null)
+      } finally { await client.query(`ALTER TABLE mutation_requests DROP CONSTRAINT ${departureConstraint}`) }
+      for (const [actor, target, requestKey, expected] of [
+        [outsider, group.id, randomUUID(), 'not_found'],
+        [owner, randomUUID(), randomUUID(), 'not_found'],
+        [owner, group.id, 'invalid', 'invalid_request_key'],
+      ] as const) {
+        await assert.rejects(leaveGroup(actor, requestKey, target), (error: { code: string }) => error.code === expected)
+      }
+      const leaveKey = randomUUID()
+      let audience: string[] = []
+      await trace(6, true, () => leaveGroup(participant, leaveKey, group.id, ids => { audience = ids }))
+      assert.ok(audience.includes(owner.userId) && audience.includes(participant.userId))
+      await trace(5, true, () => leaveGroup(participant, leaveKey, group.id))
+      await assert.rejects(leaveGroup(participant, leaveKey, second.id), (error: { code: string }) => error.code === 'idempotency_conflict')
       statements = []
       await assert.rejects(getGroup(participant, group.id), (error: { code: string }) => error.code === 'not_found')
       assert.equal(statements.length, 2)
       assert.deepEqual((await trace(3, null, () => getGroup(owner, group.id))).members.map(member => member.userId), [owner.userId])
-      await trace(12, true, () => leaveGroup(owner, randomUUID(), group.id))
+      const closeKey = randomUUID()
+      await trace(6, true, () => leaveGroup(owner, closeKey, group.id, ids => { audience = ids }))
+      await trace(5, true, () => leaveGroup(owner, closeKey, group.id))
+      assert.notEqual((await client.query('SELECT revoked_at FROM group_invites WHERE id=$1', [rollbackInvite.id])).rows[0].revoked_at, null)
       assert.equal((await trace(2, null, () => listGroups(owner, new URLSearchParams({ q: body.name })))).items.length, 0)
       assert.equal((await client.query('SELECT COUNT(*)::int AS count FROM group_members WHERE group_id=$1 AND left_at IS NULL', [group.id])).rows[0].count, 0)
+      assert.equal((await getRound(participant, unfinished.id, new URLSearchParams())).id, unfinished.id, 'past rounds survive departure')
+      const previousPort = process.env.REALTIME_INTERNAL_PORT, previousSecret = process.env.REALTIME_INTERNAL_SECRET
+      process.env.REALTIME_INTERNAL_PORT = '12345'
+      process.env.REALTIME_INTERNAL_SECRET = 'group-invalidation-test'
+      const publisher = t.mock.method(globalThis, 'fetch', async (_url: unknown, options?: RequestInit) => {
+        assert.deepEqual(JSON.parse(options!.body as string), audience.map(userId => ({ userId, keys: ['groups', `group:${group.id}`] })))
+        return new Response(null, { status: 204 })
+      })
+      try { await trace(0, null, () => publishGroupInvalidation(group.id, audience)) }
+      finally {
+        publisher.mock.restore()
+        if (previousPort === undefined) delete process.env.REALTIME_INTERNAL_PORT
+        else process.env.REALTIME_INTERNAL_PORT = previousPort
+        if (previousSecret === undefined) delete process.env.REALTIME_INTERNAL_SECRET
+        else process.env.REALTIME_INTERNAL_SECRET = previousSecret
+      }
+      const otherRounds = await createGroup(owner, uuidV7(), { name: '본인이 참여하지 않은 회차' })
+      const otherInvite = await createInvite(owner, randomUUID(), otherRounds.id, {})
+      for (const actor of [participant, outsider]) await acceptInvite(actor, randomUUID(), otherInvite.sharePath!.split('/').at(-1)!)
+      const otherRound = await createRound(participant, randomUUID(), otherRounds.id, { name: '다른 참여자 회차', currency: 'KRW', participantIds: [participant.userId, outsider.userId] })
+      const excludedRound = await createRound(participant, randomUUID(), otherRounds.id, { name: '본인이 제외된 회차', currency: 'KRW', participantIds: [owner.userId, participant.userId] })
+      await client.query('UPDATE round_members SET excluded_at=joined_at WHERE round_id=$1 AND user_id=$2', [excludedRound.id, owner.userId])
+      await assert.rejects(leaveGroup(owner, randomUUID(), otherRounds.id), (error: { code: string }) => error.code === 'unfinished_group_rounds')
+      assert.equal((await getRound(participant, otherRound.id, new URLSearchParams())).status, 'RECORDING')
+      await client.query('UPDATE round_members SET excluded_at=joined_at WHERE round_id=$1 AND user_id=$2', [otherRound.id, outsider.userId])
+      await trace(6, true, () => leaveGroup(outsider, randomUUID(), otherRounds.id))
+      for (const round of [otherRound, excludedRound]) await roundCommand(participant, randomUUID(), round.id, 'cancel', { expectedVersion: 1 })
+      await trace(6, true, () => leaveGroup(owner, randomUUID(), otherRounds.id))
     } finally {
       logger.mock.restore()
       if (previous === undefined) delete process.env.DB_QUERY_LOG
