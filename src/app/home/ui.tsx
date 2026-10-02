@@ -293,16 +293,20 @@ function RealtimeProvider({ accountId, reloadAccount, children }: { accountId: s
     let reconnect: ReturnType<typeof setTimeout> | null = null
     let attempts = 0
     let disposed = false
-    const pending = new Set<ResourceKey>()
+    const pending = new Map<ResourceKey, Set<() => void>>()
     const queue = (keys: ResourceKey[]) => {
       if (disposed) return
-      keys.forEach(key => pending.add(key))
+      keys.forEach(key => {
+        const callbacks = pending.get(key) ?? new Set<() => void>()
+        listeners.current.get(key)?.forEach(listener => callbacks.add(listener))
+        pending.set(key, callbacks)
+      })
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => {
         const callbacks = new Set<() => void>()
-        for (const key of pending) {
+        for (const [key, queued] of pending) {
           if (key === 'me') void accountReload.current()
-          listeners.current.get(key)?.forEach(listener => callbacks.add(listener))
+          queued.forEach(listener => { if (listeners.current.get(key)?.has(listener)) callbacks.add(listener) })
         }
         pending.clear()
         callbacks.forEach(listener => listener())
