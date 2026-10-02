@@ -7,7 +7,7 @@ import { readAccessToken, type AccessToken } from '../src/lib/auth.ts'
 import { signInKakao, updateBankAccount as saveBankAccount, withdrawAccount } from '../src/lib/auth-store.ts'
 import { getAccount } from '../src/lib/authorization.ts'
 import { createDatabaseClient } from '../src/lib/db.ts'
-import { acceptInvite, createGroup, createInvite, getGroup, getInvite, leaveGroup, listGroups } from '../src/Domain/Group/Backend/index.ts'
+import { acceptInvite, createGroup, createInvite, getGroup, getGroupMembers, getInvite, leaveGroup, listGroups } from '../src/Domain/Group/Backend/index.ts'
 import { addReceipt, checkExclusion, createRound, deleteExpense, excludeMember, getReceipt, getRound, getSettlement, listRounds, removeReceipt, roundCommand, saveExpense, setSettlementCheck } from '../src/lib/round-store.ts'
 import type { MutationResult } from '../src/lib/domain-types.ts'
 import { CURRENCY_CODES } from '../src/lib/money.ts'
@@ -53,9 +53,9 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       assert.equal((await getInvite(b, token)).isMember, true)
       assert.equal('currency' in (await getInvite(b, token)), false)
       await acceptInvite(b, key(), token)
-      const group = await getGroup(a, g.id)
-      assert.equal(group.members.length, 4)
-      assert.equal(group.members[0].userId, a.userId)
+      const members = await getGroupMembers(a, g.id)
+      assert.equal(members.length, 4)
+      assert.equal(members[0].userId, a.userId)
       const replay = await createInvite(a, inviteKey, g.id, {})
       assert.equal(replay.inviteId, invite.inviteId)
       assert.equal(replay.linkUnavailable, true)
@@ -105,7 +105,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       const listed = (await listGroups(a, new URLSearchParams({ q: '참여 인원 미리보기 검증' }))).items[0]
       assert.equal(listed.memberCount, 6)
       assert.equal(listed.memberPreview.length, 5)
-      assert.deepEqual(listed.memberPreview.map(person => person.userId), (await getGroup(a, group.id)).members.slice(0, 5).map(person => person.userId))
+      assert.deepEqual(listed.memberPreview.map(person => person.userId), (await getGroupMembers(a, group.id)).slice(0, 5).map(person => person.userId))
       await leaveGroup(extras[0], key(), group.id)
       const remaining = (await listGroups(a, new URLSearchParams({ q: '참여 인원 미리보기 검증' }))).items[0]
       assert.equal(remaining.memberCount, 5)
@@ -127,7 +127,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
         WHERE rm.round_id=$1 AND rm.user_id=$2`, [ownerExclusion.id, a.userId])).rows[0]
       assert.notEqual(membership.excluded_at, null)
       assert.equal(membership.left_at, null)
-      assert.equal((await getGroup(b, g.id)).members.some(member => member.userId === a.userId), true)
+      assert.equal((await getGroupMembers(b, g.id)).some(member => member.userId === a.userId), true)
       const next = await createRound(b, key(), g.id, { name: '제외 후 다음 회차', currency: 'KRW', participantIds: [a.userId, b.userId] })
       await command(next.id, 'cancel', b)
       await command(ownerExclusion.id, 'cancel', b)
@@ -244,7 +244,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       const check = await checkExclusion(a, r.id, b.userId)
       assert.equal(check.allowed, true)
       await excludeMember(a, key(), r.id, b.userId, { expectedVersion: (await get(r.id)).version })
-      assert.equal((await getGroup(a, g.id)).members.some(m => m.userId === b.userId), true)
+      assert.equal((await getGroupMembers(a, g.id)).some(m => m.userId === b.userId), true)
       assert.equal((await get(r.id, b)).members.find(m => m.userId === b.userId)?.excludedAt !== null, true)
       await assert.rejects(withdrawAccount(b), code('unfinished_rounds'))
       await command(r.id, 'confirm'); await command(r.id, 'send')
@@ -544,7 +544,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       assert.deepEqual(second.transfers, first.transfers)
       assert.deepEqual(first.transfers.map(row => row.amountMinor), ['9', '9'])
       assert.equal(new Set([...first.expenses, ...second.expenses].map(x => x.id)).size, 3)
-      assert.equal((await getGroup(a, g.id)).members.length, 4)
+      assert.equal((await getGroupMembers(a, g.id)).length, 4)
       await command(many.id, 'cancel')
     })
 

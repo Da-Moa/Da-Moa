@@ -24,7 +24,7 @@ export function resourceKeysForPath(path: string): ResourceKey[] {
   if (parts[0] !== 'api') return []
   if (parts[1] === 'me' && parts.length === 2) return ['me']
   if (parts[1] === 'groups' && parts.length === 2) return ['groups']
-  if (parts[1] === 'groups' && parts[2] && parts.length === 3) return [`group:${parts[2]}`]
+  if (parts[1] === 'groups' && parts[2] && (parts.length === 3 || (parts.length === 4 && parts[3] === 'members'))) return [`group:${parts[2]}`]
   if (parts[1] === 'groups' && parts[2] && parts[3] === 'rounds') return [`group-rounds:${parts[2]}`]
   if (parts[1] === 'rounds' && parts.length === 2) return ['rounds']
   if (parts[1] === 'rounds' && parts[2] && parts[3] === 'settlement') return [`settlement:${parts[2]}`, 'settlements']

@@ -4,7 +4,7 @@ import { readRequestAccessToken } from '../../../../Global/Auth/Backend'
 import { AppError, errorResponse, readJsonBody, sameOrigin } from '../../../../Global/Util/Backend'
 import { captureGroupAudience, publishGroupInvalidation, realtimeEnabled } from '../../../../Global/Websocket/Backend'
 import type { GroupMutationResult } from '../../Shared'
-import { acceptInvite, createGroup, createInvite, getGroup, getInvite, leaveGroup, listGroups, revokeInvite } from '../Service/GroupService'
+import { acceptInvite, createGroup, createInvite, getGroup, getGroupMembers, getInvite, leaveGroup, listGroups, revokeInvite } from '../Service/GroupService'
 
 export function isGroupPath(path: string[]) {
   return path[0] === 'invites' || (path[0] === 'groups' && path[2] !== 'rounds')
@@ -21,6 +21,7 @@ export async function getGroupResponse(request: NextRequest, path: string[]): Pr
     if (path[0] === 'groups' && path.length === 1 && method === 'GET') data = await listGroups(access, request.nextUrl.searchParams)
     else if (path[0] === 'groups' && path.length === 1 && method === 'POST') data = await createGroup(access, key, await readJsonBody(request))
     else if (path[0] === 'groups' && path.length === 2 && method === 'GET') data = await getGroup(access, path[1])
+    else if (path[0] === 'groups' && path.length === 3 && path[2] === 'members' && method === 'GET') data = await getGroupMembers(access, path[1])
     else if (path[0] === 'groups' && path.length === 2 && method === 'DELETE') data = await leaveGroup(access, key, path[1])
     else if (path[0] === 'groups' && path.length === 3 && path[2] === 'invites' && method === 'POST') data = await createInvite(access, key, path[1], await readJsonBody(request))
     else if (path[0] === 'groups' && path.length === 4 && path[2] === 'invites' && method === 'DELETE') data = await revokeInvite(access, key, path[1], path[3])

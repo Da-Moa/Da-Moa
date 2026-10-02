@@ -5,7 +5,7 @@ import test from 'node:test'
 import { readAccessToken } from '../src/lib/auth.ts'
 import { signInKakao } from '../src/lib/auth-store.ts'
 import { createDatabaseClient } from '../src/lib/db.ts'
-import { acceptInvite, createGroup, createInvite, getGroup, getInvite, leaveGroup, listGroups, revokeInvite } from '../src/Domain/Group/Backend/index.ts'
+import { acceptInvite, createGroup, createInvite, getGroup, getGroupMembers, getInvite, leaveGroup, listGroups, revokeInvite } from '../src/Domain/Group/Backend/index.ts'
 import { applyMigrations } from './migrations.mjs'
 import { completeTestOnboarding } from './bank-test-support.ts'
 
@@ -14,7 +14,7 @@ if (!database || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(database)
 process.env.DATABASE_URL = database
 process.env.AUTH_JWT_SECRET ||= 'isolated-group-test-secret-at-least-32-bytes'
 
-test('Group creation and lists use autocommit SQL; other operations preserve transactions, replay and rollback', async t => {
+test('Group creation, lists and details use autocommit SQL; other operations preserve transactions, replay and rollback', async t => {
   const client = createDatabaseClient(database)
   await client.connect()
   try {
@@ -67,9 +67,17 @@ test('Group creation and lists use autocommit SQL; other operations preserve tra
       const list = await trace(3, null, () => listGroups(owner, new URLSearchParams({ q: body.name })))
       assert.equal(list.items.length, 1)
       assert.equal(list.items[0].memberCount, 1)
-      assert.equal((await trace(9, false, () => getGroup(owner, group.id))).members[0].userId, owner.userId)
+      const ownerDetail = await trace(3, null, () => getGroup(owner, group.id))
+      assert.deepEqual(ownerDetail, { id: group.id, name: body.name, creatorId: owner.userId, createdAt: ownerDetail.createdAt, isCreator: true, invites: [] })
+      assert.match(statements[1], /JOIN group_members/)
+      assert.equal((await trace(8, false, () => getGroupMembers(owner, group.id)))[0].userId, owner.userId)
+      statements = []
+      await assert.rejects(getGroup(participant, group.id), (error: { code: string }) => error.code === 'not_found')
+      assert.equal(statements.length, 2)
+      await assert.rejects(getGroupMembers(participant, group.id), (error: { code: string }) => error.code === 'not_found')
       const inviteKey = randomUUID()
       const invite = await trace(10, true, () => createInvite(owner, inviteKey, group.id, {}))
+      assert.deepEqual((await trace(3, null, () => getGroup(owner, group.id))).invites.map(item => item.id), [invite.id])
       const replay = await trace(7, true, () => createInvite(owner, inviteKey, group.id, {}))
       assert.deepEqual(replay, { id: invite.id, inviteId: invite.id, linkUnavailable: true })
       assert.ok(!JSON.stringify(replay).includes(invite.sharePath!))
@@ -100,9 +108,12 @@ test('Group creation and lists use autocommit SQL; other operations preserve tra
         assert.deepEqual((await trace(3, null, () => listGroups(owner, new URLSearchParams({ q })))).items.map(item => item.id), [second.id], 'LIKE metacharacters match literally')
       }
       await leaveGroup(owner, randomUUID(), second.id)
-      const detail = await trace(8, false, () => getGroup(participant, group.id))
-      assert.deepEqual(detail.members.map(member => member.userId), [owner.userId, participant.userId])
+      const detail = await trace(2, null, () => getGroup(participant, group.id))
+      assert.equal(detail.isCreator, false)
+      assert.equal('members' in detail, false)
+      assert.ok(statements.every(sql => !sql.includes('group_invites')))
       assert.deepEqual(detail.invites, [])
+      assert.deepEqual((await trace(8, false, () => getGroupMembers(participant, group.id))).map(member => member.userId), [owner.userId, participant.userId])
       const failedKey = randomUUID()
       statements = []
       await assert.rejects(createInvite(owner, failedKey, group.id, { replaceInviteId: randomUUID() }), (error: { code: string }) => error.code === 'not_found')
@@ -111,7 +122,12 @@ test('Group creation and lists use autocommit SQL; other operations preserve tra
       const replaced = await trace(11, true, () => createInvite(owner, randomUUID(), group.id, { replaceInviteId: invite.id }))
       await assert.rejects(getInvite(participant, token), (error: { code: string }) => error.code === 'not_found')
       await trace(10, true, () => revokeInvite(owner, randomUUID(), group.id, replaced.id))
+      assert.deepEqual((await trace(3, null, () => getGroup(owner, group.id))).invites, [])
       await trace(11, true, () => leaveGroup(participant, randomUUID(), group.id))
+      statements = []
+      await assert.rejects(getGroup(participant, group.id), (error: { code: string }) => error.code === 'not_found')
+      assert.equal(statements.length, 2)
+      await assert.rejects(getGroupMembers(participant, group.id), (error: { code: string }) => error.code === 'not_found')
       await trace(12, true, () => leaveGroup(owner, randomUUID(), group.id))
       assert.equal((await trace(2, null, () => listGroups(owner, new URLSearchParams({ q: body.name })))).items.length, 0)
       assert.equal((await client.query('SELECT COUNT(*)::int AS count FROM group_members WHERE group_id=$1 AND left_at IS NULL', [group.id])).rows[0].count, 0)

@@ -4,7 +4,7 @@ import { requireAccount } from '../../../../Global/Auth/Backend'
 import { badInput, domainMutation, nowSeconds, onlyKeys, pageOf, pagination, textInput, withDatabaseConnection, withReadTransaction, type Database, type Identity } from '../../../../Global/Util/Backend'
 import { getActiveUserProfiles } from '../../../User/Backend'
 import { hasUnfinishedGroupParticipation, hasUnfinishedGroupRounds } from '../../../Settle/Backend'
-import { MAX_GROUP_MEMBERS, type GroupDetail, type GroupListItem, type GroupSummary, type InvitePreview, type GroupMutationResult, type CreateGroupRequestDTO, type CreateInviteRequestDTO } from '../../Shared'
+import { MAX_GROUP_MEMBERS, type GroupDetail, type GroupMember, type GroupListItem, type GroupSummary, type InvitePreview, type GroupMutationResult, type CreateGroupRequestDTO, type CreateInviteRequestDTO } from '../../Shared'
 import type { Page } from '../../../../lib/domain-types'
 import type { GroupRow } from '../DAO/GroupDAO'
 import { creatorOnly, duplicateGroup, memberLimitExceeded, missing, unfinishedGroupRounds, unfinishedRounds } from '../Exception/GroupException'
@@ -51,12 +51,19 @@ export async function listGroups(access: Identity, query: URLSearchParams): Prom
 }
 
 export async function getGroup(access: Identity, groupId: string): Promise<GroupDetail> {
-  return withReadTransaction(async client => {
+  return withDatabaseConnection(async client => {
     const account = await requireAccount(client, access)
     const group = await memberGroup(client, groupId, account.id)
-    const members = (await activeMembers(client, [groupId])).map(member => ({ userId: member.userId, displayName: member.displayName, excludedAt: null }))
     const invites = group.creator_id === account.id ? await repository.findActiveInvites(client, groupId, nowSeconds()) : []
-    return { ...groupDTO(group), isCreator: group.creator_id === account.id, members, invites: invites.map(row => ({ id: row.id, expiresAt: Number(row.expires_at) })) }
+    return { ...groupDTO(group), isCreator: group.creator_id === account.id, invites: invites.map(row => ({ id: row.id, expiresAt: Number(row.expires_at) })) }
+  })
+}
+
+export async function getGroupMembers(access: Identity, groupId: string): Promise<GroupMember[]> {
+  return withReadTransaction(async client => {
+    const account = await requireAccount(client, access)
+    await memberGroup(client, groupId, account.id)
+    return (await activeMembers(client, [groupId])).map(member => ({ userId: member.userId, displayName: member.displayName, excludedAt: null }))
   })
 }
 

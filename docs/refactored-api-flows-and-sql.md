@@ -46,7 +46,8 @@ SQL은 해당 함수의 실제 query() 문자열을 가져와 PostgreSQL 형식�
 |---|---|---|---|---|
 | POST /api/groups | createGroup() | { name } | GroupMutationResult: 모임 id | 가입 완료 회원 |
 | GET /api/groups | listGroups() | q·limit·cursor | Page<GroupListItem> | 본인의 활성 모임 |
-| GET /api/groups/{groupId} | getGroup() | 경로 모임 ID | GroupDetail | 현재 활성 모임 멤버 |
+| GET /api/groups/{groupId} | getGroup() | 경로 모임 ID | GroupDetail: 모임 정보·isCreator·생성자의 유효 초대 | 현재 활성 모임 멤버 |
+| GET /api/groups/{groupId}/members | getGroupMembers() | 경로 모임 ID | GroupMember[] | 현재 활성 모임 멤버 |
 | DELETE /api/groups/{groupId} | leaveGroup() | 경로 모임 ID | GroupMutationResult: 모임 id | 일반 멤버 이탈 / 생성자 닫기 |
 | POST /api/groups/{groupId}/invites | createInvite() | {} 또는 { replaceInviteId } | GroupMutationResult: 초대 id·inviteId·최초 sharePath | 활성 모임 생성자 |
 | DELETE /api/groups/{groupId}/invites/{inviteId} | revokeInvite() | 경로 모임·초대 ID | GroupMutationResult: 초대 id | 활성 모임 생성자 |
@@ -81,7 +82,7 @@ WebSocket 최초 연결은 이미 확인한 AccountContext와 저장된 JWT를 �
 
 실제 Node 서버 통합 검사는 미인증 잘못된 JSON의 401 우선 차단, 변조·만료·토큰 종류 혼동, 공개 Health, Refresh-only 갱신·로그아웃 및 Bearer WebSocket 인증을 검증한다.
 
-### 읽기 R — 모임 목록 제외
+### 읽기 R — 모임 목록·상세 제외
 
 1. HTTP 요청 → Node Proxy → JWT Guard에서 Access JWT 검증 → Route Handler/Controller → Service 입력 검증.
 2. 공용 pg 풀에서 연결 확보.
@@ -166,14 +167,18 @@ GroupsList.useResource()·loadMore() → GET /api/groups(query) → Node Proxy �
 
 ### G3. GET /api/groups/{groupId} — 상세
 
-GroupClient.useResource() → GET /api/groups/{groupId} → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 Group 분배 → GroupController → getGroup() → R 스냅샷 → GroupDetail → 현재 멤버·초대·회차 후보 표시.
+GroupClient.useResource() → GET /api/groups/{groupId} → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 Group 분배 → GroupController → getGroup() → GroupDetail → 모임 정보·생성자 여부·유효 초대 표시.
 
-1. R-START → AUTH → G-ACCESS: 현재 활성 멤버십 확인. 없으면 not_found·ROLLBACK.
-2. G-MEMBERS(모임 ID 하나) → U-PROFILES → 멤버 DTO에 excludedAt=null 부여.
-3. 조회자가 creator_id와 같으면 G-INVITES로 유효 초대 조회; 일반 멤버는 이 SQL을 생략하고 invites=[] 반환.
-4. 모임 DTO·isCreator·멤버·초대 만료 시각을 구성 → TX-COMMIT.
+1. 공용 풀 연결 확보 → AUTH: JWT의 사용자 ID로 현재 회원 상태 조회 1회.
+2. G-ACCESS: groupId로 모임 조회와 본인의 활성 group_members JOIN 권한 검사 1회. 없으면 not_found.
+3. 조회자가 creator_id와 같으면 G-INVITES로 유효 초대 조회 1회; 일반 멤버는 이 SQL을 생략하고 invites=[] 반환.
+4. 모임 DTO·isCreator·초대 만료 시각 구성 → 연결 반환.
 
-생성자 SQL: R-START(3) → AUTH → G-ACCESS → G-MEMBERS → U-PROFILES → G-INVITES → TX-COMMIT = 9회. 일반 멤버는 8회. excludedAt은 회차 제외 상태를 읽은 값이 아니라 Group 멤버 DTO의 null이다.
+명시적 트랜잭션·SET LOCAL 없이 일반 멤버는 2회, 생성자는 3회다. 멤버 목록·프로필·회차는 포함하지 않으며 초대 원문 링크는 기존대로 최초 발급 응답에서만 제공한다.
+
+### G3a. GET /api/groups/{groupId}/members — 활성 멤버
+
+GroupClient의 별도 useResource() → Controller → getGroupMembers() → R-START → AUTH → G-ACCESS → G-MEMBERS → U-PROFILES → TX-COMMIT = 8회. 활성 참여자만 조회할 수 있다. 생성자를 먼저 정렬하고 GroupMember[]의 excludedAt=null을 반환한다. 화면의 멤버 요약·전체 목록·회차 생성 후보는 이 API를 사용하며 group 무효화 키로 재조회한다.
 
 ### G4. DELETE /api/groups/{groupId} — 일반 이탈/생성자 닫기
 
