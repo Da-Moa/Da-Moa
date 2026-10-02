@@ -1,7 +1,7 @@
 import 'server-only'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { requireAccount } from '../../../../Global/Auth/Backend'
-import { badInput, domainMutation, nowSeconds, onlyKeys, pageOf, pagination, textInput, withDatabaseConnection, withReadTransaction, withWriteTransaction, type Database, type Identity } from '../../../../Global/Util/Backend'
+import { badInput, domainMutation, nowSeconds, onlyKeys, pageOf, pagination, textInput, withDatabaseConnection, withWriteTransaction, type Database, type Identity } from '../../../../Global/Util/Backend'
 import { mutationDigest, mutationResult } from '../../../../lib/mutations'
 import { getActiveUserProfiles } from '../../../User/Backend'
 import { MAX_GROUP_MEMBERS, type GroupDetail, type GroupListItem, type GroupSummary, type InvitePreview, type GroupMutationResult, type CreateGroupRequestDTO, type CreateInviteRequestDTO } from '../../Shared'
@@ -139,12 +139,12 @@ export async function revokeInvite(access: Identity, key: string, groupId: strin
 async function validInvite(client: Database, token: string, userId: string) {
   if (!/^[\w-]{43}$/.test(token)) throw missing()
   const row = await repository.findValidInvite(client, createHash('sha256').update(token).digest('hex'), userId, nowSeconds())
-  if (!row || !(await getActiveUserProfiles(client, [row.creator_id])).length) throw missing()
+  if (!row) throw missing()
   return row
 }
 
 export async function getInvite(access: Identity, token: string): Promise<InvitePreview> {
-  return withReadTransaction(async client => {
+  return withDatabaseConnection(async client => {
     const account = await requireAccount(client, access)
     const row = await validInvite(client, token, account.id)
     return { groupId: row.group_id, groupName: row.name, isMember: row.is_member, expiresAt: Number(row.expires_at) }

@@ -209,27 +209,26 @@ GroupClient.revoke() 확인 창 → DELETE → Node Proxy → JWT Guard(Access J
 
 ### G7. GET /api/invites/{token} — 초대 조회
 
-InviteClient.useResource() → GET → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 Group 분배 → GroupController → getInvite() → R 스냅샷 → InvitePreview → 직접 수락 버튼 또는 이미 참여한 모임 링크.
+InviteClient.useResource() → GET → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 Group 분배 → GroupController → getInvite() → 공용 풀 연결 → InvitePreview → 직접 수락 버튼 또는 이미 참여한 모임 링크.
 
-1. R-START → AUTH.
-2. validInvite()가 원문 토큰의 43자 URL-safe 형식 검사. 잘못되면 not_found·ROLLBACK.
-3. G-VALID-INVITE: 토큰 해시·미폐기·유효 기간·생성자의 활성 멤버십·조회자의 현재 참여 여부 조회.
-4. 초대가 있으면 U-PROFILES(생성자 ID 하나)로 생성자의 미탈퇴·가입 완료 확인. 없으면 not_found·ROLLBACK.
-5. groupId·groupName·isMember·expiresAt만 구성 → COMMIT.
+1. AUTH로 조회자의 가입·탈퇴 상태 확인.
+2. validInvite()가 원문 토큰의 43자 URL-safe 형식 검사. 잘못되면 not_found.
+3. G-VALID-INVITE: 토큰 해시 WHERE 조건으로 유효 초대를 조회하며 모임·생성자의 활성 멤버십·미탈퇴/가입 완료 users를 JOIN. 조회자의 활성 멤버십은 LEFT JOIN하여 isMember 확인.
+4. 행이 있으면 groupId·groupName·isMember·expiresAt만 반환, 없으면 not_found. 연결은 성공·실패 모두 반환.
 
-정상 SQL: R-START(1) → AUTH → G-VALID-INVITE → U-PROFILES → COMMIT = 5회. GET은 group_members를 쓰지 않으며 기존 회차 참여를 만들지 않는다.
+정상 SQL: AUTH → G-VALID-INVITE = 2회. 명시적 트랜잭션·락·별도 생성자 조회는 없다. 형식 오류는 AUTH 1회 후 거절한다. GET은 group_members를 쓰지 않으며 기존 회차 참여를 만들지 않는다.
 
 ### G8. POST /api/invites/{token}/accept — 참여 수락
 
 InviteClient.accept() → POST → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 Group 분배 → GroupController → acceptInvite() → GroupMutationResult → 모임 상세 이동.
 
 1. W-START → AUTH → IDEM-READ(operation=invite.accept, payload={ tokenHash }).
-2. validInvite(): 토큰 형식 → G-VALID-INVITE → U-PROFILES로 현재 유효 초대/활성 생성자 검사.
+2. validInvite(): 토큰 형식 → G-VALID-INVITE의 JOIN으로 현재 유효 초대/활성 생성자 검사.
 3. 현재 멤버가 아니면 G-COUNT로 활성 정원 확인. 생성자 포함 10명 이상이면 group_member_limit_exceeded·ROLLBACK. 이미 멤버인 경우 COUNT 생략.
 4. G-JOIN UPSERT: 신규 멤버십 생성; 이탈 행이 있으면 joined_at 갱신·left_at=NULL; 이미 활성인 경우 기존 joined_at 유지.
 5. IDEM-SAVE({ id: groupId }) → COMMIT → 모임 알림 → 프론트 상세 이동.
 
-신규/재참여 SQL: W-START(2) → AUTH → IDEM-READ → G-VALID-INVITE → U-PROFILES → G-COUNT → G-JOIN → IDEM-SAVE → COMMIT = 10회. 이미 멤버는 9회. round_members를 INSERT/UPDATE하지 않는다. 정원 직전 동시 수락·탈퇴와의 경합은 현재 기존 공통 쓰기 락을 사용한다.
+신규/재참여 SQL: W-START(2) → AUTH → IDEM-READ → G-VALID-INVITE → G-COUNT → G-JOIN → IDEM-SAVE → COMMIT = 9회. 이미 멤버는 8회. round_members를 INSERT/UPDATE하지 않는다. 정원 직전 동시 수락·탈퇴와의 경합은 현재 기존 공통 쓰기 락을 사용한다.
 
 ### 성공 재생·실패·실시간의 별도 순서
 
@@ -566,29 +565,26 @@ SELECT
   i.expires_at,
   g.name,
   g.creator_id,
-  EXISTS (
-    SELECT
-      1
-    FROM
-      group_members x
-    WHERE
-      x.group_id = g.id
-      AND x.user_id = $3
-      AND x.left_at IS NULL
-  ) AS is_member
+  viewer.user_id IS NOT NULL AS is_member
 FROM
   group_invites i
   JOIN groups g ON g.id = i.group_id
   JOIN group_members m ON m.group_id = g.id
   AND m.user_id = g.creator_id
   AND m.left_at IS NULL
+  JOIN users u ON u.id = m.user_id
+  AND u.deleted_at IS NULL
+  AND u.onboarding_completed_at IS NOT NULL
+  LEFT JOIN group_members viewer ON viewer.group_id = g.id
+  AND viewer.user_id = $3
+  AND viewer.left_at IS NULL
 WHERE
   i.token_hash = $1
   AND i.revoked_at IS NULL
   AND i.expires_at > $2;
 ```
 
-$1=토큰 SHA-256, $2=현재 초 시각, $3=조회자/수락자 ID. User 공개 조회를 뒤에 실행해 생성자의 회원 상태도 확인한다.
+$1=토큰 SHA-256, $2=현재 초 시각, $3=조회자/수락자 ID. 생성자의 활성 회원 상태와 조회자 참여 여부를 같은 SQL에서 확인한다.
 
 ### G-COUNT — 활성 모임 정원
 
@@ -715,8 +711,8 @@ $1=groupId. 별도 읽기 트랜잭션에 AUTH는 없고, 이미 허가된 커�
 | 상세(생성자/일반 멤버) | 8 / 7 | 3 / 2 |
 | 일반 이탈/생성자 닫기 | 11 / 12 | 6 / 6 |
 | 초대 발급/재발급/폐기 | 10 / 11 / 10 | 3 / 3 / 3 |
-| 초대 조회 | 6 | 5 |
-| 참여 수락(비멤버/이미 멤버) | 11 / 10 | 10 / 9 |
+| 초대 조회 | 6 | 2 |
+| 참여 수락(비멤버/이미 멤버) | 11 / 10 | 9 / 8 |
 | 생성 중복(409) / 초대 발급·폐기 성공 재생 / 나머지 쓰기 성공 재생 | 7(이전 재생) / 7 / 7 | 2 / 2 / 5 |
 
 로컬 앱 SQL 확인:

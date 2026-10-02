@@ -109,9 +109,11 @@ export async function insertInvite(client: Database, id: string, groupId: string
 
 export async function findValidInvite(client: Database, tokenHash: string, userId: string, now: number) {
   return (await client.query<InviteRow>(`SELECT i.id,i.group_id,i.expires_at,g.name,g.creator_id,
-    EXISTS(SELECT 1 FROM group_members x WHERE x.group_id=g.id AND x.user_id=$3 AND x.left_at IS NULL) AS is_member
+    viewer.user_id IS NOT NULL AS is_member
     FROM group_invites i JOIN groups g ON g.id=i.group_id
     JOIN group_members m ON m.group_id=g.id AND m.user_id=g.creator_id AND m.left_at IS NULL
+    JOIN users u ON u.id=m.user_id AND u.deleted_at IS NULL AND u.onboarding_completed_at IS NOT NULL
+    LEFT JOIN group_members viewer ON viewer.group_id=g.id AND viewer.user_id=$3 AND viewer.left_at IS NULL
     WHERE i.token_hash=$1 AND i.revoked_at IS NULL AND i.expires_at>$2`, [tokenHash, now, userId])).rows[0]
 }
 

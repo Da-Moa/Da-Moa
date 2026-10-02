@@ -1,6 +1,6 @@
 import { uuidV7 } from '../src/lib/uuid.ts'
 import assert from 'node:assert/strict'
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import test from 'node:test'
 import { readAccessToken } from '../src/lib/auth.ts'
 import { signInKakao } from '../src/lib/auth-store.ts'
@@ -85,11 +85,36 @@ test('Group autocommit reads, group/invite creation/revocation and atomic replay
       assert.deepEqual(replay, { id: invite.id, inviteId: invite.id, linkUnavailable: true })
       assert.ok(!JSON.stringify(replay).includes(invite.sharePath!))
       const token = invite.sharePath!.split('/').at(-1)!
-      assert.equal((await trace(5, false, () => getInvite(participant, token))).isMember, false)
+      const preview = await trace(2, null, () => getInvite(participant, token))
+      assert.deepEqual(preview, { groupId: group.id, groupName: body.name, isMember: false, expiresAt: preview.expiresAt })
+      assert.match(statements[1], /JOIN users/)
+      assert.match(statements[1], /LEFT JOIN group_members viewer/)
+      assert.equal((await trace(2, null, () => getInvite(owner, token))).isMember, true)
+      for (const [actor, input, expected, count] of [
+        [participant, 'invalid', 'not_found', 1],
+        [participant, randomBytes(32).toString('base64url'), 'not_found', 2],
+        [null, 'invalid', 'unauthorized', 0],
+        [{ ...participant, userId: randomUUID() }, 'invalid', 'unauthorized', 1],
+        [{ ...participant, purpose: 'onboarding' as const }, 'invalid', 'unauthorized', 1],
+      ] as const) {
+        await trace(count, null, () => assert.rejects(getInvite(actor, input), (error: { code: string }) => error.code === expected))
+      }
+      const ownerOnboarding = (await client.query('SELECT onboarding_completed_at FROM users WHERE id=$1', [owner.userId])).rows[0].onboarding_completed_at
+      for (const [change, restore, values] of [
+        ['UPDATE users SET deleted_at=1 WHERE id=$1', 'UPDATE users SET deleted_at=NULL WHERE id=$1', [owner.userId]],
+        ['UPDATE users SET onboarding_completed_at=NULL WHERE id=$1', 'UPDATE users SET onboarding_completed_at=$2 WHERE id=$1', [owner.userId, ownerOnboarding]],
+        ['UPDATE group_members SET left_at=1 WHERE user_id=$1 AND group_id=$2', 'UPDATE group_members SET left_at=NULL WHERE user_id=$1 AND group_id=$2', [owner.userId, group.id]],
+        ['UPDATE group_invites SET created_at=1,expires_at=2 WHERE id=$1', 'UPDATE group_invites SET created_at=$2-604800,expires_at=$2 WHERE id=$1', [invite.id, preview.expiresAt]],
+      ] as const) {
+        await client.query(change, values.slice(0, change.includes('$2') ? 2 : 1))
+        try { await trace(2, null, () => assert.rejects(getInvite(participant, token), (error: { code: string }) => error.code === 'not_found')) }
+        finally { await client.query(restore, [...values]) }
+      }
       const acceptKey = randomUUID()
-      await trace(10, true, () => acceptInvite(participant, acceptKey, token))
+      await trace(9, true, () => acceptInvite(participant, acceptKey, token))
+      assert.equal((await trace(2, null, () => getInvite(participant, token))).isMember, true)
       await trace(5, true, () => acceptInvite(participant, acceptKey, token))
-      await trace(9, true, () => acceptInvite(participant, randomUUID(), token))
+      await trace(8, true, () => acceptInvite(participant, randomUUID(), token))
       for (const [actor, code] of [[participant, 'forbidden'], [outsider, 'not_found']] as const) {
         statements = []
         await assert.rejects(createInvite(actor, randomUUID(), group.id, {}), (error: { code: string }) => error.code === code)
@@ -137,6 +162,9 @@ test('Group autocommit reads, group/invite creation/revocation and atomic replay
       assert.deepEqual(activeDetail.members, [{ userId: owner.userId, displayName: '모임 생성자', excludedAt: null }, { userId: participant.userId, displayName: '카카오 사용자', excludedAt: null }])
       await assert.rejects(getGroup(withdrawn, group.id), (error: { code: string }) => error.code === 'unauthorized')
       await assert.rejects(getGroup(incomplete, group.id), (error: { code: string }) => error.code === 'onboarding_required')
+      for (const [actor, expected] of [[withdrawn, 'unauthorized'], [incomplete, 'onboarding_required']] as const) {
+        await trace(1, null, () => assert.rejects(getInvite(actor, 'invalid'), (error: { code: string }) => error.code === expected))
+      }
       statements = []
       await assert.rejects(leaveGroup(withdrawn, randomUUID(), group.id), (error: { code: string }) => error.code === 'unauthorized')
       assert.ok(statements.every(sql => !sql.includes('pg_advisory_xact_lock')))
@@ -157,7 +185,7 @@ test('Group autocommit reads, group/invite creation/revocation and atomic replay
         assert.deepEqual((await getGroup(owner, group.id)).invites.map(item => item.id), [invite.id], 'failed metadata INSERT rolls back both replacement writes')
       } finally { await client.query(`ALTER TABLE mutation_requests DROP CONSTRAINT ${inviteConstraint}`) }
       const replaced = await trace(3, null, () => createInvite(owner, randomUUID(), group.id, { replaceInviteId: invite.id }))
-      await assert.rejects(getInvite(participant, token), (error: { code: string }) => error.code === 'not_found')
+      await trace(2, null, () => assert.rejects(getInvite(participant, token), (error: { code: string }) => error.code === 'not_found'))
       for (const [actor, target, inviteId, requestKey, expected, count] of [
         [participant, group.id, replaced.id, randomUUID(), 'forbidden', 2],
         [outsider, group.id, replaced.id, randomUUID(), 'not_found', 2],
@@ -224,6 +252,7 @@ test('Group autocommit reads, group/invite creation/revocation and atomic replay
       const leaveKey = randomUUID()
       let audience: string[] = []
       await trace(6, true, () => leaveGroup(participant, leaveKey, group.id, ids => { audience = ids }))
+      assert.equal((await trace(2, null, () => getInvite(participant, rollbackInvite.sharePath!.split('/').at(-1)!))).isMember, false)
       assert.ok(audience.includes(owner.userId) && audience.includes(participant.userId))
       await trace(5, true, () => leaveGroup(participant, leaveKey, group.id))
       await assert.rejects(leaveGroup(participant, leaveKey, second.id), (error: { code: string }) => error.code === 'idempotency_conflict')
