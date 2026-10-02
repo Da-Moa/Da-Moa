@@ -2,6 +2,7 @@ import { uuidV7 } from '../src/lib/uuid.ts'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { once } from 'node:events'
 import { createServer } from 'node:net'
 import { test } from 'node:test'
 import WebSocket from 'ws'
@@ -135,11 +136,23 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     })
     const response = await fetch(`${origin}/api/groups`, { method: 'POST', headers: { origin, authorization: `Bearer ${mine.accessToken}`, 'content-type': 'application/json', 'idempotency-key': uuidV7() }, body: JSON.stringify({ name: `WebSocket ${randomUUID()}` }) })
     assert.equal(response.status, 200)
+    const groupId = (await response.json()).data.id
     const event = await message
     assert.equal(event.type, 'invalidate')
     assert.ok(event.keys.includes('groups'))
     await new Promise(resolve => setTimeout(resolve, 250))
     assert.equal(leaked, false)
+    const inviteMessage = once(mine.socket, 'message', { signal: AbortSignal.timeout(10000) })
+    const inviteResponse = await fetch(`${origin}/api/groups/${groupId}/invites`, { method: 'POST', headers: { origin, authorization: `Bearer ${mine.accessToken}`, 'content-type': 'application/json', 'idempotency-key': randomUUID() }, body: '{}' })
+    assert.equal(inviteResponse.status, 200)
+    const invite = (await inviteResponse.json()).data
+    const [inviteBytes] = await inviteMessage
+    assert.deepEqual(JSON.parse(inviteBytes.toString()), { type: 'invalidate', keys: ['groups', `group:${groupId}`] })
+    const detailResponse = await fetch(`${origin}/api/groups/${groupId}`, { headers: { authorization: `Bearer ${mine.accessToken}` } })
+    assert.equal(detailResponse.status, 200)
+    assert.deepEqual((await detailResponse.json()).data.invites.map(item => item.id), [invite.id], 'invite list reload sees the saved invitation after invalidation')
+    await new Promise(resolve => setTimeout(resolve, 250))
+    assert.equal(leaked, false, 'invite invalidation is sent only to the creator')
     assert.doesNotMatch(output, /GET \/api\/me /, 'WebSocket authentication must not issue internal HTTP me requests')
     const refreshCookie = mine.cookie.split('; ').find(value => value.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`))
     const refreshed = await fetch(`${origin}/api/auth/refresh`, { method: 'POST', headers: { origin, cookie: refreshCookie } })

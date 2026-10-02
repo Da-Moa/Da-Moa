@@ -88,19 +88,30 @@ export async function leaveGroup(access: Identity, key: string, groupId: string,
   return result
 }
 
-export async function createInvite(access: Identity, key: string, groupId: string, body: CreateInviteRequestDTO | Record<string, unknown>): Promise<GroupMutationResult> {
+export async function createInvite(access: Identity, key: string, groupId: string, body: CreateInviteRequestDTO | Record<string, unknown>, captureAudience?: (userIds: string[]) => void): Promise<GroupMutationResult> {
   onlyKeys(body, ['replaceInviteId'])
   if (body.replaceInviteId !== undefined) textInput(body.replaceInviteId, 128)
-  let sharePath: string | undefined
-  const result = await domainMutation(access, key, 'invite.create', { groupId, ...body }, async (client, userId) => {
-    await memberGroup(client, groupId, userId, true)
+  return withDatabaseConnection(async client => {
+    const account = await requireAccount(client, access)
+    const digest = mutationDigest(key, { groupId, ...body })
+    const group = await repository.findInviteCreation(client, groupId, account.id, key)
+    const replay = mutationResult<GroupMutationResult>(group, digest)
+    captureAudience?.([account.id])
+    if (replay) return replay
+    if (!group.user_id) throw missing()
+    if (group.creator_id !== account.id) throw creatorOnly()
     const id = randomUUID(), token = randomBytes(32).toString('base64url'), now = nowSeconds()
-    if (body.replaceInviteId && !await repository.revokeInvite(client, groupId, String(body.replaceInviteId), now)) throw missing()
-    await repository.insertInvite(client, id, groupId, userId, createHash('sha256').update(token).digest('hex'), now, now + 7 * 86400)
-    sharePath = `/invites/${token}`
-    return { id, inviteId: id, linkUnavailable: true }
+    try {
+      if (!await repository.insertInvite(client, id, groupId, account.id, createHash('sha256').update(token).digest('hex'), now, now + 7 * 86400, key, digest, body.replaceInviteId ? String(body.replaceInviteId) : null)) throw missing()
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === '23505' && 'constraint' in error && error.constraint === 'mutation_requests_pkey') {
+        const concurrent = mutationResult<GroupMutationResult>(await repository.findInviteCreation(client, groupId, account.id, key), digest)
+        if (concurrent) return concurrent
+      }
+      throw error
+    }
+    return { id, inviteId: id, sharePath: `/invites/${token}` }
   })
-  return sharePath ? { id: result.id, inviteId: result.inviteId, sharePath } : result
 }
 
 export async function revokeInvite(access: Identity, key: string, groupId: string, inviteId: string): Promise<GroupMutationResult> {

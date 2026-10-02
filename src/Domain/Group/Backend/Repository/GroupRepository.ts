@@ -1,6 +1,6 @@
 import 'server-only'
 import type { Database } from '../../../../Global/Util/Backend'
-import type { GroupRow, GroupListRow, InviteRow, InviteSummaryRow, GroupMemberRow, GroupDepartureRow } from '../DAO/GroupDAO'
+import type { GroupRow, GroupListRow, InviteRow, InviteSummaryRow, InviteCreationRow, GroupMemberRow, GroupDepartureRow } from '../DAO/GroupDAO'
 
 type Cursor = { createdAt: string; id: string } | null
 
@@ -76,8 +76,30 @@ export async function revokeInvite(client: Database, groupId: string, inviteId: 
   return (await client.query('UPDATE group_invites SET revoked_at=COALESCE(revoked_at,$3) WHERE id=$1 AND group_id=$2', [inviteId, groupId, now])).rowCount
 }
 
-export async function insertInvite(client: Database, id: string, groupId: string, userId: string, tokenHash: string, now: number, expiresAt: number) {
-  await client.query('INSERT INTO group_invites(id,group_id,created_by,token_hash,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6)', [id, groupId, userId, tokenHash, now, expiresAt])
+export async function findInviteCreation(client: Database, groupId: string, userId: string, key: string) {
+  return (await client.query<InviteCreationRow>(`SELECT g.creator_id,m.user_id,previous.request_digest,previous.response_metadata
+    FROM (SELECT $1::text AS id) requested
+    LEFT JOIN groups g ON g.id=requested.id
+    LEFT JOIN group_members m ON m.group_id=g.id AND m.user_id=$2 AND m.left_at IS NULL
+    LEFT JOIN mutation_requests previous ON previous.actor_id=$2 AND previous.operation='invite.create' AND previous.request_key=$3`, [groupId, userId, key])).rows[0]
+}
+
+export async function insertInvite(client: Database, id: string, groupId: string, userId: string, tokenHash: string, now: number, expiresAt: number, key: string, digest: string, replaceInviteId: string | null) {
+  return (await client.query(`WITH created AS (
+    INSERT INTO group_invites(id,group_id,created_by,token_hash,created_at,expires_at)
+    SELECT $1,$2,$3,$4,$5,$6 FROM groups g
+    JOIN group_members m ON m.group_id=g.id AND m.user_id=$3 AND m.left_at IS NULL
+    JOIN users u ON u.id=m.user_id AND u.deleted_at IS NULL AND u.onboarding_completed_at IS NOT NULL
+    WHERE g.id=$2 AND g.creator_id=$3
+      AND ($9::text IS NULL OR EXISTS(SELECT 1 FROM group_invites WHERE id=$9 AND group_id=$2))
+    RETURNING id
+  ), revoked AS (
+    UPDATE group_invites SET revoked_at=COALESCE(revoked_at,$5)
+    WHERE id=$9 AND group_id=$2 AND EXISTS(SELECT 1 FROM created)
+    RETURNING id
+  ) INSERT INTO mutation_requests(actor_id,operation,request_key,request_digest,resource_id,response_metadata,created_at)
+    SELECT $3,'invite.create',$7,$8,id,jsonb_build_object('id',id,'inviteId',id,'linkUnavailable',true),$5
+    FROM created`, [id, groupId, userId, tokenHash, now, expiresAt, key, digest, replaceInviteId])).rowCount
 }
 
 export async function findValidInvite(client: Database, tokenHash: string, userId: string, now: number) {

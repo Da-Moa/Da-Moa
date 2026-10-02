@@ -16,7 +16,7 @@ if (!database || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(database)
 process.env.DATABASE_URL = database
 process.env.AUTH_JWT_SECRET ||= 'isolated-group-test-secret-at-least-32-bytes'
 
-test('Group autocommit reads and creation; departure uses 2/3 business queries with atomic writes, replay and rollback', async t => {
+test('Group autocommit reads, group/invite creation and atomic replay/replacement; departure uses 2/3 business queries', async t => {
   const client = createDatabaseClient(database)
   await client.connect()
   try {
@@ -35,7 +35,7 @@ test('Group autocommit reads and creation; departure uses 2/3 business queries w
       const result = await work()
       assert.equal(statements.length, expected, statements.join('\n'))
       if (write === null) {
-        assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b/.test(sql) && !sql.includes('pg_advisory_xact_lock')))
+        assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b/.test(sql) && !/pg_advisory_xact_lock|FOR UPDATE|FOR SHARE/.test(sql)))
       } else {
         assert.equal(statements[0], write ? 'BEGIN' : 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
         assert.equal(statements.at(-1), 'COMMIT')
@@ -77,9 +77,11 @@ test('Group autocommit reads and creation; departure uses 2/3 business queries w
       await assert.rejects(getGroup(participant, group.id), (error: { code: string }) => error.code === 'not_found')
       assert.equal(statements.length, 2)
       const inviteKey = randomUUID()
-      const invite = await trace(8, true, () => createInvite(owner, inviteKey, group.id, {}))
+      let inviteAudience: string[] = []
+      const invite = await trace(3, null, () => createInvite(owner, inviteKey, group.id, {}, userIds => { inviteAudience = userIds }))
+      assert.deepEqual(inviteAudience, [owner.userId], 'capture the only invite-list viewer without another audience query')
       assert.deepEqual((await trace(3, null, () => getGroup(owner, group.id))).invites.map(item => item.id), [invite.id])
-      const replay = await trace(5, true, () => createInvite(owner, inviteKey, group.id, {}))
+      const replay = await trace(2, null, () => createInvite(owner, inviteKey, group.id, {}))
       assert.deepEqual(replay, { id: invite.id, inviteId: invite.id, linkUnavailable: true })
       assert.ok(!JSON.stringify(replay).includes(invite.sharePath!))
       const token = invite.sharePath!.split('/').at(-1)!
@@ -88,6 +90,18 @@ test('Group autocommit reads and creation; departure uses 2/3 business queries w
       await trace(10, true, () => acceptInvite(participant, acceptKey, token))
       await trace(5, true, () => acceptInvite(participant, acceptKey, token))
       await trace(9, true, () => acceptInvite(participant, randomUUID(), token))
+      for (const [actor, code] of [[participant, 'forbidden'], [outsider, 'not_found']] as const) {
+        statements = []
+        await assert.rejects(createInvite(actor, randomUUID(), group.id, {}), (error: { code: string }) => error.code === code)
+        assert.equal(statements.length, 2)
+        assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b/.test(sql) && !sql.includes('pg_advisory_xact_lock')))
+      }
+      await assert.rejects(createInvite(owner, inviteKey, group.id, { replaceInviteId: invite.id }), (error: { code: string }) => error.code === 'idempotency_conflict')
+      const concurrentInviteKey = randomUUID()
+      const concurrentInvites = await Promise.all(Array.from({ length: 5 }, () => createInvite(owner, concurrentInviteKey, group.id, {})))
+      assert.equal(new Set(concurrentInvites.map(result => result.id)).size, 1)
+      assert.equal(concurrentInvites.filter(result => result.sharePath).length, 1)
+      await revokeInvite(owner, randomUUID(), group.id, concurrentInvites[0].id)
       const second = await createGroup(owner, uuidV7(), { name: `${body.name} %_\\` })
       const secondInvite = await createInvite(owner, randomUUID(), second.id, {})
       await acceptInvite(participant, randomUUID(), secondInvite.sharePath!.split('/').at(-1)!)
@@ -132,9 +146,17 @@ test('Group autocommit reads and creation; departure uses 2/3 business queries w
       const failedKey = randomUUID()
       statements = []
       await assert.rejects(createInvite(owner, failedKey, group.id, { replaceInviteId: randomUUID() }), (error: { code: string }) => error.code === 'not_found')
-      assert.equal(statements.at(-1), 'ROLLBACK')
+      assert.equal(statements.length, 3)
+      assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b/.test(sql) && !sql.includes('pg_advisory_xact_lock')))
       assert.equal((await client.query('SELECT 1 FROM mutation_requests WHERE request_key=$1', [failedKey])).rows.length, 0)
-      const replaced = await trace(9, true, () => createInvite(owner, randomUUID(), group.id, { replaceInviteId: invite.id }))
+      const failedReplacementKey = randomUUID(), inviteConstraint = `invite_create_test_${randomUUID().replaceAll('-', '')}`
+      await client.query(`ALTER TABLE mutation_requests ADD CONSTRAINT ${inviteConstraint} CHECK (request_key <> '${failedReplacementKey}') NOT VALID`)
+      try {
+        await assert.rejects(createInvite(owner, failedReplacementKey, group.id, { replaceInviteId: invite.id }), (error: { code: string }) => error.code === '23514')
+        assert.equal((await client.query('SELECT revoked_at FROM group_invites WHERE id=$1', [invite.id])).rows[0].revoked_at, null)
+        assert.deepEqual((await getGroup(owner, group.id)).invites.map(item => item.id), [invite.id], 'failed metadata INSERT rolls back both replacement writes')
+      } finally { await client.query(`ALTER TABLE mutation_requests DROP CONSTRAINT ${inviteConstraint}`) }
+      const replaced = await trace(3, null, () => createInvite(owner, randomUUID(), group.id, { replaceInviteId: invite.id }))
       await assert.rejects(getInvite(participant, token), (error: { code: string }) => error.code === 'not_found')
       await trace(8, true, () => revokeInvite(owner, randomUUID(), group.id, replaced.id))
       assert.deepEqual((await trace(3, null, () => getGroup(owner, group.id))).invites, [])
