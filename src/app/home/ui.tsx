@@ -27,13 +27,13 @@ export function useResource<T>(path: string | null) {
   const [error, setError] = useState<Error | null>(null)
   const [loading, setLoading] = useState(Boolean(path))
   const sequence = useRef(0)
-  const reload = useCallback(async () => {
+  const reload = useCallback(async (fresh = true) => {
     if (!path) return null
     const request = ++sequence.current
     setLoading(true)
     setError(null)
     try {
-      const value = await apiRequest<T>(path)
+      const value = await apiRequest<T>(path, { fresh })
       if (request === sequence.current) setData(value)
       return value
     } catch (cause) {
@@ -44,7 +44,7 @@ export function useResource<T>(path: string | null) {
       return null
     } finally { if (request === sequence.current) setLoading(false) }
   }, [path])
-  useEffect(() => { setData(null); void reload(); return () => { sequence.current++ } }, [reload])
+  useEffect(() => { setData(null); void reload(false); return () => { sequence.current++ } }, [reload])
   useEffect(() => {
     if (!path || !subscribe) return
     const listener = () => { void reload() }
@@ -299,11 +299,13 @@ function RealtimeProvider({ accountId, reloadAccount, children }: { accountId: s
       keys.forEach(key => pending.add(key))
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => {
+        const callbacks = new Set<() => void>()
         for (const key of pending) {
           if (key === 'me') void accountReload.current()
-          listeners.current.get(key)?.forEach(listener => listener())
+          listeners.current.get(key)?.forEach(listener => callbacks.add(listener))
         }
         pending.clear()
+        callbacks.forEach(listener => listener())
       }, 120)
     }
     const retry = (event?: CloseEvent) => {
@@ -435,11 +437,17 @@ export function AppShell({ children }: { children: ReactNode }) {
   const topbarContent = pathname === '/home' ? <Link className="brand" href="/home" aria-label="다모아 홈"><img alt="다모아" height="38" src="/logo/da-moa-trans.png" width="46" /></Link> : tabTitle ? <h1 className="topbar-title">{tabTitle}</h1> : pathname.startsWith('/invites/') ? <span className="topbar-title">모임 초대</span> : null
   const me = useResource<Account>('/api/me')
   const previousPath = useRef(pathname)
+  const [checkedPath, setCheckedPath] = useState(pathname)
+  const verifyPage = useCallback(async () => {
+    const account = await me.reload()
+    if (account && previousPath.current === pathname) setCheckedPath(pathname)
+    return account
+  }, [pathname, me.reload])
   useEffect(() => {
     if (previousPath.current === pathname) return
     previousPath.current = pathname
-    void me.reload()
-  }, [pathname, me.reload])
+    void verifyPage()
+  }, [pathname, verifyPage])
   const account = me.data
   useEffect(() => {
     if (account && (account.purpose === 'onboarding' || !account.onboardingCompletedAt || account.deletedAt)) window.location.replace(`/onboarding?returnTo=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`)
@@ -453,7 +461,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   ]
   return <RealtimeProvider accountId={account.id} reloadAccount={me.reload}><AccountContext.Provider value={{ account, reloadAccount: me.reload }}><main className="app-shell">
     <header className="topbar">{topbarContent}</header>
-    {children}
+    {checkedPath === pathname ? children : <><Loading text="로그인 상태를 확인하고 있어요…" /><ErrorNotice error={me.error} retry={() => void verifyPage()} /></>}
     <nav aria-label="주 메뉴" className="bottom-nav">{links.map(({ href, label, icon: Icon, active }) => <Link key={href} href={href} aria-current={active ? 'page' : undefined}><Icon size={22} /><span>{label}</span></Link>)}</nav>
   </main></AccountContext.Provider></RealtimeProvider>
 }

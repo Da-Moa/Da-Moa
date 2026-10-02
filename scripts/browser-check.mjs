@@ -80,6 +80,7 @@ async function navigate(path, text) { await cdp('Page.navigate', { url: new URL(
 async function assertPageReads(start, groups = false) {
   await new Promise(resolve => setTimeout(resolve, 700))
   const reads = apiReads.slice(start)
+  assert.equal(reads[0], '/api/me', 'verify account before fetching page resources')
   assert.equal(reads.filter(path => path === '/api/me').length, 1, `one me read per navigation: ${reads}`)
   if (groups) assert.equal(reads.filter(path => new URL(path, origin).pathname === '/api/groups').length, 1, `one groups read: ${reads}`)
   for (const path of new Set(reads)) assert.equal(reads.filter(read => read === path).length, 1, `one initial resource read: ${path}`)

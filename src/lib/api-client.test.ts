@@ -234,10 +234,12 @@ test('overlapping GETs share a request but completed reads and different tokens 
   assert.equal(calls, 2)
   await apiRequest('/api/groups')
   assert.equal(calls, 3)
+  await Promise.all([apiRequest('/api/groups'), apiRequest('/api/groups', { fresh: true })])
+  assert.equal(calls, 5, 'invalidation must not reuse a read started before a write')
   const oldAccount = apiRequest('/api/me')
   window.localStorage.setItem('da_moa_access', 'other-account-token')
   await Promise.all([oldAccount, apiRequest('/api/me')])
-  assert.equal(calls, 5)
+  assert.equal(calls, 7)
 })
 
 test('failed GETs are not cached and callers with AbortSignal remain independent', async () => {

@@ -2,6 +2,8 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { createServer } from 'node:http'
 import next from 'next'
 import { WebSocketServer } from 'ws'
+import { readAccessToken } from './src/lib/auth.ts'
+import { getDatabasePool } from './src/lib/db-client.mjs'
 import { collectDatabaseMetrics, httpMetrics, trackHttpResponse } from './src/lib/http-metrics.mjs'
 
 const portArg = process.argv.findIndex(value => value === '--port' || value === '-p')
@@ -47,15 +49,17 @@ const handle = app.getRequestHandler()
 const websocket = new WebSocketServer({ noServer: true, clientTracking: false })
 
 async function authenticatedUser(token) {
-  if (!token) return { status: 401 }
-  const response = await fetch(`http://127.0.0.1:${port}/api/me`, {
-    headers: { authorization: `Bearer ${token}` }, redirect: 'manual', signal: AbortSignal.timeout(10000),
+  const access = readAccessToken(token ?? undefined)
+  if (!access) return { status: 401 }
+  if ((access.purpose ?? 'app') !== 'app') return { status: 403 }
+  const database = process.env.DATABASE_URL || process.env.POSTGRES_URL
+  if (!database) throw new Error('DATABASE_URL is required')
+  const { rows: [account] } = await getDatabasePool(database).query({
+    text: 'SELECT id, deleted_at, onboarding_completed_at FROM users WHERE id = $1',
+    values: [access.userId], query_timeout: 10000,
   })
-  if (response.status === 401 || response.status === 403) return { status: response.status }
-  if (!response.ok) throw new Error(`Realtime authentication failed (${response.status})`)
-  const account = (await response.json()).data
-  return account?.purpose === 'app' && account.onboardingCompletedAt && !account.deletedAt
-    ? { status: 200, id: account.id } : { status: 403 }
+  if (!account || account.deleted_at !== null) return { status: 401 }
+  return account.onboarding_completed_at !== null ? { status: 200, id: account.id } : { status: 403 }
 }
 
 server.on('upgrade', (request, socket, head) => {

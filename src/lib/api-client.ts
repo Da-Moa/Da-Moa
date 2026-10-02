@@ -60,11 +60,11 @@ async function fingerprint(path: string, method: string, body: unknown): Promise
   return JSON.stringify([path, method, entries])
 }
 
-type RequestOptions = { method?: string; body?: unknown; signal?: AbortSignal; response?: 'blob' }
+type RequestOptions = { method?: string; body?: unknown; signal?: AbortSignal; response?: 'blob'; fresh?: boolean }
 const readRequests = new Map<string, Promise<unknown>>()
 
 export function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  if ((options.method ?? 'GET') !== 'GET' || options.signal) return request<T>(path, options)
+  if ((options.method ?? 'GET') !== 'GET' || options.signal || options.fresh) return request<T>(path, options)
   const key = JSON.stringify([path, options.response, getAccessToken()])
   let pending = readRequests.get(key)
   if (!pending) {

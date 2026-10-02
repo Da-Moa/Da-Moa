@@ -35,8 +35,8 @@ test('authenticated WebSocket receives only its own committed invalidations', as
   const app = spawn(process.execPath, ['server.mjs', '--port', String(port)], {
     cwd: process.cwd(), env: { ...process.env, NODE_ENV: 'development', HOST: '127.0.0.1', DATABASE_URL: database, AUTH_JWT_SECRET: secret },
   })
+  let output = ''
   const ready = new Promise((resolve, reject) => {
-    let output = ''
     const timeout = setTimeout(() => reject(new Error(`Server startup timed out: ${output}`)), 30000)
     app.stdout.on('data', bytes => { output += bytes; if (output.includes('Ready on port')) { clearTimeout(timeout); resolve() } })
     app.stderr.on('data', bytes => { output += bytes })
@@ -79,6 +79,34 @@ test('authenticated WebSocket receives only its own committed invalidations', as
       await new Promise((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject) })
       return { socket, cookie, accessToken }
     }
+    async function rejectSocket(token) {
+      const socket = new WebSocket(`ws://127.0.0.1:${port}/realtime`, ['da-moa', token], { headers: { Origin: origin } })
+      connections.push(socket)
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => { socket.terminate(); reject(new Error('Rejected connection timed out')) }, 5000)
+        socket.once('open', () => { clearTimeout(timeout); reject(new Error('Invalid authentication was accepted')) })
+        socket.once('error', () => { clearTimeout(timeout); resolve() })
+      })
+    }
+    const memberId = TEST_ACCOUNTS[1].id
+    for (const token of [
+      'invalid', createAccessToken(memberId, 'session', secret, now - 10, 1),
+      createAccessToken(memberId, 'session', 'wrong-secret-at-least-32-bytes-0000'),
+      createRefreshToken(memberId, 'session', secret),
+      createAccessToken(memberId, 'session', secret, now, 600, 'onboarding'),
+      createAccessToken(randomUUID(), 'session', secret),
+    ]) await rejectSocket(token)
+    const stateDb = createDatabaseClient(database)
+    await stateDb.connect()
+    try {
+      await stateDb.query('UPDATE users SET onboarding_completed_at=NULL WHERE id=$1', [memberId])
+      await rejectSocket(createAccessToken(memberId, 'session', secret))
+      await stateDb.query('UPDATE users SET onboarding_completed_at=1, deleted_at=1 WHERE id=$1', [memberId])
+      await rejectSocket(createAccessToken(memberId, 'session', secret))
+    } finally {
+      await stateDb.query('UPDATE users SET onboarding_completed_at=1, deleted_at=NULL WHERE id=$1', [memberId])
+      await stateDb.end()
+    }
     const mine = await connect('member-a')
     const other = await connect('member-b')
     const authenticatedInvalid = await fetch(`${origin}/api/groups`, { method: 'POST', headers: { origin, authorization: `Bearer ${mine.accessToken}` }, body: '{invalid json' })
@@ -112,6 +140,7 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     assert.ok(event.keys.includes('groups'))
     await new Promise(resolve => setTimeout(resolve, 250))
     assert.equal(leaked, false)
+    assert.doesNotMatch(output, /GET \/api\/me /, 'WebSocket authentication must not issue internal HTTP me requests')
     const refreshCookie = mine.cookie.split('; ').find(value => value.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`))
     const refreshed = await fetch(`${origin}/api/auth/refresh`, { method: 'POST', headers: { origin, cookie: refreshCookie } })
     assert.equal(refreshed.status, 200, 'Refresh JWT works without an Access JWT')
