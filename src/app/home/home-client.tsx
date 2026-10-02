@@ -1,86 +1,12 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
-import { ChevronRight, CircleUserRound, History, Plus, Search, Users } from 'lucide-react'
-import { apiRequest } from '../../lib/api-client'
-import { formatMoney } from '../../lib/money'
-import type { GroupListItem, MutationResult, Page, RoundSummary } from '../../lib/domain-types'
+import { ChevronRight, CircleUserRound, History, Search, Users } from 'lucide-react'
 import type { HomeTab } from './authenticated-home'
-import { ErrorNotice, Loading, ParticipantAvatar, StatusBadge, useAccount, useAction, useResource } from './ui'
-
-export function RoundList({ endpoint, empty = '아직 정산 회차가 없어요.', onMore }: { endpoint: string; empty?: string; onMore?: () => void }) {
-  const resource = useResource<Page<RoundSummary>>(endpoint)
-  const more = useAction()
-  async function loadMore() {
-    if (!resource.data?.nextCursor) return
-    const url = new URL(endpoint, window.location.origin)
-    url.searchParams.set('cursor', resource.data.nextCursor)
-    const page = await more.run(() => apiRequest<Page<RoundSummary>>(`${url.pathname}${url.search}`))
-    if (page) resource.setData(current => current ? { items: [...current.items, ...page.items.filter(item => !current.items.some(existing => existing.id === item.id))], nextCursor: page.nextCursor } : page)
-  }
-  const cards = resource.data?.items.map(round => <Link className="domain-card round-link" key={round.id} href={`/home/rounds/${round.id}`}>
-    <div className="row-between"><span className="eyebrow">{round.groupName}</span><StatusBadge status={round.status} /></div>
-    <h2>{round.name}</h2><p className="help-text">{round.memberCount}명 · {new Date(round.createdAt * 1000).toLocaleDateString('ko-KR')} · {round.currency}</p>
-    <div className="row-between"><span>{round.balanceMinor === null ? '최종 금액 대기' : BigInt(round.balanceMinor) > 0n ? '내가 보낼 금액' : BigInt(round.balanceMinor) < 0n ? '내가 받을 금액' : '송금할 금액 없음'}</span>
-      <strong className="money">{round.balanceMinor === null ? formatMoney(round.totalMinor, round.currency) + ' 지출' : formatMoney(round.balanceMinor.replace('-', ''), round.currency)}</strong>
-    </div>
-  </Link>)
-  return <div aria-label={onMore ? '내가 참여한 회차 요약' : undefined} className="stack">
-    <ErrorNotice error={resource.error} retry={() => void resource.reload()} />
-    {resource.loading && !resource.data && <Loading />}
-    {resource.data?.items.length === 0 && <div className="empty-card"><p>{empty}</p><Link href="/home/groups">모임에서 회차 시작하기</Link></div>}
-    {cards}
-    {!onMore && <ErrorNotice error={more.error} retry={() => void loadMore()} />}
-    {resource.data?.nextCursor && <button aria-controls={onMore ? 'group-rounds-dialog' : undefined} aria-haspopup={onMore ? 'dialog' : undefined} aria-label={onMore ? '참여 회차 전체 보기' : '회차 더보기'} className="secondary-button" disabled={!onMore && more.busy} onClick={onMore ?? (() => void loadMore())} type="button">{!onMore && more.busy ? '불러오는 중…' : '더보기'}</button>}
-  </div>
-}
-
-function GroupsList() {
-  const router = useRouter()
-  const [search, setSearch] = useState('')
-  const query = new URLSearchParams()
-  if (search.trim()) query.set('q', search.trim())
-  const endpoint = `/api/groups${query.size ? `?${query}` : ''}`
-  const currentEndpoint = useRef(endpoint)
-  currentEndpoint.current = endpoint
-  const groups = useResource<Page<GroupListItem>>(endpoint)
-  const action = useAction()
-  const more = useAction()
-  async function create(form: HTMLFormElement) {
-    const values = new FormData(form)
-    const result = await action.run(() => apiRequest<MutationResult>('/api/groups', { method: 'POST', body: { name: String(values.get('name') ?? '') } }))
-    if (result) router.push(`/home/groups/${result.id}`)
-  }
-  async function loadMore() {
-    if (!groups.data?.nextCursor) return
-    const url = new URL(endpoint, window.location.origin)
-    url.searchParams.set('cursor', groups.data.nextCursor)
-    const page = await more.run(() => apiRequest<Page<GroupListItem>>(`${url.pathname}${url.search}`))
-    if (page && currentEndpoint.current === endpoint) groups.setData(current => current ? { items: [...current.items, ...page.items.filter(item => !current.items.some(existing => existing.id === item.id))], nextCursor: page.nextCursor } : page)
-  }
-  return <div className="stack">
-    <form className="domain-card stack" onSubmit={event => { event.preventDefault(); void create(event.currentTarget) }}>
-      <h2>새 모임 만들기</h2>
-      <label className="field line-field"><span>모임 이름</span><input autoComplete="off" maxLength={100} name="name" placeholder=" " required /></label>
-      <ErrorNotice error={action.error} />
-      <button className="primary-button" disabled={action.busy} type="submit"><Plus size={18} />{action.busy ? '만드는 중…' : '모임 만들기'}</button>
-    </form>
-    <hr className="group-section-divider" />
-    <div className="round-search-bar"><Search aria-hidden="true" size={21} /><input aria-label="모임 검색어" autoComplete="off" maxLength={100} onChange={event => setSearch(event.target.value)} placeholder="모임명 검색" type="search" value={search} /></div>
-    <ErrorNotice error={groups.error} retry={() => void groups.reload()} />
-    {groups.loading && !groups.data && <Loading />}
-    {groups.data?.items.length === 0 && <p className="empty-card">{search.trim() ? '검색 결과가 없어요.' : '모임을 만들거나 초대 링크를 받아 참여해 주세요.'}</p>}
-    {groups.data?.items.map(group => <Link className="domain-card group-link" key={group.id} href={`/home/groups/${group.id}`}>
-      <span aria-hidden="true" className="group-avatar-stack">{group.memberPreview.slice(0, 3).map(member => <ParticipantAvatar key={member.userId} profileImageUrl={member.profileImageUrl} />)}</span>
-      <div><h2>{group.name}</h2><p className="help-text">{group.memberPreview.slice(0, 3).map(member => member.displayName).join(', ')}{group.memberCount > 3 ? ` 외 ${group.memberCount - 3}명` : ''}</p></div>
-      <ChevronRight size={20} />
-    </Link>)}
-    <ErrorNotice error={more.error} retry={() => void loadMore()} />
-    {groups.data?.nextCursor && <button className="secondary-button" disabled={more.busy} type="button" onClick={() => void loadMore()}>모임 더 보기</button>}
-  </div>
-}
+import { useAccount } from './ui'
+import { GroupsList } from '../../Domain/Group/Frontend'
+import { RoundList } from '../../Domain/Settle/Frontend'
 
 export default function HomeClient({ tab }: { tab: HomeTab }) {
   const { account } = useAccount()

@@ -7,7 +7,7 @@ import { currentTimestamp, readAccessToken, type AccessToken } from '../src/lib/
 import { signInKakao, withdrawAccount } from '../src/lib/auth-store.ts'
 import { createDatabaseClient } from '../src/lib/db.ts'
 import { AppError } from '../src/lib/errors.ts'
-import { acceptInvite, createGroup, createInvite, leaveGroup } from '../src/lib/group-store.ts'
+import { acceptInvite, createGroup, createInvite, leaveGroup } from '../src/Domain/Group/Backend/index.ts'
 import { addReceipt, createRound, getRound, getSettlement, roundCommand, saveExpense, setSettlementCheck } from '../src/lib/round-store.ts'
 import { applyMigrations } from './migrations.mjs'
 import { completeTestOnboarding as completeOnboarding } from './bank-test-support.ts'

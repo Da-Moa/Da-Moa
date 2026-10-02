@@ -1,5 +1,5 @@
 import { AppShell } from '../../home/ui'
-import InviteClient from '../invite-client'
+import { InviteClient } from '../../../Domain/Group/Frontend'
 
 export default async function InvitePage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params

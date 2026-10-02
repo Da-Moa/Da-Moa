@@ -1,5 +1,5 @@
 import { CURRENCY_CODES } from './money'
-import { MAX_GROUP_MEMBERS } from './domain-types'
+import { MAX_GROUP_MEMBERS } from '../Domain/Group/Shared'
 
 type Schema = Record<string, unknown>
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` })

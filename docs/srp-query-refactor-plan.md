@@ -193,7 +193,46 @@ DB SQL은 기존 읽기 트랜잭션의 5회에서 `SELECT 1` 1회로 줄인다.
 
 이번 작업은 구조 분리이며 기존 공통 advisory transaction lock·정원/탈퇴 경합 보호를 유지한다. 신규 명시적 락은 추가하지 않고 전역 락 제거는 7단계의 별도 정합성 변경으로 남긴다. 초대 토큰은 해시만 저장하고 재생 응답에서 링크를 제거하며, DELETE 전에 확보한 수신자에게 커밋 후 기존 재조회 키를 발행한다. 실패는 같은 트랜잭션 전체를 롤백하고 같은 키·본문 재시도를 유지한다. 기능 검증 후 실제 SQL 순서·호출 수·재현 방법을 기록하고 사용자 쿼리 확인 대기에서 멈춘다.
 
-**Group-01 상태: 진행 중.**
+**Group-01 상태: 코드 분리·단위/통합/빌드·모바일 브라우저 검증 완료, 사용자 쿼리 확인 대기.**
+
+반영된 공개 경계는 `Domain/Group/{Frontend,Backend,Shared}/index.ts`다. 기존 `group-store.ts`, `app/home/group-client.tsx`, `app/invites/invite-client.tsx`를 제거했다. 프론트의 `GroupsList`·`GroupClient`·`InviteClient`는 Group Frontend에 있으며, Group 화면의 `CreateRoundForm`·`RoundList`는 Settle Frontend 공개 컴포넌트를 사용한다. Group Backend는 GroupController의 `getGroupResponse()`·`isGroupPath()`, GroupService, GroupRepository, GroupDAO, GroupException으로 나눴다. `GroupSummary`·`GroupListItem`·`GroupDetail`·`InvitePreview`·`GroupMutationResult`와 입력 DTO는 Group Shared에 있다. 일반 이탈은 Service의 `leaveMembership()`, 생성자 닫기는 `closeGroup()`로 구분하며 기존 `leaveGroup()` DELETE 진입점이 역할을 선택한다.
+
+User의 공개 `getActiveUserProfiles()`는 필요한 ID를 한 번에 조회하여 활성 회원의 ID·이름·프로필 이미지만 반환한다. Group Repository에는 `users` SQL이 없다. Settle의 `hasUnfinishedGroupRounds()`·`hasUnfinishedGroupParticipation()`는 같은 Client로 미종료 여부만 반환하며 Group Repository에는 회차 SQL이 없다. `requireGroupMembership()`는 회차 생성 호출자가 필요한 모임 권한을 검사하고 공개 GroupSummary만 반환한다. Repository·DAO·내부 오류는 공개 진입점에서 내보내지 않는다. 공통 입력·페이지네이션·`domainMutation()`을 Global Util의 `input-validation-util.ts`·`pagenation-util.ts`·`idempotency-util.ts`로 나눴고, 초대 재생 응답의 링크 제거는 Group Service가 맡는다. Auth/Websocket Backend와 Util Frontend의 공개 진입점은 기존 lib·공통 UI 구현에 위임한다. 다른 도메인의 전체 이전은 이번 범위에 포함하지 않는다.
+
+요청한 후속 세분화에서 기존 공개 진입점과 함수 본문을 유지하고 `domain.ts`를 제거했다. `nowSeconds`는 같은 계산을 하는 기존 `currentTimestamp()`의 공개 별칭을 재사용한다. 작업한 Health/Group API 목록·로직 흐름·바인딩 자리표시자를 유지한 SQL 원문은 [API 흐름·SQL 문서](refactored-api-flows-and-sql.md)에 별도로 기록한다. 후속 유틸 세분화 후에도 `npm test` 81개·`npm run build`·격리된 DB/MinIO의 `npm run test:integration` 38개가 통과했고 SQL 호출 수는 유지된다.
+
+실제 요청 흐름:
+
+| 작업 | 프론트 → API → Controller/Service → 번호를 붙인 DB 처리 → DTO/프론트 |
+|---|---|
+| 모임 생성 | `GroupsList.create()` → POST `/api/groups` → Global/Auth의 `readAccessToken()` → `getGroupResponse()` → `createGroup(CreateGroupRequestDTO)` → ① 쓰기 트랜잭션 시작·설정·기존 공통 락 ② `requireAccount()`로 현재 세션/회원 확인 ③ 멱등 기록 SELECT ④ `insertGroup()`의 groups INSERT·생성자 group_members INSERT ⑤ 성공 기록 INSERT ⑥ COMMIT → GroupMutationResult → 상세 이동 |
+| 모임 목록 | `GroupsList`의 `useResource()` → GET `/api/groups` → Controller → `listGroups()` → ① REPEATABLE READ READ ONLY 시작·설정 ② 현재 세션/회원 SELECT ③ `findGroups()`의 검색·커서·limit+1 SELECT ④ 표시할 모임들의 `findActiveMemberships()` SELECT ⑤ User 공개 일괄 프로필 SELECT ⑥ COMMIT → `Page<GroupListItem>` → 목록/다음 커서 반영. 빈 페이지는 ④⑤ 생략 |
+| 모임 상세 | `GroupClient`의 `useResource()` → GET `/api/groups/{id}` → Controller → `getGroup()` → ① 읽기 스냅샷 시작·설정 ② 현재 세션/회원 ③ `findMemberGroup()` 권한 SELECT ④ 활성 멤버십 ⑤ User 일괄 프로필 ⑥ 생성자일 때만 유효 초대 SELECT ⑦ COMMIT → GroupDetail → 멤버·초대·회차 후보 표시 |
+| 초대 발급/재발급 | `GroupClient.inviteMembers()` → POST `/api/groups/{id}/invites` → Controller → `createInvite(CreateInviteRequestDTO)` → ① 쓰기 시작·설정·기존 락 ② 현재 세션/회원 ③ 멱등 검사 ④ 생성자 권한 SELECT ⑤ 재발급이면 기존 초대 조건부 폐기 UPDATE·영향 행 확인 ⑥ token_hash만 group_invites INSERT ⑦ 링크 없는 성공 메타데이터 INSERT ⑧ COMMIT → 새 성공에서만 sharePath가 있는 GroupMutationResult → 링크 표시·모임 재조회. 성공 재생은 linkUnavailable=true |
+| 초대 폐기 | `GroupClient.revoke()` → DELETE `/api/groups/{id}/invites/{inviteId}` → Controller → `revokeInvite()` → ① 쓰기 시작·설정·기존 락 ② 현재 세션/회원 ③ 멱등 검사 ④ 생성자 권한 ⑤ 모임/초대 ID 조건 UPDATE·영향 행 확인 ⑥ 성공 기록 ⑦ COMMIT → GroupMutationResult → 초대 목록 재조회. 기존 참여자는 유지 |
+| 초대 조회 | `InviteClient`의 `useResource()` → GET `/api/invites/{token}` → Controller → `getInvite()` → ① 읽기 스냅샷 시작·설정 ② 현재 세션/회원 ③ 토큰 형식 검사 후 해시로 유효 초대·활성 생성자 멤버십·조회자의 참여 여부 SELECT ④ User 공개 조회로 생성자의 활성 회원 상태 확인 ⑤ COMMIT → InvitePreview → 직접 수락 버튼 또는 이미 참여한 모임 링크. 조회만으로 멤버십을 저장하지 않음 |
+| 참여 수락 | `InviteClient.accept()` → POST `/api/invites/{token}/accept` → Controller → `acceptInvite()` → ① 쓰기 시작·설정·기존 락 ② 현재 세션/회원 ③ tokenHash를 본문으로 멱등 검사 ④ 초대/생성자 검사(초대 SELECT·User SELECT) ⑤ 비멤버이면 활성 정원 COUNT ⑥ `joinGroup()` 멤버십 UPSERT ⑦ 성공 기록 ⑧ COMMIT → GroupMutationResult → 모임 상세 이동. 기존 멤버는 정원 COUNT 생략하며 재참여는 기존 이탈 행을 갱신; 기존 회차 구성은 바꾸지 않음 |
+| 이탈/생성자 닫기 | `GroupClient.leave()` → DELETE `/api/groups/{id}` → Controller가 필요 시 변경 전 수신자 확보 → `leaveGroup()` → ① 쓰기 시작·설정·기존 락 ② 현재 세션/회원 ③ 멱등 검사 ④ 활성 멤버십/역할 SELECT ⑤ Settle 공개 미종료 SELECT ⑥ 일반 이탈은 본인 left_at UPDATE; 생성자 닫기는 모든 초대 폐기·멤버십 이탈 UPDATE ⑦ 성공 기록 ⑧ COMMIT → GroupMutationResult → 목록 이동. groups·완료 rounds·과거 참여 기록은 삭제하지 않음 |
+
+변경 요청의 동일 출처 검사는 Controller가 수행하고 JSON 입력은 기존 공통 제한을 사용한다. Group 작업에는 expectedVersion 검사가 없으며 기존 Idempotency-Key·본문 일치 검사를 유지한다. 쓰기 성공 뒤 `after()`로 `publishGroupInvalidation()`을 호출한다. 삭제 전 수신자 캡처는 기존 별도 읽기 스냅샷이고 발행도 기존 공통 구현을 사용한다. 수신자·재조회 키만 전송하고 토큰·계좌·금액은 보내지 않는다. Group 작업 자체에는 외부 파일 I/O가 없다.
+
+쓰기 트랜잭션 부가 SQL은 BEGIN·SET LOCAL 2회·공통 advisory lock·COMMIT의 5회다. 읽기는 BEGIN REPEATABLE READ READ ONLY·SET LOCAL 2회·COMMIT의 4회다. 실패 시 COMMIT 대신 ROLLBACK하고 DB 변경과 성공 기록을 모두 되돌린다. 재발급 실패는 기존 초대 변경도 롤백한다. 네트워크/커밋 응답 유실 시 같은 키·본문으로 재시도하며 초대 재생은 원문 링크를 반환하지 않으므로 기존 재발급 안내를 사용한다. 원래 쓰기 락이 현재 정원 직전 동시 수락·탈퇴 경합을 보호한다. 전역 락 제거와 조건부 정합성 전환은 별도 7단계다.
+
+쿼리 수는 같은 정상 작업의 공통 트랜잭션 SQL을 포함하고, 실시간 알림·다음 화면 재조회는 제외한다. 이전 수는 변경 전 함수의 SQL 호출 순서 기준이며 변경 후 수는 `scripts/group.integration.test.ts`에서 실제 PostgreSQL SQL 로그를 수집해 검증했다. 사용자 JOIN을 도메인별 조회로 나눠 4개 조회/참여 경로가 각 1회 늘었고 조회 수는 회원 수와 무관하게 일정하다. 성능 개선 수치는 주장하지 않는다.
+
+| 정상 작업 | 이전 → 현재 SQL 호출 수 |
+|---|---|
+| 모임 생성 / 같은 키 성공 재생 | 10 → 10 / 7 → 7 |
+| 모임 목록(비어 있지 않음) / 빈 목록 | 7 → 8 / 6 → 6 |
+| 모임 상세(생성자 / 일반 멤버) | 8 → 9 / 7 → 8 |
+| 초대 발급 / 재발급 / 폐기 | 10 → 10 / 11 → 11 / 10 → 10 |
+| 초대 조회 | 6 → 7 |
+| 초대 수락(비멤버 / 이미 멤버) | 11 → 12 / 10 → 11 |
+| 일반 이탈 / 생성자 닫기 | 11 → 11 / 12 → 12 |
+
+재현 방법: `DB_QUERY_LOG=true npm run dev`로 로컬 앱을 실행한다. 테스트 계정으로 모임 생성 → 목록/상세 조회 → 초대 발급 → 다른 계정으로 초대 조회/수락 → 초대 재발급/폐기 → 일반 멤버 이탈 → 생성자 닫기를 수행한다. 미종료 회차가 있는 모임의 이탈/닫기도 시도해 ROLLBACK과 기존 오류 코드를 확인한다. 브라우저 Network의 단일 API 요청 시각과 stdout의 SQL: 블록을 대조하고 화면 후속 GET·실시간 수신자 SELECT·모니터링 SQL은 별도 집계한다. 바인딩 값·토큰·계좌·연결 문자열은 로그에 출력하지 않는다.
+
+검증 기록: `npm test` 81개·`npm run build`·격리된 `da_moa_group_test_20261002_1` DB와 `da-moa-group-test-20261002-1` 버킷의 `npm run test:integration` 38개가 통과했다. 경계 검사는 프론트/Shared의 Backend 접근·다른 도메인 내부 import·Group Repository의 다른 도메인 테이블 접근을 막는다. 브라우저 검사에서 변경 전부터 없는 과거 정산 기록 안내 문구를 찾던 검증을 현재 제목/검색/필터 순서 검사로, 계좌 화면의 접힌 입력 대기를 현재 계좌 수정 버튼 검사로 맞췄다. 모임 일반 이탈/생성자 닫기 UI 검사를 추가했다. 전체 `scripts/browser-check.mjs`가 모임 생성·초대 수락·회차 생성·지출·영수증·정산·기록 검색·재가입·이탈·닫기까지 통과했다. 브라우저 증빙은 `/tmp/da-moa-group-browser-artifacts/settlement.png`에 저장했다. 기존 3000번 개발 서버와 충돌하지 않도록 임시 코드 복사본·3087번 테스트 서버·별도 Chrome 프로필을 사용한다. 사용자 쿼리 확인 전에는 다음 기능을 수정하지 않는다.
 
 각 단계 안에서 기능 하나의 실행 문단씩 처리하고 사용자 쿼리 확인을 받는다. 확인이 끝난 기능은 따로 검토할 수 있는 커밋 또는 PR로 나눈다. 책임을 옮기는 변경과 SQL·화면 동작을 바꾸는 변경을 같은 큰 diff에 섞지 않는다.
 

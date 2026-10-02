@@ -13,7 +13,7 @@ import {
 import { getAccount } from '../src/lib/authorization.ts'
 import { createDatabaseClient, withReadTransaction, withWriteTransaction } from '../src/lib/db.ts'
 import { AppError } from '../src/lib/errors.ts'
-import { acceptInvite, createGroup, createInvite, getGroup, getInvite, listGroups } from '../src/lib/group-store.ts'
+import { acceptInvite, createGroup, createInvite, getGroup, getInvite, listGroups } from '../src/Domain/Group/Backend/index.ts'
 import { applyMigrations } from './migrations.mjs'
 import { completeTestOnboarding as completeOnboarding, updateTestBankAccount as updateBankAccount } from './bank-test-support.ts'
 

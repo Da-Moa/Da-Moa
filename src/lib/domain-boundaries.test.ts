@@ -4,10 +4,10 @@ import { dirname, resolve } from 'node:path'
 import test from 'node:test'
 import ts from 'typescript'
 
-test('Health encapsulation blocks client imports and access to internal backend modules', () => {
+for (const [namespace, domain] of [['Domain', 'Health'], ['Domain', 'Group'], ['Domain', 'User'], ['Domain', 'Settle'], ['Global', 'Auth'], ['Global', 'Util'], ['Global', 'Websocket']]) test(`${namespace}/${domain} encapsulation blocks client imports and access to internal backend modules`, () => {
   const root = resolve('src')
-  const backend = resolve(root, 'Domain/Health/Backend') + '/'
-  const shared = resolve(root, 'Domain/Health/Shared') + '/'
+  const backend = resolve(root, `${namespace}/${domain}/Backend`) + '/'
+  const shared = resolve(root, `${namespace}/${domain}/Shared`) + '/'
   const entry = backend + 'index.ts'
   const files = readdirSync(root, { recursive: true }).map(file => resolve(root, String(file)))
     .filter(file => /\.(?:ts|tsx|mjs)$/.test(file) && !file.includes('.test.') && !file.endsWith('.d.ts'))
@@ -32,9 +32,18 @@ test('Health encapsulation blocks client imports and access to internal backend 
       return target ? [target] : []
     })
     graph.set(file, dependencies)
+    if (domain === 'Group') for (const target of dependencies) {
+      for (const area of ['Frontend', 'Shared']) {
+        const directory = resolve(root, `Domain/Group/${area}`) + '/'
+        if (target.startsWith(directory) && !file.includes('/Domain/Group/')) assert.equal(target, directory + 'index.ts', `Group internal import: ${file} -> ${target}`)
+      }
+      if (file.includes('/Domain/Group/Frontend/') && target.includes('/Domain/') && !target.includes('/Domain/Group/')) {
+        assert.match(target, /\/(Frontend|Shared)\/index\.ts$/, `Other domain frontend internal import: ${file} -> ${target}`)
+      }
+    }
     for (const target of dependencies) {
-      if (target.startsWith(backend) && !file.startsWith(backend)) assert.equal(target, entry, `Health internal import: ${file} -> ${target}`)
-      if (file.startsWith(backend) && target.includes('/Domain/') && !target.includes('/Domain/Health/')) {
+      if (target.startsWith(backend) && !file.startsWith(backend)) assert.equal(target, entry, `${domain} internal import: ${file} -> ${target}`)
+      if (file.startsWith(backend) && target.includes('/Domain/') && !target.includes(`/Domain/${domain}/`)) {
         assert.match(target, /\/(Backend|Shared)\/index\.ts$/, `Other domain internal import: ${file} -> ${target}`)
       }
     }
@@ -48,13 +57,13 @@ test('Health encapsulation blocks client imports and access to internal backend 
   for (const [file, source] of sources) {
     const client = source.statements.some(statement => ts.isExpressionStatement(statement) && ts.isStringLiteral(statement.expression) && statement.expression.text === 'use client')
     if (client || file.startsWith(shared) || file.includes('/Frontend/')) {
-      for (const target of reachable(file)) assert.ok(!target.startsWith(backend), `Client/shared reaches Health backend: ${file} -> ${target}`)
+      for (const target of reachable(file)) assert.ok(!target.startsWith(backend), `Client/shared reaches ${domain} backend: ${file} -> ${target}`)
     }
     if (file.startsWith(backend)) {
       for (const target of reachable(file)) {
-        assert.ok(!target.includes('/Frontend/') && !target.includes('/app/'), `Health backend reaches frontend: ${file} -> ${target}`)
+        assert.ok(!target.includes('/Frontend/') && !target.includes('/app/'), `${domain} backend reaches frontend: ${file} -> ${target}`)
         const dependency = sources.get(target)!
-        assert.ok(!dependency.statements.some(statement => ts.isExpressionStatement(statement) && ts.isStringLiteral(statement.expression) && statement.expression.text === 'use client'), `Health backend reaches client module: ${target}`)
+        assert.ok(!dependency.statements.some(statement => ts.isExpressionStatement(statement) && ts.isStringLiteral(statement.expression) && statement.expression.text === 'use client'), `${domain} backend reaches client module: ${target}`)
       }
     }
   }

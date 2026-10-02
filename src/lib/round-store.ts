@@ -2,12 +2,15 @@ import { createHash, randomInt, randomUUID } from 'node:crypto'
 import { requireAccount } from './authorization'
 import { withReadTransaction, type Database } from './db'
 import { AppError, badInput } from './errors'
-import { domainMutation, idsInput, missing, nowSeconds, onlyKeys, ownerGroup, pageOf, pagination, textInput, type Identity } from './group-store'
+import { domainMutation, idsInput, nowSeconds, onlyKeys, pageOf, pagination, textInput, type Identity } from '../Global/Util/Backend'
+import { requireGroupMembership } from '../Domain/Group/Backend'
 import { formatMoney, MAX_EXPENSE_MAJOR, MAX_ROUND_TOTAL_MAJOR, minorLimit, parseAmount, requireCurrency, type Currency } from './money'
 import { replayMutation } from './mutations'
 import { deleteReceiptObject, putReceipt, readReceipt } from './receipt-storage'
 import { calculateBase, finalizeSettlement, previewSettlement, validateCustomShares } from './split'
 import type { ExclusionCheck, Expense, MutationResult, RoundDetail, RoundMember, RoundStatus, RoundSummary, SettlementDTO, SettlementTransfer } from './domain-types'
+
+const missing = () => new AppError(404, 'not_found', '요청한 자료를 찾을 수 없어요')
 
 type Row = Record<string, any>
 
@@ -145,7 +148,7 @@ export async function createRound(access: Identity, key: string, groupId: string
   let currency: Currency
   try { currency = requireCurrency(body.currency) } catch { badInput('unsupported_currency', '지원하는 회차 통화를 선택해 주세요') }
   return domainMutation(access, key, 'round.create', { groupId, ...body }, async (client, userId) => {
-    await ownerGroup(client, groupId, userId, false)
+    await requireGroupMembership(client, groupId, userId)
     if (ids.length < 2 || !ids.includes(userId)) throw new AppError(409, 'minimum_participants', '회차 생성자를 포함해 최소 2명을 선택해 주세요')
     const { rows } = await client.query(`SELECT u.id,COALESCE(u.display_name,'카카오 사용자') AS name FROM group_members m JOIN users u ON u.id=m.user_id
       WHERE m.group_id=$1 AND m.user_id=ANY($2::text[]) AND m.left_at IS NULL AND u.deleted_at IS NULL AND u.onboarding_completed_at IS NOT NULL ORDER BY u.id`, [groupId, ids])

@@ -2,11 +2,8 @@
 
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { apiRequest } from '../../lib/api-client'
-import type { MutationResult } from '../../lib/domain-types'
-import { ErrorNotice, Loading, useAction, useResource } from '../home/ui'
-
-type InvitePreview = { groupId: string; groupName: string; isMember: boolean; expiresAt: number }
+import type { InvitePreview, GroupMutationResult as MutationResult } from '../../Shared'
+import { apiRequest, ErrorNotice, Loading, useAction, useResource } from '../../../../Global/Util/Frontend'
 
 export default function InviteClient({ token }: { token: string }) {
   const router = useRouter()
