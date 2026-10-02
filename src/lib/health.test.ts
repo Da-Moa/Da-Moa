@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { GET } from '../app/api/health/[[...check]]/route'
-import { checkMinio, healthResponse } from './health'
+import { getHealthResponse } from '../Domain/Health/Backend/Controller/HealthController'
+import { checkMinio } from '../Domain/Health/Backend/Repository/HealthRepository'
+import type { HealthProbes } from '../Domain/Health/Backend/Service/HealthService'
+import type { HealthScope } from '../Domain/Health/Shared/DTO/HealthDTO'
 import { openApiDocument } from './openapi'
+
+const healthResponse = (scope: HealthScope, checks: HealthProbes) => getHealthResponse(scope === 'overall' ? undefined : [scope], checks)
 
 test('individual health checks only probe the selected dependency and report failures', async () => {
   for (const scope of ['database', 'minio'] as const) {

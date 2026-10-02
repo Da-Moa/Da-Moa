@@ -14,8 +14,8 @@
     "dev": "NODE_ENV=development node server.mjs",
     "build": "next build",
     "start": "NODE_ENV=production node server.mjs",
-    "test": "node --import tsx --test src/lib/*.test.ts src/lib/*.test.mjs",
-    "test:integration": "node --import tsx --test --test-concurrency=1 scripts/*.integration.test.ts scripts/*.integration.test.mjs"
+    "test": "node --import ./scripts/test-server-only.mjs --import tsx --test src/lib/*.test.ts src/lib/*.test.mjs",
+    "test:integration": "node --import ./scripts/test-server-only.mjs --import tsx --test --test-concurrency=1 scripts/*.integration.test.ts scripts/*.integration.test.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1142.0",

@@ -173,6 +173,28 @@ Global/Util/Backend/MinIOUtil.ts  # 서버 전용 파일 저장 유틸
 
 ## 실행 순서
 
+### Health-01: 헬스체크 도메인 분리
+
+사용자 지정에 따라 헬스체크를 첫 기능으로 진행한다. 대상은 기존 `src/lib/health.ts`, 헬스체크 Route Handler·테스트, 테스트 실행 설정이다. 완료 조건은 기존 다섯 API의 응답·상태코드·캐시·검사 범위를 유지하면서 `Domain/Health/Backend`의 Controller·Service·Repository와 `Shared/DTO`로 분리하고 서버·도메인 import 경계를 검증하는 것이다. 후속 사용자 요청에 따라 DB 검사는 `SELECT 1` 한 번으로 판단한다. 기존 `lib/db-client.mjs`의 공용 연결 풀과 SQL 로그·모니터링 계측을 재사용하며 다른 도메인·공통 DB 전체를 함께 이동하지 않는다.
+
+요청 흐름은 브라우저 또는 운영 상태 검사 GET → `src/app/api/health/[[...check]]/route.ts` → Health Backend 공개 진입점의 `getHealthResponse()` → HealthController의 경로 검증·`HealthRequestDTO` 생성 → HealthService의 `checkHealth()` → ① live는 외부 검사 없이 성공 ② DB 대상이면 HealthRepository의 `checkDatabase()`가 공용 풀의 `query('SELECT 1')`을 한 번 실행하고 풀에 연결 반환 ③ MinIO 대상이면 HealthRepository의 `checkMinio()`로 읽기·쓰기 정족수 URL 병렬 호출 ④ 검사 결과를 `HealthResponseDTO`로 취합 → Controller의 HTTP 200/503·no-store 응답이다. 잘못된 경로는 검사 없이 404다. 인증·멱등·버전 검사는 없는 공개 읽기 API이며 테이블·파일을 저장하지 않는다.
+
+DB SQL은 기존 읽기 트랜잭션의 5회에서 `SELECT 1` 1회로 줄인다. 별도 `BEGIN`·`COMMIT`·`ROLLBACK`·`SET LOCAL statement_timeout`·`SET LOCAL lock_timeout`과 명시적 락을 사용하지 않는다. 공용 풀의 기존 연결 설정은 재사용하며 쿼리 실패는 상세정보 없이 `down`·503으로 응답한다. 저장 레코드가 없어 DAO 파일을 만들지 않고, 외부 예외 상세를 노출하지 않는 기존 상태 응답에 별도 Exception 클래스를 추가하지 않는다. Next.js의 `server-only` 경계 표식을 사용하고 Node 테스트에서만 `scripts/test-server-only.mjs`로 Next.js에 포함된 빈 서버 표식을 연결한다. 이 기능의 검증 후 사용자 SQL 확인 대기 상태로 멈춘다.
+
+**Health-01 상태: SELECT 1 단독 실행 수정·검증 완료, 사용자 쿼리 확인 대기.** live·minio는 DB SQL 0회, database·dependencies·overall은 각 1회이며 MinIO 검사는 요청당 상태 URL 2회를 병렬 호출한다. 모니터링 메트릭 이름·라벨·헬스체크 HTTP 집계 제외 규칙은 유지하며 `da_moa_db_queries_total`은 DB 헬스체크당 5회 대신 1회 증가한다. 실제 SQL 로그와 모니터링 계측 이벤트가 각각 1회임을 통합 검증했다. `npm test` 73개·`npm run build`가 통과했다. 기존 개발 서버와의 잠금 충돌을 피하기 위해 동일한 수정 코드를 임시 작업 복사본에 담고, 격리된 `da_moa_health_test_20261002` DB·`da-moa-health-test-20261002` 버킷을 지정하여 `npm run test:integration` 37개도 모두 통과했다.
+
+사용자 재현: 앱을 `DB_QUERY_LOG=true npm run dev`로 실행하고 `curl -i http://localhost:3000/api/health/database`를 호출해 `SELECT 1` 한 번과 HTTP 응답을 확인한다. `/api/health/live`, `/api/health/minio`, `/api/health/dependencies`, `/api/health`도 각각 호출해 검사 범위·응답을 확인한다. 별도 SQL 로그가 섞이면 DB 모니터링 또는 다른 요청의 로그인지 구분한다. 쿼리 확인 또는 수정 요청 전에는 다음 기능을 진행하지 않는다.
+
+### Group-01: 구현된 모임·초대·참여 도메인 분리
+
+대상은 `group-store.ts`, 공통 API의 모임·초대 분기, 모임 목록·상세·초대 수락 UI, 공개 타입과 직접 호출 테스트다. 모임 수정은 구현 범위에 없으므로 추가하지 않는다. 완료 조건은 기존 생성·목록·상세·생성자 닫기·일반 이탈·초대 발급/재발급·폐기·조회·수락을 Group Frontend/Backend/Shared로 분리하고 Controller·Service·Repository·DAO·Exception의 책임과 공개 import 경계를 검증하는 것이다. 회차 UI와 사용자/미종료 회차 조회는 필요한 공개 협력 함수만 추출하며 다른 도메인의 전체 이전은 진행하지 않는다.
+
+현재 프론트 요청 → 공통 Route Handler → `group-store`의 인증·규칙·SQL → 응답 흐름을 프론트 공개 UI → 기존 API 경로 → Global/Auth 공개 인증 기능 → GroupController → GroupService → ① 공통 트랜잭션 ② 현재 계정·멱등 검사 ③ GroupRepository와 User/Settle 공개 조회에 동일 Client 전달 ④ 기존 변경과 성공 기록 저장 ⑤ COMMIT → 공개 DTO → 프론트 반영으로 옮긴다. 조회는 기존 REPEATABLE READ 스냅샷을 유지한다. User 조회는 일괄화하여 회원 수에 따른 N+1을 만들지 않는다. 다른 도메인 테이블 JOIN 분리에 따라 추가되는 SQL 수는 검증 후 기록한다.
+
+이번 작업은 구조 분리이며 기존 공통 advisory transaction lock·정원/탈퇴 경합 보호를 유지한다. 신규 명시적 락은 추가하지 않고 전역 락 제거는 7단계의 별도 정합성 변경으로 남긴다. 초대 토큰은 해시만 저장하고 재생 응답에서 링크를 제거하며, DELETE 전에 확보한 수신자에게 커밋 후 기존 재조회 키를 발행한다. 실패는 같은 트랜잭션 전체를 롤백하고 같은 키·본문 재시도를 유지한다. 기능 검증 후 실제 SQL 순서·호출 수·재현 방법을 기록하고 사용자 쿼리 확인 대기에서 멈춘다.
+
+**Group-01 상태: 진행 중.**
+
 각 단계 안에서 기능 하나의 실행 문단씩 처리하고 사용자 쿼리 확인을 받는다. 확인이 끝난 기능은 따로 검토할 수 있는 커밋 또는 PR로 나눈다. 책임을 옮기는 변경과 SQL·화면 동작을 바꾸는 변경을 같은 큰 diff에 섞지 않는다.
 
 | 순서 | 변경 | 완료 기준 |

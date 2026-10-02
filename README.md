@@ -43,6 +43,8 @@ npm run dev
 
 상태 확인 API는 인증 없이 사용할 수 있습니다. `/api/health/live`는 앱 응답만, `/api/health/database`는 PostgreSQL `SELECT 1`만, `/api/health/minio`는 MinIO 저장소의 읽기·쓰기 정족수만 확인합니다. `/api/health/dependencies`는 DB와 MinIO를 함께, `/api/health`는 앱과 두 의존 서비스를 종합해 반환합니다. 검사 실패 시 해당 API는 `503`과 검사 결과를 반환하며 응답을 캐시하지 않습니다. MinIO 검사는 실제 객체 작업이나 영수증 버킷·키 권한까지 검증하지 않습니다.
 
+헬스체크 구현은 `src/Domain/Health/Backend`의 Controller·Service·Repository와 `src/Domain/Health/Shared/DTO`로 분리합니다. Next.js Route Handler는 Backend의 공개 진입점만 호출합니다. DB 검사는 공용 연결 풀에서 `SELECT 1`을 한 번 실행하며 별도 트랜잭션·명시적 락·`SET LOCAL`을 사용하지 않습니다.
+
 ## 사용자 흐름
 
 1. 카카오 로그인 후 전체 계좌번호를 입력하고 제안된 은행을 선택한 다음 예금주를 입력해 가입합니다. 선택 은행의 알려진 계좌번호 형식을 찾지 못하면 하이픈 없이 숫자로 저장합니다. 계좌 자동 연동·실명조회는 제공하지 않으며, 송금 전 계좌번호와 예금주를 직접 확인해야 합니다.
