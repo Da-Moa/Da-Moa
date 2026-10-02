@@ -197,7 +197,7 @@ GroupClient.inviteMembers() → POST → Node Proxy → JWT Guard(Access JWT 검
 3. G-INVITE-CREATION에서 모임 생성자·활성 멤버십·기존 멱등 성공 기록을 함께 조회한다. 같은 키·본문은 링크 없는 성공 응답을 재생하고, 다른 본문은 idempotency_conflict로 거부한다. 신규 요청의 일반 멤버는 forbidden, 비멤버는 not_found로 거부한다.
 4. 새 초대 UUID·32바이트 랜덤 토큰·현재 시각을 만들고 G-INSERT-INVITE 한 SQL에서 SHA-256 토큰 해시·7일 만료 초대·성공 메타데이터를 저장한다. replaceInviteId가 있으면 해당 모임의 이전 초대를 같은 SQL에서 폐기한다. 저장 시 활성 생성자 자격도 다시 확인하며, 대상 초대가 없으면 쓰기 없이 not_found를 반환한다.
 5. 성공 기록에는 { id, inviteId, linkUnavailable: true }만 저장하고 최초 성공 응답에만 메모리 토큰의 sharePath를 반환한다. 같은 키 동시 요청은 mutation_requests PK가 중복 저장을 막으며, 충돌한 문장 전체가 취소된 뒤 추가 G-INVITE-CREATION 조회로 성공을 재생하거나 본문 충돌을 거부한다.
-6. Controller가 응답 후 after()에서 생성자에게 groups·group:{id} 무효화를 보낸다. 생성자 ID를 확보했으므로 후행 DB 조회·트랜잭션이 없다. 기존 useResource 구독이 모임 상세와 초대 목록을 다시 읽는다.
+6. Controller가 응답 후 after()에서 생성자에게 groups·group:{id} 무효화를 보낸다. 생성자 ID를 확보했으므로 후행 DB 조회·트랜잭션이 없다. POST 성공 핸들러는 공유 링크만 표시하며 직접 재조회하지 않는다. 기존 useResource 구독이 group:{id} 신호를 받으면 모임 상세와 초대 목록을 한 번 다시 읽는다. 최초 화면 진입·수동 오류 재시도·웹소켓 재연결 시 조회는 유지한다.
 
 신규 발급·재발급은 AUTH → G-INVITE-CREATION → G-INSERT-INVITE로 3회다. 일반 성공 재생·권한 거절은 2회다. 같은 키 동시 저장 충돌 시 복구 조회를 포함해 4회다. PostgreSQL 문장 원자성으로 새 초대·성공 기록 저장 실패 시 기존 초대 폐기도 함께 취소된다.
 

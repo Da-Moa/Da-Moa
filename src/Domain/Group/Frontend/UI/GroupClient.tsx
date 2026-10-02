@@ -29,7 +29,7 @@ export default function GroupClient({ groupId }: { groupId: string }) {
   const roundDialogEndpoint = `/api/groups/${groupId}/rounds${roundDialogQuery.size ? `?${roundDialogQuery}` : ''}`
   async function inviteMembers(replaceInviteId?: string) {
     const result = await action.run(() => apiRequest<MutationResult>(`/api/groups/${groupId}/invites`, { method: 'POST', body: replaceInviteId ? { replaceInviteId } : {} }))
-    if (result) { setInvite({ id: result.inviteId ?? result.id, path: result.sharePath ?? null }); await group.reload() }
+    if (result) setInvite({ id: result.inviteId ?? result.id, path: result.sharePath ?? null })
   }
   async function revoke(inviteId: string) {
     if (!window.confirm('이 초대 링크를 폐기할까요? 이미 참여한 멤버는 유지돼요.')) return
