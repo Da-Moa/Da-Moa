@@ -18,7 +18,7 @@ SQL은 해당 함수의 실제 query() 문자열을 가져와 PostgreSQL 형식�
 | 멱등 실행 | [idempotency-util.ts](../src/Global/Util/Backend/idempotency-util.ts)의 domainMutation()·Identity. 기존 lib/mutations.ts의 replayMutation()·saveMutation() 재사용 |
 | 공개 공통 진입점 | [Global Util Backend](../src/Global/Util/Backend/index.ts). 기존 호출자의 import 경로와 함수 이름 유지 |
 | 현재 시각 | nowSeconds는 기존 currentTimestamp()의 공개 별칭. 같은 초 단위 계산을 중복 구현하지 않음 |
-| 인증 | [Node Proxy](../src/proxy.ts) → [JwtGuard](../src/Global/Auth/Backend/Guard/JwtGuard.ts). Global Auth의 기존 JWT 검증과 트랜잭션 안 requireAccount() 재사용 |
+| 인증 | [Node Proxy](../src/proxy.ts) → [JwtGuard](../src/Global/Auth/Backend/Guard/JwtGuard.ts). Controller 진입 전 JWT 검증. Service의 requireAccount()는 회원 상태 조회에 사용 |
 | 협력 조회 | [User Backend](../src/Domain/User/Backend/index.ts)의 getActiveUserProfiles(), [Settle Backend](../src/Domain/Settle/Backend/index.ts)의 미종료 여부 조회. Service가 같은 DB Client 전달 |
 | 실시간 | [Global Websocket Backend](../src/Global/Websocket/Backend/index.ts). 기존 captureGroupAudience()·publishGroupInvalidation() 구현에 위임 |
 
@@ -63,6 +63,10 @@ GroupSummary는 모임 ID·이름·생성자 ID·생성 시각이다. 목록은 
 
 공개 경로는 다섯 Health GET/HEAD, `GET /api/auth/kakao`, `POST /api/auth/test-login`이다. 로그인 시작은 첫 JWT 발급을 위한 예외이고 개발용 로그인은 기존 로컬·개발 환경 제한을 유지한다. `/auth/v1/kakao` 콜백은 API matcher 밖에서 기존 state·nonce·PKCE·OIDC 검증을 수행한다. `POST /api/auth/access-token`·`POST /api/auth/refresh`는 Access JWT 대신 Refresh JWT를 요구하고, 실패 시 기존처럼 두 인증 쿠키를 지운다. `POST /api/auth/logout`은 Refresh 또는 Access JWT를 요구한다. 문서·OpenAPI·미등록 API도 기본 인증 대상이다. 페이지·정적 파일은 API Guard 범위 밖이며 데이터는 인증된 API로만 조회한다.
 
+**모든 API의 공통 진입 순서는 HTTP 요청 → Node Proxy → JWT Guard → Route Handler → Controller → Service다.** Public API도 Guard를 먼저 거치며 공개 경로·메서드 조건에 맞으면 JWT 검사만 생략한다. 따라서 G1뿐 아니라 G2~G8과 Health에도 Guard 단계가 적용된다.
+
+JWT Guard는 JWT의 유효성을 검사하며 SQL은 0회다. 아래 SQL 순서의 AUTH는 Guard 이후 Service에서 실행하는 users 회원 상태 SELECT 1회로, JWT 검사나 세션 조회를 뜻하지 않는다.
+
 SQL 기록과 아래 호출 수는 유효한 JWT가 Guard를 통과한 요청 기준이다. Service/Route Handler를 직접 호출하는 테스트는 Proxy를 거치지 않으므로 입력 검증 결과가 HTTP 요청의 인증 우선 결과와 다를 수 있다.
 
 Access JWT는 localStorage에 저장하며 만료는 10분이다. 로그인 완료 시 Refresh JWT를 POST /api/auth/access-token으로 검증해 Access JWT를 받아 저장한다. Refresh는 HttpOnly 쿠키에 저장하고 서명·만료·종류·목적을 확인한다. 로그인·가입·갱신·로그아웃은 refresh_sessions를 읽거나 쓰지 않는다. sid는 JWT 발급 식별자일 뿐 DB 세션이 아니다. 갱신은 목적을 보존하며 onboarding의 원래 만료를 연장하지 않는다. 로그아웃은 클라이언트 Access 토큰과 Refresh 쿠키를 삭제하며 이전 JWT는 자체 만료까지 유효하다. 회원의 가입·탈퇴 상태와 리소스 권한 검사는 유지한다.
@@ -71,17 +75,18 @@ Access JWT는 localStorage에 저장하며 만료는 10분이다. 로그인 완�
 
 ### 읽기 R
 
-1. 공용 pg 풀에서 연결 확보.
-2. R-START: REPEATABLE READ READ ONLY 시작 → 문장/잠금 제한 설정.
-3. AUTH: JWT 목적과 가입 완료 회원 상태 확인.
-4. 해당 API의 권한·데이터 SQL 실행. 같은 스냅샷과 Client 사용.
-5. TX-COMMIT → 연결 반환. 실패는 TX-ROLLBACK → 연결 반환; 롤백 실패 연결은 폐기.
+1. HTTP 요청 → Node Proxy → JWT Guard에서 Access JWT 검증 → Route Handler/Controller → Service 입력 검증.
+2. 공용 pg 풀에서 연결 확보.
+3. R-START: REPEATABLE READ READ ONLY 시작 → 문장/잠금 제한 설정.
+4. AUTH: JWT 목적과 가입 완료 회원 상태 확인.
+5. 해당 API의 권한·데이터 SQL 실행. 같은 스냅샷과 Client 사용.
+6. TX-COMMIT → 연결 반환. 실패는 TX-ROLLBACK → 연결 반환; 롤백 실패 연결은 폐기.
 
 읽기 트랜잭션 자체는 R-START의 3문장과 COMMIT 1문장으로 총 4회다. 도메인용 명시적 락은 없다.
 
 ### 쓰기 W — 모임 생성 제외
 
-1. Node JWT Guard가 먼저 JWT를 검증한다. 통과한 요청은 Controller에서 JWT를 다시 확인하고 동일 출처 검사. JSON을 읽는 API는 기존 1MiB 제한·객체 본문 검사.
+1. Node Proxy → JWT Guard가 Route Handler/Controller 진입 전에 Access JWT를 검증한다. 통과한 요청은 Controller에서 JWT를 다시 확인하고 동일 출처 검사. JSON을 읽는 API는 기존 1MiB 제한·객체 본문 검사.
 2. 필요한 Service 입력 검증. 모임/초대 생성 입력은 트랜잭션 전에 검사.
 3. 공용 pg 풀에서 연결 확보 → W-START: BEGIN → 제한 설정 → 기존 공통 advisory transaction lock.
 4. AUTH: JWT 목적·가입 완료 회원 상태 확인.
@@ -106,27 +111,27 @@ Access JWT는 localStorage에 저장하며 만료는 10분이다. 로그인 완�
 
 ### H1. GET /api/health/live
 
-브라우저/운영 검사 → Health Route Handler → 공개 getHealthResponse() → Controller가 scope=live DTO 작성 → checkHealth() → 외부 검사 없이 application=ok → HealthResponseDTO → 200. SQL·트랜잭션·인증·멱등·파일 작업 없음.
+브라우저/운영 검사 → Node Proxy → JWT Guard(공개 GET/HEAD 허용, JWT 검사 생략) → Health Route Handler → 공개 getHealthResponse() → Controller가 scope=live DTO 작성 → checkHealth() → 외부 검사 없이 application=ok → HealthResponseDTO → 200. SQL·트랜잭션·JWT 검사·멱등·파일 작업 없음.
 
 ### H2. GET /api/health/database
 
-운영 검사 → Health Controller의 scope=database → checkHealth() → Repository.checkDatabase() → 공용 풀에서 H-DB의 SELECT 1 한 번 → 풀 연결 반환 → database=ok/down → 200/503. 별도 BEGIN·SET LOCAL·명시적 락 없음. 연결 설정/쿼리 실패는 내부 내용을 숨기고 down으로 반환.
+운영 검사 → Node Proxy → JWT Guard(공개 GET/HEAD 허용, JWT 검사 생략) → Health Route Handler → Health Controller의 scope=database → checkHealth() → Repository.checkDatabase() → 공용 풀에서 H-DB의 SELECT 1 한 번 → 풀 연결 반환 → database=ok/down → 200/503. 별도 BEGIN·SET LOCAL·명시적 락 없음. 연결 설정/쿼리 실패는 내부 내용을 숨기고 down으로 반환.
 
 ### H3. GET /api/health/minio
 
-운영 검사 → scope=minio → checkHealth() → checkMinio() → MINIO_ENDPOINT 기준 /minio/health/cluster/read 및 /minio/health/cluster GET 병렬 실행 → 둘 다 200이면 ok, 하나라도 실패하면 down → 200/503. 각 HTTP 요청 제한은 5초, no-store다. DB SQL 0회이며 객체·버킷 권한·영수증 I/O를 검사하는 요청은 아니다.
+운영 검사 → Node Proxy → JWT Guard(공개 GET/HEAD 허용, JWT 검사 생략) → Health Route Handler → Health Controller의 scope=minio → checkHealth() → checkMinio() → MINIO_ENDPOINT 기준 /minio/health/cluster/read 및 /minio/health/cluster GET 병렬 실행 → 둘 다 200이면 ok, 하나라도 실패하면 down → 200/503. 각 HTTP 요청 제한은 5초, no-store다. DB SQL 0회이며 객체·버킷 권한·영수증 I/O를 검사하는 요청은 아니다.
 
 ### H4. GET /api/health/dependencies
 
-운영 검사 → scope=dependencies → DB의 H2와 MinIO의 H3를 병렬 실행 → database·minio 결과를 취합 → 하나라도 down이면 503, 모두 ok이면 200. 정상 DB 검사 시 SQL은 H-DB 한 번이다.
+운영 검사 → Node Proxy → JWT Guard(공개 GET/HEAD 허용, JWT 검사 생략) → Health Route Handler → Health Controller의 scope=dependencies → DB의 H2와 MinIO의 H3를 병렬 실행 → database·minio 결과를 취합 → 하나라도 down이면 503, 모두 ok이면 200. 정상 DB 검사 시 SQL은 H-DB 한 번이다.
 
 ### H5. GET /api/health
 
-운영 검사 → scope=overall → H4의 의존 서비스 검사와 application=ok 취합 → HealthResponseDTO → 200/503. 정상 DB 검사 시 SQL은 H-DB 한 번이다. 외부 검사 실패가 저장 레코드나 파일을 남기지 않는다.
+운영 검사 → Node Proxy → JWT Guard(공개 GET/HEAD 허용, JWT 검사 생략) → Health Route Handler → Health Controller의 scope=overall → H4의 의존 서비스 검사와 application=ok 취합 → HealthResponseDTO → 200/503. 정상 DB 검사 시 SQL은 H-DB 한 번이다. 외부 검사 실패가 저장 레코드나 파일을 남기지 않는다.
 
 ### G1. POST /api/groups — 모임 생성
 
-GroupsList.create() → Node JWT Guard → 기존 API Route의 Group 분배 → GroupController.getGroupResponse()의 JSON 입력 → GroupService.createGroup(CreateGroupRequestDTO) → 아래 DB 처리 → GroupMutationResult → 상세 화면 이동.
+GroupsList.create() → POST /api/groups → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 Group 분배 → GroupController.getGroupResponse()의 JSON 입력 → GroupService.createGroup(CreateGroupRequestDTO) → 아래 DB 처리 → GroupMutationResult → 상세 화면 이동.
 
 1. onlyKeys(['name'])·textInput(name): trim 후 1~100자. Idempotency-Key는 UUIDv7 형식으로 검사하고 소문자로 정규화한다.
 2. withDatabaseConnection()으로 공용 풀의 연결만 확보 → AUTH: JWT userId로 users를 한 번 읽어 가입·탈퇴 상태와 JWT 목적을 확인한다. 세션·멱등 기록을 조회하지 않는다.
@@ -140,7 +145,7 @@ scripts/group.integration.test.ts는 정상·중복 SQL 2회, 세션·멱등 SQL
 
 ### G2. GET /api/groups — 목록/검색/페이지
 
-GroupsList.useResource()·loadMore() → GET query → Global/Auth → Controller → listGroups() → R 스냅샷 → Page<GroupListItem> → 목록·다음 커서 반영.
+GroupsList.useResource()·loadMore() → GET /api/groups(query) → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 Group 분배 → GroupController → listGroups() → R 스냅샷 → Page<GroupListItem> → 목록·다음 커서 반영.
 
 1. pagination()으로 limit/cursor 검사, q가 있으면 textInput(q,100).
 2. R-START → AUTH → G-LIST: 활성 모임·대소문자 무시 부분 검색·(created_at,id) 내림차순·limit+1 조회.
@@ -152,7 +157,7 @@ GroupsList.useResource()·loadMore() → GET query → Global/Auth → Controlle
 
 ### G3. GET /api/groups/{groupId} — 상세
 
-GroupClient.useResource() → API → Global/Auth → Controller → getGroup() → R 스냅샷 → GroupDetail → 현재 멤버·초대·회차 후보 표시.
+GroupClient.useResource() → GET /api/groups/{groupId} → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 Group 분배 → GroupController → getGroup() → R 스냅샷 → GroupDetail → 현재 멤버·초대·회차 후보 표시.
 
 1. R-START → AUTH → G-ACCESS: 현재 활성 멤버십 확인. 없으면 not_found·ROLLBACK.
 2. G-MEMBERS(모임 ID 하나) → U-PROFILES → 멤버 DTO에 excludedAt=null 부여.
@@ -163,7 +168,7 @@ GroupClient.useResource() → API → Global/Auth → Controller → getGroup() 
 
 ### G4. DELETE /api/groups/{groupId} — 일반 이탈/생성자 닫기
 
-GroupClient.leave()의 역할별 확인 창 → DELETE → Global/Auth → Controller가 실시간 활성화 시 변경 전 수신자 확보 → leaveGroup() → 역할별 규칙/SQL → GroupMutationResult → 모임 목록 이동.
+GroupClient.leave()의 역할별 확인 창 → DELETE → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 Group 분배 → GroupController가 실시간 활성화 시 변경 전 수신자 확보 → leaveGroup() → 역할별 규칙/SQL → GroupMutationResult → 모임 목록 이동.
 
 1. 실시간 기능이 켜져 있으면 별도 읽기 트랜잭션으로 R-START → AUTH → RT-CAPTURE → COMMIT. 성공 변경 전 활성 멤버를 확보한다.
 2. 업무 쓰기는 W-START → AUTH → IDEM-READ(operation=group.leave) → G-ACCESS.
@@ -175,7 +180,7 @@ GroupClient.leave()의 역할별 확인 창 → DELETE → Global/Auth → Contr
 
 ### G5. POST /api/groups/{groupId}/invites — 초대 발급/재발급
 
-GroupClient.inviteMembers() → POST → Global/Auth → Controller의 JSON 입력 → createInvite(CreateInviteRequestDTO) → 업무 SQL → 새 링크 표시 또는 재발급 안내 → 모임 상세 재조회.
+GroupClient.inviteMembers() → POST → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 Group 분배 → GroupController의 JSON 입력 → createInvite(CreateInviteRequestDTO) → 업무 SQL → 새 링크 표시 또는 재발급 안내 → 모임 상세 재조회.
 
 1. onlyKeys(['replaceInviteId']), 제공된 ID는 textInput(...,128)로 검사.
 2. W-START → AUTH → IDEM-READ(operation=invite.create) → G-ACCESS. 현재 활성 생성자만 허용; 일반 멤버는 forbidden·ROLLBACK.
@@ -189,13 +194,13 @@ GroupClient.inviteMembers() → POST → Global/Auth → Controller의 JSON 입�
 
 ### G6. DELETE /api/groups/{groupId}/invites/{inviteId} — 초대 폐기
 
-GroupClient.revoke() 확인 창 → DELETE → Global/Auth → Controller → revokeInvite() → GroupMutationResult → 초대 목록 재조회.
+GroupClient.revoke() 확인 창 → DELETE → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 Group 분배 → GroupController → revokeInvite() → GroupMutationResult → 초대 목록 재조회.
 
 W-START → AUTH → IDEM-READ(operation=invite.revoke) → G-ACCESS의 생성자 검사 → G-REVOKE의 모임/초대 ID UPDATE·영향 행 확인 → IDEM-SAVE({ id: inviteId }) → COMMIT. 정상은 10회. 이미 폐기된 같은 초대는 COALESCE로 기존 폐기 시각을 유지한다. 초대가 없으면 not_found·ROLLBACK이며 이미 참여한 멤버십은 건드리지 않는다.
 
 ### G7. GET /api/invites/{token} — 초대 조회
 
-InviteClient.useResource() → GET → Global/Auth → Controller → getInvite() → R 스냅샷 → InvitePreview → 직접 수락 버튼 또는 이미 참여한 모임 링크.
+InviteClient.useResource() → GET → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 Group 분배 → GroupController → getInvite() → R 스냅샷 → InvitePreview → 직접 수락 버튼 또는 이미 참여한 모임 링크.
 
 1. R-START → AUTH.
 2. validInvite()가 원문 토큰의 43자 URL-safe 형식 검사. 잘못되면 not_found·ROLLBACK.
@@ -207,7 +212,7 @@ InviteClient.useResource() → GET → Global/Auth → Controller → getInvite(
 
 ### G8. POST /api/invites/{token}/accept — 참여 수락
 
-InviteClient.accept() → POST → Global/Auth → Controller → acceptInvite() → GroupMutationResult → 모임 상세 이동.
+InviteClient.accept() → POST → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 Group 분배 → GroupController → acceptInvite() → GroupMutationResult → 모임 상세 이동.
 
 1. W-START → AUTH → IDEM-READ(operation=invite.accept, payload={ tokenHash }).
 2. validInvite(): 토큰 형식 → G-VALID-INVITE → U-PROFILES로 현재 유효 초대/활성 생성자 검사.
