@@ -16,7 +16,7 @@ if (!database || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(database)
 process.env.DATABASE_URL = database
 process.env.AUTH_JWT_SECRET ||= 'isolated-group-test-secret-at-least-32-bytes'
 
-test('Group autocommit reads, group/invite creation and atomic replay/replacement; departure uses 2/3 business queries', async t => {
+test('Group autocommit reads, group/invite creation/revocation and atomic replay/replacement; departure uses 2/3 business queries', async t => {
   const client = createDatabaseClient(database)
   await client.connect()
   try {
@@ -158,7 +158,38 @@ test('Group autocommit reads, group/invite creation and atomic replay/replacemen
       } finally { await client.query(`ALTER TABLE mutation_requests DROP CONSTRAINT ${inviteConstraint}`) }
       const replaced = await trace(3, null, () => createInvite(owner, randomUUID(), group.id, { replaceInviteId: invite.id }))
       await assert.rejects(getInvite(participant, token), (error: { code: string }) => error.code === 'not_found')
-      await trace(8, true, () => revokeInvite(owner, randomUUID(), group.id, replaced.id))
+      for (const [actor, target, inviteId, requestKey, expected, count] of [
+        [participant, group.id, replaced.id, randomUUID(), 'forbidden', 2],
+        [outsider, group.id, replaced.id, randomUUID(), 'not_found', 2],
+        [owner, randomUUID(), replaced.id, randomUUID(), 'not_found', 2],
+        [owner, group.id, randomUUID(), randomUUID(), 'not_found', 3],
+        [owner, group.id, secondInvite.id, randomUUID(), 'not_found', 3],
+        [owner, group.id, replaced.id, 'invalid', 'invalid_request_key', 1],
+        [withdrawn, group.id, replaced.id, randomUUID(), 'unauthorized', 1],
+        [incomplete, group.id, replaced.id, randomUUID(), 'onboarding_required', 1],
+        [null, group.id, replaced.id, randomUUID(), 'unauthorized', 0],
+      ] as const) {
+        await trace(count, null, () => assert.rejects(revokeInvite(actor, requestKey, target, inviteId), (error: { code: string }) => error.code === expected))
+      }
+      const failedRevokeKey = randomUUID(), revokeConstraint = `invite_revoke_test_${randomUUID().replaceAll('-', '')}`
+      await client.query(`ALTER TABLE mutation_requests ADD CONSTRAINT ${revokeConstraint} CHECK (request_key <> '${failedRevokeKey}') NOT VALID`)
+      try {
+        await trace(3, null, () => assert.rejects(revokeInvite(owner, failedRevokeKey, group.id, replaced.id), (error: { code: string }) => error.code === '23514'))
+        assert.equal((await client.query('SELECT revoked_at FROM group_invites WHERE id=$1', [replaced.id])).rows[0].revoked_at, null, 'failed metadata INSERT rolls back revocation in the same statement')
+      } finally { await client.query(`ALTER TABLE mutation_requests DROP CONSTRAINT ${revokeConstraint}`) }
+      const revokeKey = randomUUID()
+      let revokeAudience: string[] = []
+      const revoked = await trace(3, null, () => revokeInvite(owner, revokeKey, group.id, replaced.id, ids => { revokeAudience = ids }))
+      assert.deepEqual(revoked, { id: replaced.id })
+      assert.deepEqual(revokeAudience, [owner.userId], 'capture the only invite-list viewer without another audience query')
+      const revokedAt = (await client.query('SELECT revoked_at FROM group_invites WHERE id=$1', [replaced.id])).rows[0].revoked_at
+      assert.deepEqual(await trace(2, null, () => revokeInvite(owner, revokeKey, group.id, replaced.id)), revoked)
+      await trace(2, null, () => assert.rejects(revokeInvite(owner, revokeKey, group.id, invite.id), (error: { code: string }) => error.code === 'idempotency_conflict'))
+      await trace(3, null, () => revokeInvite(owner, randomUUID(), group.id, replaced.id))
+      assert.equal((await client.query('SELECT revoked_at FROM group_invites WHERE id=$1', [replaced.id])).rows[0].revoked_at, revokedAt)
+      const concurrentRevokeKey = randomUUID()
+      assert.deepEqual(await Promise.all(Array.from({ length: 5 }, () => revokeInvite(owner, concurrentRevokeKey, group.id, replaced.id))), Array(5).fill(revoked))
+      await assert.rejects(getInvite(participant, replaced.sharePath!.split('/').at(-1)!), (error: { code: string }) => error.code === 'not_found')
       assert.deepEqual((await trace(3, null, () => getGroup(owner, group.id))).invites, [])
       const unfinished = await createRound(owner, randomUUID(), group.id, { name: '미종료 검사', currency: 'KRW', participantIds: [owner.userId, participant.userId] })
       for (const status of ['RECORDING', 'CONFIRMED', 'LOCKED']) {

@@ -20,9 +20,9 @@ SQL은 해당 함수의 실제 query() 문자열을 가져와 PostgreSQL 형식�
 | 현재 시각 | nowSeconds는 기존 currentTimestamp()의 공개 별칭. 같은 초 단위 계산을 중복 구현하지 않음 |
 | 인증 | [Node Proxy](../src/proxy.ts) → [JwtGuard](../src/Global/Auth/Backend/Guard/JwtGuard.ts). Controller 진입 전 JWT 검증. Service의 requireAccount()는 회원 상태 조회에 사용 |
 | 협력 조회 | [User Backend](../src/Domain/User/Backend/index.ts)의 getActiveUserProfiles(), [Settle Backend](../src/Domain/Settle/Backend/index.ts)의 미종료 여부 조회. Service가 같은 DB Client 전달 |
-| 실시간 | [Global Websocket Backend](../src/Global/Websocket/Backend/index.ts). publishGroupInvalidation() 구현에 위임; DELETE 수신자와 초대 발급 수신자는 업무 조회에서 확보 |
+| 실시간 | [Global Websocket Backend](../src/Global/Websocket/Backend/index.ts). publishGroupInvalidation() 구현에 위임; DELETE 수신자와 초대 발급/폐기 수신자는 업무 조회에서 확보 |
 
-입력 검증은 문자열 trim·필수/최대 길이, 허용 필드, 중복 없는 참여자 ID를 검사한다. 모임 이름은 최대 100자, 재발급 초대 ID는 최대 128자다. idsInput()은 현재 회차 코드에서도 사용하는 공통 함수다. 페이지네이션은 기본 limit=20, 허용 범위 1~100이고 커서의 길이·시각·ID를 검증한다. pageOf()는 limit+1 조회 중 실제 페이지와 다음 위치 커서를 만든다. 모임 생성은 명시적 트랜잭션 없이 UUIDv7 PK의 모임·생성자 멤버십을 단일 SQL로 저장한다. 초대 발급은 권한과 멱등 성공 기록을 함께 조회하고 단일 SQL로 초대·재발급 시 이전 초대 폐기·성공 기록을 저장한다. 나머지 쓰기는 domainMutation() 또는 leaveGroup()에서 인증 → 키/본문 검사·성공 재생 → 업무 실행 → 성공 기록 저장을 같은 쓰기 트랜잭션에서 수행한다.
+입력 검증은 문자열 trim·필수/최대 길이, 허용 필드, 중복 없는 참여자 ID를 검사한다. 모임 이름은 최대 100자, 재발급 초대 ID는 최대 128자다. idsInput()은 현재 회차 코드에서도 사용하는 공통 함수다. 페이지네이션은 기본 limit=20, 허용 범위 1~100이고 커서의 길이·시각·ID를 검증한다. pageOf()는 limit+1 조회 중 실제 페이지와 다음 위치 커서를 만든다. 모임 생성은 명시적 트랜잭션 없이 UUIDv7 PK의 모임·생성자 멤버십을 단일 SQL로 저장한다. 초대 발급·폐기는 권한과 멱등 성공 기록을 함께 조회하고 단일 SQL로 초대 생성 또는 폐기와 성공 기록을 저장한다. 재발급 시 이전 초대도 같은 SQL에서 폐기한다. 나머지 쓰기는 domainMutation() 또는 leaveGroup()에서 인증 → 키/본문 검사·성공 재생 → 업무 실행 → 성공 기록 저장을 같은 쓰기 트랜잭션에서 수행한다.
 
 ## 2. API 목록
 
@@ -92,7 +92,7 @@ WebSocket 최초 연결은 이미 확인한 AccountContext와 저장된 JWT를 �
 
 읽기 트랜잭션 자체는 R-START의 BEGIN 1문장과 COMMIT 1문장으로 총 2회다. 도메인용 명시적 락은 없다.
 
-### 쓰기 W — 모임 생성·초대 발급 제외
+### 쓰기 W — 모임 생성·초대 발급/폐기 제외
 
 1. Node Proxy → JWT Guard가 Route Handler/Controller 진입 전에 Access JWT를 검증한다. 통과한 요청은 Controller에서 JWT를 다시 확인하고 동일 출처 검사. JSON을 읽는 API는 기존 1MiB 제한·객체 본문 검사.
 2. 필요한 Service 입력 검증. 모임/초대 생성 입력은 트랜잭션 전에 검사.
@@ -104,7 +104,7 @@ WebSocket 최초 연결은 이미 확인한 AccountContext와 저장된 JWT를 �
 8. TX-COMMIT → 연결 반환 → Controller 응답. 실패는 전체 ROLLBACK.
 9. 실시간 기능이 켜져 있으면 성공 응답 후 after()에서 모임 무효화 알림. 재생 성공도 현재 Controller에서 알림을 예약한다.
 
-쓰기 트랜잭션 부가 SQL은 W-START의 BEGIN·락 2문장과 COMMIT 1문장으로 총 3회다. 모임 생성과 초대 발급은 이 경로를 사용하지 않는다. 다른 쓰기의 기존 전역 advisory lock을 회차 기록/수정에만 적용하도록 바꾸는 정책 전환은 별도 작업이다.
+쓰기 트랜잭션 부가 SQL은 W-START의 BEGIN·락 2문장과 COMMIT 1문장으로 총 3회다. 모임 생성과 초대 발급/폐기는 이 경로를 사용하지 않는다. 다른 쓰기의 기존 전역 advisory lock을 회차 기록/수정에만 적용하도록 바꾸는 정책 전환은 별도 작업이다.
 
 | operation | 멱등 payload |
 |---|---|
@@ -194,18 +194,18 @@ GroupClient.inviteMembers() → POST → Node Proxy → JWT Guard(Access JWT 검
 
 1. onlyKeys(['replaceInviteId']), 제공된 ID는 textInput(...,128)로 검사한다. 공용 풀 연결을 빌리며 BEGIN·COMMIT·ROLLBACK·명시적 락은 실행하지 않는다.
 2. AUTH로 본인 회원 상태를 조회한다. mutationDigest()로 키·본문을 검사한다.
-3. G-INVITE-CREATION에서 모임 생성자·활성 멤버십·기존 멱등 성공 기록을 함께 조회한다. 같은 키·본문은 링크 없는 성공 응답을 재생하고, 다른 본문은 idempotency_conflict로 거부한다. 신규 요청의 일반 멤버는 forbidden, 비멤버는 not_found로 거부한다.
+3. G-INVITE-MUTATION에서 모임 생성자·활성 멤버십·기존 멱등 성공 기록을 함께 조회한다. 같은 키·본문은 링크 없는 성공 응답을 재생하고, 다른 본문은 idempotency_conflict로 거부한다. 신규 요청의 일반 멤버는 forbidden, 비멤버는 not_found로 거부한다.
 4. 새 초대 UUID·32바이트 랜덤 토큰·현재 시각을 만들고 G-INSERT-INVITE 한 SQL에서 SHA-256 토큰 해시·7일 만료 초대·성공 메타데이터를 저장한다. replaceInviteId가 있으면 해당 모임의 이전 초대를 같은 SQL에서 폐기한다. 저장 시 활성 생성자 자격도 다시 확인하며, 대상 초대가 없으면 쓰기 없이 not_found를 반환한다.
-5. 성공 기록에는 { id, inviteId, linkUnavailable: true }만 저장하고 최초 성공 응답에만 메모리 토큰의 sharePath를 반환한다. 같은 키 동시 요청은 mutation_requests PK가 중복 저장을 막으며, 충돌한 문장 전체가 취소된 뒤 추가 G-INVITE-CREATION 조회로 성공을 재생하거나 본문 충돌을 거부한다.
+5. 성공 기록에는 { id, inviteId, linkUnavailable: true }만 저장하고 최초 성공 응답에만 메모리 토큰의 sharePath를 반환한다. 같은 키 동시 요청은 mutation_requests PK가 중복 저장을 막으며, 충돌한 문장 전체가 취소된 뒤 추가 G-INVITE-MUTATION 조회로 성공을 재생하거나 본문 충돌을 거부한다.
 6. Controller가 응답 후 after()에서 생성자에게 groups·group:{id} 무효화를 보낸다. 생성자 ID를 확보했으므로 후행 DB 조회·트랜잭션이 없다. POST 성공 핸들러는 공유 링크만 표시하며 직접 재조회하지 않는다. 기존 useResource 구독이 group:{id} 신호를 받으면 모임 상세와 초대 목록을 한 번 다시 읽는다. 최초 화면 진입·수동 오류 재시도·웹소켓 재연결 시 조회는 유지한다.
 
-신규 발급·재발급은 AUTH → G-INVITE-CREATION → G-INSERT-INVITE로 3회다. 일반 성공 재생·권한 거절은 2회다. 같은 키 동시 저장 충돌 시 복구 조회를 포함해 4회다. PostgreSQL 문장 원자성으로 새 초대·성공 기록 저장 실패 시 기존 초대 폐기도 함께 취소된다.
+신규 발급·재발급은 AUTH → G-INVITE-MUTATION → G-INSERT-INVITE로 3회다. 일반 성공 재생·권한 거절은 2회다. 같은 키 동시 저장 충돌 시 복구 조회를 포함해 4회다. PostgreSQL 문장 원자성으로 새 초대·성공 기록 저장 실패 시 기존 초대 폐기도 함께 취소된다.
 
 ### G6. DELETE /api/groups/{groupId}/invites/{inviteId} — 초대 폐기
 
 GroupClient.revoke() 확인 창 → DELETE → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 Group 분배 → GroupController → revokeInvite() → GroupMutationResult → 초대 목록 재조회.
 
-W-START → AUTH → IDEM-READ(operation=invite.revoke) → G-ACCESS의 생성자 검사 → G-REVOKE의 모임/초대 ID UPDATE·영향 행 확인 → IDEM-SAVE({ id: inviteId }) → COMMIT. 정상은 8회. 이미 폐기된 같은 초대는 COALESCE로 기존 폐기 시각을 유지한다. 초대가 없으면 not_found·ROLLBACK이며 이미 참여한 멤버십은 건드리지 않는다.
+명시적 트랜잭션·advisory lock·행 조회 락 없이 공용 풀 연결에서 AUTH → G-INVITE-MUTATION(operation=invite.revoke)의 활성 멤버십·생성자 검사 및 성공 재생 → G-REVOKE의 모임/초대 ID UPDATE·성공 기록 INSERT를 한 SQL로 실행한다. 정상은 3회, 성공 재생·권한 거절은 2회다. 같은 키 동시 저장 충돌 시 복구 조회를 포함해 4회다. 이미 폐기된 초대는 COALESCE로 기존 폐기 시각을 유지한다. 초대가 없으면 not_found이며 성공 기록을 저장하지 않는다. 저장 실패 시 문장 전체가 취소된다. 이미 참여한 멤버십은 유지하며, 폐기와 동시에 진행 중인 수락은 성공할 수 있다. 생성자만 초대 목록을 보므로 인증한 생성자를 무효화 수신자로 전달하여 추가 조회를 생략한다.
 
 ### G7. GET /api/invites/{token} — 초대 조회
 
@@ -233,7 +233,7 @@ InviteClient.accept() → POST → Node Proxy → JWT Guard(Access JWT 검사) �
 
 ### 성공 재생·실패·실시간의 별도 순서
 
-모임 생성 중복은 AUTH → G-CREATE로 2회이며 PK 오류를 409로 반환한다. 초대 발급 성공 재생은 AUTH → G-INVITE-CREATION으로 2회다. 나머지 모임 쓰기 성공 재생은 W-START(2) → AUTH → IDEM-READ → COMMIT으로 5회다. 업무 SQL·IDEM-SAVE는 반복하지 않는다. 초대 발급 재생에서는 원문 링크를 반환하지 않는다. 본문/키 오류·권한/정원/상태 오류·DB 오류는 성공 기록을 남기지 않는다. 모임 생성·초대 발급 실패는 단일 SQL의 원자성, 다른 쓰기 실패는 기존 트랜잭션 ROLLBACK으로 부분 저장을 막는다. 응답 유실은 같은 키·같은 payload로 재시도한다. 외부 파일 작업은 Group API에 없다.
+모임 생성 중복은 AUTH → G-CREATE로 2회이며 PK 오류를 409로 반환한다. 초대 발급 성공 재생은 AUTH → G-INVITE-MUTATION으로 2회다. 나머지 모임 쓰기 성공 재생은 W-START(2) → AUTH → IDEM-READ → COMMIT으로 5회다. 업무 SQL·IDEM-SAVE는 반복하지 않는다. 초대 발급 재생에서는 원문 링크를 반환하지 않는다. 본문/키 오류·권한/정원/상태 오류·DB 오류는 성공 기록을 남기지 않는다. 모임 생성·초대 발급 실패는 단일 SQL의 원자성, 다른 쓰기 실패는 기존 트랜잭션 ROLLBACK으로 부분 저장을 막는다. 응답 유실은 같은 키·같은 payload로 재시도한다. 외부 파일 작업은 Group API에 없다.
 
 DELETE는 G-DEPARTURE에서 확보한 변경 전 수신자에게, 초대 발급은 AUTH에서 확보한 생성자에게 추가 SQL 없이 groups·group:{id} 키만 내부 HTTP로 전달한다. 다른 모임 변경의 발행은 기존 별도 읽기 트랜잭션 R-START(1) → RT-PUBLISH → COMMIT으로 3회다. 이 후행 발행은 저장 트랜잭션에 속하지 않으며 발행 실패가 커밋된 결과를 롤백하지 않는다. 실시간 환경 변수가 꺼져 있으면 두 경로는 SQL 없이 생략된다.
 
@@ -507,29 +507,29 @@ $1=groupId, $2=사용자 ID, $3=현재 초 시각, $4=생성자 여부, $5=멱�
 출처: [src/Domain/Group/Backend/Repository/GroupRepository.ts](../src/Domain/Group/Backend/Repository/GroupRepository.ts).
 
 ```sql
-UPDATE group_invites
-SET
-  revoked_at = COALESCE(revoked_at, $3)
-WHERE
-  id = $1
-  AND group_id = $2;
+WITH revoked AS (
+    UPDATE group_invites SET revoked_at=COALESCE(revoked_at,$3)
+    WHERE id=$1 AND group_id=$2
+    RETURNING id
+  ) INSERT INTO mutation_requests(actor_id,operation,request_key,request_digest,resource_id,response_metadata,created_at)
+    SELECT $4,'invite.revoke',$5,$6,id,jsonb_build_object('id',id),$3 FROM revoked;
 ```
 
-$1=inviteId, $2=groupId, $3=현재 초 시각. rowCount가 없으면 Service가 not_found를 반환한다.
+$1=inviteId, $2=groupId, $3=현재 초 시각, $4=인증한 생성자 ID, $5=요청 키, $6=요청 digest. rowCount가 없으면 Service가 not_found를 반환한다. 폐기와 성공 기록은 한 SQL로 원자적으로 저장된다.
 
-### G-INVITE-CREATION — 생성자 권한과 초대 발급 재시도 조회
+### G-INVITE-MUTATION — 생성자 권한과 초대 발급/폐기 재시도 조회
 
-출처: [GroupRepository.findInviteCreation()](../src/Domain/Group/Backend/Repository/GroupRepository.ts).
+출처: [GroupRepository.findInviteMutation()](../src/Domain/Group/Backend/Repository/GroupRepository.ts).
 
 ```sql
 SELECT g.creator_id,m.user_id,previous.request_digest,previous.response_metadata
     FROM (SELECT $1::text AS id) requested
     LEFT JOIN groups g ON g.id=requested.id
     LEFT JOIN group_members m ON m.group_id=g.id AND m.user_id=$2 AND m.left_at IS NULL
-    LEFT JOIN mutation_requests previous ON previous.actor_id=$2 AND previous.operation='invite.create' AND previous.request_key=$3;
+    LEFT JOIN mutation_requests previous ON previous.actor_id=$2 AND previous.operation=$4 AND previous.request_key=$3;
 ```
 
-$1=groupId, $2=본인 ID, $3=요청 키. 존재하지 않는 모임도 기존 멱등 성공 기록을 조회할 수 있도록 requested에서 LEFT JOIN한다.
+$1=groupId, $2=본인 ID, $3=요청 키, $4=invite.create 또는 invite.revoke. 존재하지 않는 모임도 기존 멱등 성공 기록을 조회할 수 있도록 requested에서 LEFT JOIN한다.
 
 ### G-INSERT-INVITE — 초대·이전 초대 폐기·성공 기록 단일 SQL
 
@@ -714,10 +714,10 @@ $1=groupId. 별도 읽기 트랜잭션에 AUTH는 없고, 이미 허가된 커�
 | 목록·검색(비빈/빈) | 7 / 6 | 3 / 2 |
 | 상세(생성자/일반 멤버) | 8 / 7 | 3 / 2 |
 | 일반 이탈/생성자 닫기 | 11 / 12 | 6 / 6 |
-| 초대 발급/재발급/폐기 | 10 / 11 / 10 | 3 / 3 / 8 |
+| 초대 발급/재발급/폐기 | 10 / 11 / 10 | 3 / 3 / 3 |
 | 초대 조회 | 6 | 5 |
 | 참여 수락(비멤버/이미 멤버) | 11 / 10 | 10 / 9 |
-| 생성 중복(409) / 초대 발급 성공 재생 / 나머지 쓰기 성공 재생 | 7(이전 재생) / 7 / 7 | 2 / 2 / 5 |
+| 생성 중복(409) / 초대 발급·폐기 성공 재생 / 나머지 쓰기 성공 재생 | 7(이전 재생) / 7 / 7 | 2 / 2 / 5 |
 
 로컬 앱 SQL 확인:
 

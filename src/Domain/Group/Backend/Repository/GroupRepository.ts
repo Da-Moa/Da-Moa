@@ -1,6 +1,6 @@
 import 'server-only'
 import type { Database } from '../../../../Global/Util/Backend'
-import type { GroupRow, GroupListRow, InviteRow, InviteSummaryRow, InviteCreationRow, GroupMemberRow, GroupDepartureRow } from '../DAO/GroupDAO'
+import type { GroupRow, GroupListRow, InviteRow, InviteSummaryRow, InviteMutationRow, GroupMemberRow, GroupDepartureRow } from '../DAO/GroupDAO'
 
 type Cursor = { createdAt: string; id: string } | null
 
@@ -72,16 +72,21 @@ export async function leaveGroup(client: Database, groupId: string, userId: stri
     WHERE EXISTS(SELECT 1 FROM departed)`, [groupId, userId, now, isCreator, key, digest])
 }
 
-export async function revokeInvite(client: Database, groupId: string, inviteId: string, now: number) {
-  return (await client.query('UPDATE group_invites SET revoked_at=COALESCE(revoked_at,$3) WHERE id=$1 AND group_id=$2', [inviteId, groupId, now])).rowCount
+export async function revokeInvite(client: Database, groupId: string, inviteId: string, now: number, userId: string, key: string, digest: string) {
+  return (await client.query(`WITH revoked AS (
+    UPDATE group_invites SET revoked_at=COALESCE(revoked_at,$3)
+    WHERE id=$1 AND group_id=$2
+    RETURNING id
+  ) INSERT INTO mutation_requests(actor_id,operation,request_key,request_digest,resource_id,response_metadata,created_at)
+    SELECT $4,'invite.revoke',$5,$6,id,jsonb_build_object('id',id),$3 FROM revoked`, [inviteId, groupId, now, userId, key, digest])).rowCount
 }
 
-export async function findInviteCreation(client: Database, groupId: string, userId: string, key: string) {
-  return (await client.query<InviteCreationRow>(`SELECT g.creator_id,m.user_id,previous.request_digest,previous.response_metadata
+export async function findInviteMutation(client: Database, groupId: string, userId: string, key: string, operation: 'invite.create' | 'invite.revoke') {
+  return (await client.query<InviteMutationRow>(`SELECT g.creator_id,m.user_id,previous.request_digest,previous.response_metadata
     FROM (SELECT $1::text AS id) requested
     LEFT JOIN groups g ON g.id=requested.id
     LEFT JOIN group_members m ON m.group_id=g.id AND m.user_id=$2 AND m.left_at IS NULL
-    LEFT JOIN mutation_requests previous ON previous.actor_id=$2 AND previous.operation='invite.create' AND previous.request_key=$3`, [groupId, userId, key])).rows[0]
+    LEFT JOIN mutation_requests previous ON previous.actor_id=$2 AND previous.operation=$4 AND previous.request_key=$3`, [groupId, userId, key, operation])).rows[0]
 }
 
 export async function insertInvite(client: Database, id: string, groupId: string, userId: string, tokenHash: string, now: number, expiresAt: number, key: string, digest: string, replaceInviteId: string | null) {

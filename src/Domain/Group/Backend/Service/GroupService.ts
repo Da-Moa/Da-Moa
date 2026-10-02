@@ -14,10 +14,9 @@ function groupDTO(row: GroupRow): GroupSummary {
   return { id: row.id, name: row.name, creatorId: row.creator_id, createdAt: Number(row.created_at) }
 }
 
-async function memberGroup(client: Database, groupId: string, userId: string, owner = false) {
+async function memberGroup(client: Database, groupId: string, userId: string) {
   const row = await repository.findMemberGroup(client, groupId, userId)
   if (!row) throw missing()
-  if (owner && row.creator_id !== userId) throw creatorOnly()
   return row
 }
 
@@ -94,7 +93,7 @@ export async function createInvite(access: Identity, key: string, groupId: strin
   return withDatabaseConnection(async client => {
     const account = await requireAccount(client, access)
     const digest = mutationDigest(key, { groupId, ...body })
-    const group = await repository.findInviteCreation(client, groupId, account.id, key)
+    const group = await repository.findInviteMutation(client, groupId, account.id, key, 'invite.create')
     const replay = mutationResult<GroupMutationResult>(group, digest)
     captureAudience?.([account.id])
     if (replay) return replay
@@ -105,7 +104,7 @@ export async function createInvite(access: Identity, key: string, groupId: strin
       if (!await repository.insertInvite(client, id, groupId, account.id, createHash('sha256').update(token).digest('hex'), now, now + 7 * 86400, key, digest, body.replaceInviteId ? String(body.replaceInviteId) : null)) throw missing()
     } catch (error) {
       if (error && typeof error === 'object' && 'code' in error && error.code === '23505' && 'constraint' in error && error.constraint === 'mutation_requests_pkey') {
-        const concurrent = mutationResult<GroupMutationResult>(await repository.findInviteCreation(client, groupId, account.id, key), digest)
+        const concurrent = mutationResult<GroupMutationResult>(await repository.findInviteMutation(client, groupId, account.id, key, 'invite.create'), digest)
         if (concurrent) return concurrent
       }
       throw error
@@ -114,10 +113,25 @@ export async function createInvite(access: Identity, key: string, groupId: strin
   })
 }
 
-export async function revokeInvite(access: Identity, key: string, groupId: string, inviteId: string): Promise<GroupMutationResult> {
-  return domainMutation(access, key, 'invite.revoke', { groupId, inviteId }, async (client, userId) => {
-    await memberGroup(client, groupId, userId, true)
-    if (!await repository.revokeInvite(client, groupId, inviteId, nowSeconds())) throw missing()
+export async function revokeInvite(access: Identity, key: string, groupId: string, inviteId: string, captureAudience?: (userIds: string[]) => void): Promise<GroupMutationResult> {
+  return withDatabaseConnection(async client => {
+    const account = await requireAccount(client, access)
+    const digest = mutationDigest(key, { groupId, inviteId })
+    const group = await repository.findInviteMutation(client, groupId, account.id, key, 'invite.revoke')
+    const replay = mutationResult<GroupMutationResult>(group, digest)
+    captureAudience?.([account.id])
+    if (replay) return replay
+    if (!group.user_id) throw missing()
+    if (group.creator_id !== account.id) throw creatorOnly()
+    try {
+      if (!await repository.revokeInvite(client, groupId, inviteId, nowSeconds(), account.id, key, digest)) throw missing()
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === '23505' && 'constraint' in error && error.constraint === 'mutation_requests_pkey') {
+        const concurrent = mutationResult<GroupMutationResult>(await repository.findInviteMutation(client, groupId, account.id, key, 'invite.revoke'), digest)
+        if (concurrent) return concurrent
+      }
+      throw error
+    }
     return { id: inviteId }
   })
 }
