@@ -35,11 +35,16 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
     process.env.DB_QUERY_LOG = 'true'
     let statements: string[] = []
     const logger = t.mock.method(console, 'info', (message: string) => { statements.push(message.replace(/^SQL:\s*/, '').replace(/\s+/g, ' ').trim()) })
-    const trace = async <T>(count: number, write: boolean | 'receipt' | 'session' | 'connection' | 'cancel' | 'expense' | 'patch' | 'delete' | 'exclude' | 'confirm' | 'reopen', work: () => Promise<T>) => {
+    const trace = async <T>(count: number, write: boolean | 'receipt' | 'session' | 'connection' | 'cancel' | 'expense' | 'patch' | 'delete' | 'exclude' | 'confirm' | 'reopen' | 'draw', work: () => Promise<T>) => {
       statements = []
       const result = await work()
       assert.equal(statements.length, count, statements.join('\n'))
-      if (write === 'reopen') {
+      if (write === 'draw') {
+        assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory/.test(sql)))
+        if (count) assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
+        if (count > 1) assert.match(statements[1], /FROM rounds r JOIN round_members viewer.*operation = 'round.draw'/)
+        if (count === 3) assert.match(statements[2], /FOR UPDATE OF r.*INSERT INTO mutation_requests.*UPDATE rounds.*UPDATE expense_shares.*INSERT INTO settlement_balances.*INSERT INTO settlement_transfers/)
+      } else if (write === 'reopen') {
         assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory|FOR UPDATE|FOR SHARE|mutation_requests/.test(sql)))
         if (count) assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
         if (count > 1) assert.match(statements[1], /FROM rounds r JOIN groups g.*JOIN round_members m/)
@@ -541,16 +546,37 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       assert.equal((await trace(3, 'connection', () => checkExclusion(a, round.id, c.userId))).reason, 'already_excluded')
       await trace(5, false, () => getSettlement(a, round.id))
       const command = async (action: string, count: number) => {
-        const result = await trace(count, action === 'confirm' ? 'confirm' : action === 'reopen' ? 'reopen' : true, () => roundCommand(a, key(), round.id, action, { expectedVersion: version }))
+        const result = await trace(count, ['confirm', 'reopen', 'draw'].includes(action) ? action as 'confirm' | 'reopen' | 'draw' : true, () => roundCommand(a, key(), round.id, action, { expectedVersion: version }))
         version = result.version!
       }
       await command('confirm', 6)
       await command('reopen', 3)
       await command('confirm', 6)
       await command('send', 12)
-      // One expense: two shares + three historical members' balances + one transfer.
-      await command('draw', 17)
-      await command('draw', 7)
+      await t.test('draw uses AUTH then round then one atomic final save', async () => {
+        const requestKey = key(), request = { expectedVersion: version }
+        for (const [actor, ticket, id, input, expected, count] of [
+          [null, '', round.id, {}, 'unauthorized', 0],
+          [{ ...a, userId: randomUUID() }, '', round.id, {}, 'unauthorized', 1],
+          [a, '', round.id, request, 'invalid_request_key', 1],
+          [a, key(), round.id, { unexpected: true }, 'invalid_input', 1],
+          [b, key(), round.id, request, 'forbidden', 2],
+          [nonParticipant, key(), round.id, request, 'not_found', 2],
+          [a, key(), randomUUID(), request, 'not_found', 2],
+          [a, key(), round.id, { expectedVersion: '1' }, 'invalid_version', 2],
+          [a, key(), round.id, { expectedVersion: version - 1 }, 'stale_round', 2],
+        ] as const) await trace(count, 'draw', () => assert.rejects(roundCommand(actor, ticket, id, 'draw', input), (error: { code: string }) => error.code === expected))
+        const result = await trace(3, 'draw', () => roundCommand(a, requestKey, round.id, 'draw', request, audience => {
+          assert.equal(audience.groupId, group.id)
+          assert.deepEqual(new Set(audience.userIds), new Set([a.userId, b.userId, c.userId]))
+        }))
+        assert.equal(result.status, 'LOCKED')
+        assert.equal(result.version, version + 1)
+        assert.deepEqual(await trace(2, 'draw', () => roundCommand(a, requestKey, round.id, 'draw', request, () => assert.fail('replay must not publish'))), result)
+        await trace(2, 'draw', () => assert.rejects(roundCommand(a, requestKey, round.id, 'draw', { expectedVersion: result.version }), (error: { code: string }) => error.code === 'idempotency_conflict'))
+        assert.deepEqual(await trace(3, 'draw', () => roundCommand(a, key(), round.id, 'draw', request, () => assert.fail('saved draw must not publish'))), result)
+        version = result.version!
+      })
       await trace(2, 'connection', () => getRound(a, round.id, new URLSearchParams()))
       const settlement = await trace(8, false, () => getSettlement(a, round.id))
       assert.equal(settlement.outgoing.length, 1)

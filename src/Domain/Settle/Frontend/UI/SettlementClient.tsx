@@ -36,7 +36,7 @@ export default function SettlementClient({ roundId }: { roundId: string }) {
     if (name === 'force-complete' && !window.confirm(`아직 받을 내역을 모두 확인하지 않은 사람이 ${data.requiredCount - data.checkedCount}명 있어요. 확인을 기다리지 않고 강제로 정산을 종료할까요? 종료 후에는 되돌릴 수 없어요.`)) return
     const result = await action.run(() => apiRequest(`/api/rounds/${roundId}/${name}`, { method: 'POST', body: { expectedVersion: data.version } }))
     if (result && (name === 'complete' || name === 'force-complete')) router.push('/home/history')
-    else await reload()
+    else if (!result) await reload()
   }
   async function setChecked(checked: boolean, senderId?: string) {
     if (!data) return

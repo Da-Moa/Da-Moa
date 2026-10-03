@@ -284,6 +284,26 @@ test('authenticated WebSocket receives only its own committed invalidations', as
       await Promise.all(cleanupMessages)
     }
     const refreshCookie = mine.cookie.split('; ').find(value => value.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`))
+    const drawRoundId = uuidV7()
+    const roundPost = async (path, body, ticket = randomUUID()) => {
+      const notifications = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
+      const response = await fetch(`${origin}/api/${path}`, { method: 'POST', headers: { ...roundHeaders, 'idempotency-key': ticket }, body: JSON.stringify(body) })
+      assert.equal(response.status, 200, await response.clone().text())
+      await Promise.all(notifications)
+      return (await response.json()).data
+    }
+    await roundPost(`groups/${groupId}/rounds`, roundBody, drawRoundId)
+    const drawExpense = await roundPost(`rounds/${drawRoundId}/expenses`, { description: '추첨 SQL 검증', amount: '3', payerId: memberId, splitMode: 'ALL', expectedVersion: 1 })
+    const drawConfirmed = await roundPost(`rounds/${drawRoundId}/confirm`, { expectedVersion: drawExpense.version })
+    const drawLocked = await roundPost(`rounds/${drawRoundId}/send`, { expectedVersion: drawConfirmed.version })
+    const drawOutput = output.length
+    const drawResult = await roundPost(`rounds/${drawRoundId}/draw`, { expectedVersion: drawLocked.version })
+    const drawSql = output.slice(drawOutput).split('SQL:').slice(1).map(sql => sql.trim())
+    assert.equal(drawSql.length, 3, 'draw including WebSocket publication uses exactly three SQL calls')
+    assert.match(drawSql[0], /FROM\s+users/)
+    assert.match(drawSql[1], /operation = 'round.draw'/)
+    assert.match(drawSql[2], /FOR UPDATE OF\s+r[\s\S]*INSERT INTO\s+mutation_requests[\s\S]*UPDATE\s+rounds[\s\S]*UPDATE\s+expense_shares[\s\S]*INSERT INTO\s+settlement_balances[\s\S]*INSERT INTO\s+settlement_transfers/)
+    await roundPost(`rounds/${drawRoundId}/force-complete`, { expectedVersion: drawResult.version })
     const refreshed = await fetch(`${origin}/api/auth/refresh`, { method: 'POST', headers: { origin, cookie: refreshCookie } })
     assert.equal(refreshed.status, 200, 'Refresh JWT works without an Access JWT')
     assert.equal((await fetch(`${origin}/api/me`, { headers: { authorization: `Bearer ${mine.accessToken}` } })).status, 200, 'Refresh rotation does not revoke an unexpired Access JWT')

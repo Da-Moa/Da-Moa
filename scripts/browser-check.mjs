@@ -1,5 +1,5 @@
 import { uuidV7 } from '../src/lib/uuid.ts'
-// UI regression in an isolated local DB; --expenses-only checks round mutation invalidation.
+// UI regression in an isolated local DB; --expenses-only checks expense/round/draw mutation invalidation.
 // Run with a dev server using that same test DB and Chrome --remote-debugging-port=9223.
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
@@ -170,7 +170,7 @@ try {
     await navigate(`/home/rounds/${round.id}`, '지출 내역이 없습니다.')
     await waitFor('window.__roundSocket?.readyState === WebSocket.OPEN')
     await new Promise(resolve => setTimeout(resolve, 700))
-    async function websocketOnly(label, action, updated) {
+    async function websocketOnly(label, action, updated, resource = `/api/rounds/${round.id}`) {
       const reads = apiReads.length
       await action()
       await waitFor('window.__roundInvalidations.length > 0')
@@ -179,7 +179,7 @@ try {
       await evaluate("window.__roundInvalidations.splice(0).forEach(({ socket, data }) => socket.onmessage(new MessageEvent('message', { data })))")
       await waitFor(updated)
       await new Promise(resolve => setTimeout(resolve, 700))
-      assert.deepEqual(apiReads.slice(reads), [`/api/rounds/${round.id}`], `${label}: exactly one GET after invalidation`)
+      assert.deepEqual(apiReads.slice(reads), [resource], `${label}: exactly one GET after invalidation`)
       console.log(`PASS ${label}: mutation GET 0, WebSocket GET 1`)
     }
     await click('지출 추가')
@@ -193,6 +193,17 @@ try {
     await websocketOnly('confirm POST', () => click('정산 확정'), "Boolean(document.querySelector('.state-confirmed'))")
     await websocketOnly('reopen POST', () => click('기록 단계로 다시 열기'), "Boolean(document.querySelector('.state-recording'))")
     await websocketOnly('expense DELETE', () => click('삭제'), hasText('지출 내역이 없습니다.'))
+    await click('지출 추가')
+    await fill('[name=description]', '웹소켓 추첨 검증')
+    await fill('[name=amount]', '3')
+    await websocketOnly('draw setup expense', async () => { await click('지출 저장'); await waitFor("!document.querySelector('.expense-form')") }, hasText('웹소켓 추첨 검증'))
+    await websocketOnly('draw setup confirm', () => click('정산 확정'), "Boolean(document.querySelector('.state-confirmed'))")
+    await click('전송 안내 확인')
+    await waitFor(hasText('랜덤 돌리기'))
+    await waitFor('window.__roundSocket?.readyState === WebSocket.OPEN')
+    await new Promise(resolve => setTimeout(resolve, 700))
+    await evaluate('window.__roundInvalidations.splice(0)')
+    await websocketOnly('draw POST', () => click('랜덤 돌리기'), "Boolean(document.querySelector('.copy-link input')?.value)", `/api/rounds/${round.id}/settlement`)
     assert.deepEqual(exceptions, [])
     await cdp('Page.removeScriptToEvaluateOnNewDocument', { identifier: hold.identifier })
     ws.close()

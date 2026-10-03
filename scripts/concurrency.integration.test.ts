@@ -137,6 +137,53 @@ test('reopen and send recheck a competing transition after the round read', { ti
   }
 })
 
+test('draw rechecks concurrent results and idempotency keys after its round read', { timeout: 15000 }, async t => {
+  for (const scenario of ['same-key', 'new-key', 'other-round']) {
+    const fixture = await recordingRound()
+    const confirm = await roundCommand(fixture.owner, key(), fixture.roundId, 'confirm', { expectedVersion: fixture.version })
+    const locked = await roundCommand(fixture.owner, key(), fixture.roundId, 'send', { expectedVersion: confirm.version })
+    const requestKey = key(), body = { expectedVersion: locked.version }
+    let winnerRoundId = fixture.roundId, winnerVersion = locked.version
+    if (scenario === 'other-round') {
+      const round = await createRound(fixture.owner, uuidV7(), fixture.groupId, { name: '같은 키 경합', currency: 'KRW', participantIds: [fixture.owner.userId, fixture.participant.userId] })
+      const expense = await saveExpense(fixture.owner, key(), round.id, { description: '다른 회차', amount: '3', payerId: fixture.owner.userId, splitMode: 'ALL', expectedVersion: round.version })
+      const confirmed = await roundCommand(fixture.owner, key(), round.id, 'confirm', { expectedVersion: expense.version })
+      winnerRoundId = round.id
+      winnerVersion = (await roundCommand(fixture.owner, key(), round.id, 'send', { expectedVersion: confirmed.version })).version
+    }
+    const pool = getDatabasePool(process.env.DATABASE_URL!), connect = pool.connect.bind(pool)
+    let resume!: () => void, reached!: () => void
+    const paused = new Promise<void>(resolve => { reached = resolve }), gate = new Promise<void>(resolve => { resume = resolve })
+    const connectionMock = t.mock.method(pool, 'connect', async () => {
+      connectionMock.mock.restore()
+      const borrowed = await connect()
+      const queryMock = t.mock.method(borrowed, 'query', new Proxy(borrowed.query, {
+        apply(target, receiver, args) {
+          const pending = Reflect.apply(target, receiver, args)
+          if (String(args[0]).includes("operation='round.draw'")) {
+            queryMock.mock.restore()
+            return pending.then(async (result: unknown) => { reached(); await gate; return result })
+          }
+          return pending
+        },
+      }))
+      return borrowed
+    })
+    const older = roundCommand(fixture.owner, requestKey, fixture.roundId, 'draw', body, () => assert.fail('losing draw must not publish'))
+      .then(result => ({ result, error: undefined }), error => ({ result: undefined, error }))
+    try {
+      await paused
+      const winner = await roundCommand(fixture.owner, scenario === 'new-key' ? key() : requestKey, winnerRoundId, 'draw', { expectedVersion: winnerVersion })
+      const saved = await getRound(fixture.owner, fixture.roundId, new URLSearchParams())
+      resume()
+      const outcome = await older
+      if (scenario === 'other-round') assert.equal(outcome.error?.code, 'idempotency_conflict')
+      else assert.deepEqual(outcome.result, winner)
+      assert.deepEqual(await getRound(fixture.owner, fixture.roundId, new URLSearchParams()), saved)
+    } finally { resume(); connectionMock.mock.restore(); await older }
+  }
+})
+
 test('settlement checks compose concurrently and normal/forced completion cannot both commit', async () => {
   const finalRound = async () => {
     const fixture = await recordingRound()

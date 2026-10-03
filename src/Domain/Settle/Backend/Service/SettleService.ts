@@ -414,9 +414,9 @@ function validateExpenses(items: Awaited<ReturnType<typeof settlementExpensesFor
   return { items, members }
 }
 
-async function finalize(client: Database, roundId: string, currency: Currency, draw: boolean) {
+async function finalize(client: Database, roundId: string, currency: Currency) {
   const { items, members } = await validatedExpenses(client, roundId, currency)
-  const result = finalizeSettlement(items, members.map(m => m.userId), draw ? max => randomInt(max) : undefined)
+  const result = finalizeSettlement(items, members.map(m => m.userId))
   for (const share of result.shares) await repository.saveFinalShare(client, share.expenseId, share.userId, share.amountMinor, share.receivedRemainder)
   for (const balance of result.balances) await repository.insertBalance(client, roundId, balance.userId, balance.paidMinor, balance.burdenMinor, balance.balanceMinor)
   for (const transfer of result.transfers) await repository.insertTransfer(client, roundId, transfer.senderId, transfer.receiverId, transfer.amountMinor)
@@ -458,6 +458,35 @@ async function confirmRound(access: Identity, key: string, roundId: string, body
 
 export async function roundCommand(access: Identity, key: string, roundId: string, action: string, body: VersionRequestDTO | Record<string, unknown>, captureAudience?: (audience: { groupId: string; userIds: string[] }) => void): Promise<MutationResult> {
   if (action === 'confirm') return confirmRound(access, key, roundId, body, captureAudience)
+  if (action === 'draw') return withDatabaseConnection(async client => {
+    const account = await requireAccount(client, access)
+    onlyKeys(body, ['expectedVersion'])
+    const digest = mutationDigest(key, { roundId, ...body })
+    const { rows: [round] } = await repository.findRoundConfirmation(client, roundId, account.id, key, 'draw')
+    const replay = mutationResult<MutationResult>(round, digest)
+    if (replay) return replay
+    if (!round.id) throw missing()
+    creator(round)
+    let settlement: ReturnType<typeof finalizeSettlement> | null = null
+    if (round.finalized_at === null) {
+      version(round, body.expectedVersion)
+      state(round, 'LOCKED')
+      const { items, members } = validateExpenses(round.expenses.map(settlementExpenseDetails), round.members.map(memberDetails), round.currency)
+      settlement = finalizeSettlement(items, members.map(member => member.userId), max => randomInt(max))
+    }
+    const current = await repository.drawRound(client, roundId, account.id, key, digest, round.version, nowSeconds(), settlement)
+    if (!current.actor_active) throw new AppError(401, 'unauthorized', '로그인이 필요합니다')
+    const result = mutationResult<MutationResult>(current, digest)
+    if (!result) {
+      if (!current.id) throw missing()
+      creator(current)
+      state(current, 'LOCKED')
+      version(current, body.expectedVersion)
+      throw new AppError(409, 'stale_round', '다른 변경이 먼저 저장됐어요. 최신 내역을 확인해 주세요')
+    }
+    if (current.drawn) captureAudience?.({ groupId: round.group_id, userIds: round.user_ids })
+    return result
+  })
   if (action === 'reopen') return withDatabaseConnection(async client => {
     const account = await requireAccount(client, access)
     onlyKeys(body, ['expectedVersion'])
@@ -492,11 +521,10 @@ export async function roundCommand(access: Identity, key: string, roundId: strin
     }, async client => { userId = (await requireAccount(client, access)).id })
   }
   onlyKeys(body, ['expectedVersion'])
-  if (!['send', 'draw', 'complete', 'force-complete'].includes(action)) throw missing()
+  if (!['send', 'complete', 'force-complete'].includes(action)) throw missing()
   return domainMutation(access, key, `round.${action}`, { roundId, ...body }, async (client, userId) => {
     const round = await roundFor(client, roundId, userId)
     creator(round)
-    if (action === 'draw' && round.finalized_at !== null) return { id: roundId, roundId, status: round.status, version: round.version }
     version(round, body.expectedVersion)
     const now = nowSeconds()
     if (action === 'send') {
@@ -505,10 +533,7 @@ export async function roundCommand(access: Identity, key: string, roundId: strin
       const { rowCount } = await repository.lockRound(client, roundId, now, round.version)
       if (!rowCount) throw new AppError(409, 'stale_round', '다른 변경이 먼저 저장됐어요. 최신 내역을 확인해 주세요')
       const { rows } = await repository.findRemainder(client, roundId)
-      if (!rows.length) await finalize(client, roundId, round.currency as Currency, false)
-    } else if (action === 'draw') {
-      state(round, 'LOCKED')
-      await finalize(client, roundId, round.currency as Currency, true)
+      if (!rows.length) await finalize(client, roundId, round.currency as Currency)
     } else if (action === 'complete' || action === 'force-complete') {
       state(round, 'LOCKED')
       if (round.finalized_at === null) throw new AppError(409, 'invalid_round_state', '나머지 배분을 먼저 완료해 주세요')

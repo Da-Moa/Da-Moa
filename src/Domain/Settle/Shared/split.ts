@@ -40,7 +40,7 @@ export function validateCustomShares(total: bigint, participantIds: string[], sh
 }
 
 /**
- * Pure calculation. The server supplies crypto.randomInt only after locking the round;
+ * Pure calculation. The server supplies crypto.randomInt for a locked round;
  * the caller commits this entire result atomically and never redraws a saved result.
  */
 function settle(

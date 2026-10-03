@@ -175,6 +175,22 @@ test('Route Handler contracts enforce Bearer JWTs, origin, idempotency, normaliz
     const checked = (await (await request(`rounds/${roundId}/settlement`, a.accessToken)).json()).data
     assert.deepEqual({ checkedCount: checked.checkedCount, requiredCount: checked.requiredCount, allChecked: checked.allChecked }, { checkedCount: 1, requiredCount: 1, allChecked: true })
     assert.equal((await request(`rounds/${roundId}/complete`, a.accessToken, 'POST', { expectedVersion: locked.version })).status, 200)
+    const drawRound = (await (await request(`groups/${groupId}/rounds`, b.accessToken, 'POST', { name: '추첨 API 계약', currency: 'KRW', participantIds: [a.userId, b.userId] })).json()).data
+    const drawExpense = (await (await request(`rounds/${drawRound.id}/expenses`, b.accessToken, 'POST', { description: '나머지', amount: '3', payerId: a.userId, splitMode: 'ALL', expectedVersion: drawRound.version })).json()).data
+    const drawConfirm = (await (await request(`rounds/${drawRound.id}/confirm`, b.accessToken, 'POST', { expectedVersion: drawExpense.version })).json()).data
+    const drawLocked = (await (await request(`rounds/${drawRound.id}/send`, b.accessToken, 'POST', { expectedVersion: drawConfirm.version })).json()).data
+    const drawPath = `rounds/${drawRound.id}/draw`, drawBody = { expectedVersion: drawLocked.version }, drawKey = randomUUID()
+    assert.equal((await request(drawPath, a.accessToken, 'POST', drawBody)).status, 403, 'only the round creator may draw')
+    assert.equal((await request(drawPath, outsider.accessToken, 'POST', drawBody)).status, 404)
+    const drawn = await request(drawPath, b.accessToken, 'POST', drawBody, { 'idempotency-key': drawKey })
+    assert.equal(drawn.status, 200, await drawn.clone().text())
+    const drawResult = (await drawn.json()).data
+    assert.deepEqual(drawResult, { id: drawRound.id, roundId: drawRound.id, status: 'LOCKED', version: drawLocked.version + 1 })
+    for (const ticket of [drawKey, randomUUID()]) {
+      assert.deepEqual((await (await request(drawPath, b.accessToken, 'POST', drawBody, { 'idempotency-key': ticket })).json()).data, drawResult)
+    }
+    assert.equal((await request(drawPath, b.accessToken, 'POST', { expectedVersion: drawResult.version }, { 'idempotency-key': drawKey })).status, 409)
+    assert.equal((await (await request(`rounds/${drawRound.id}/settlement`, b.accessToken)).json()).data.finalized, true)
     assert.equal((await request(`invites/${token}/accept`, outsider.accessToken, 'POST')).status, 200)
     const exclusionRound = (await (await request(`groups/${groupId}/rounds`, b.accessToken, 'POST', { name: '제외 API 계약', currency: 'KRW', participantIds: [a.userId, b.userId, outsider.userId] })).json()).data
     const exclusionPath = `rounds/${exclusionRound.id}/members/${a.userId}/exclude`

@@ -1,7 +1,7 @@
 import 'server-only'
 import type { Database } from '../../../../Global/Util/Backend'
 import { roundCreationCandidatesSql } from '../../../Group/Backend'
-import type { Currency, Expense, MutationResult } from '../../Shared'
+import type { Currency, Expense, MutationResult, finalizeSettlement } from '../../Shared'
 import type { RoundRow, RoundDetailRow, RoundConfirmationRow, ExpenseUpdateRow, ExpenseDeletionRow, MemberExclusionRow, MemberRow, ExpenseRow, ShareRow, ReceiptRow, SettlementExpenseRow, OutgoingRow, IncomingRow } from '../DAO/SettleDAO'
 
 export function findRound(client: Database, id: string, userId: string) {
@@ -301,7 +301,7 @@ export function finalizeRound(client: Database, roundId: string, now: number) {
   return client.query('UPDATE rounds SET finalized_at=$2 WHERE id=$1', [roundId, now])
 }
 
-const roundConfirmationContextSql = `context AS MATERIALIZED (
+const roundSettlementContextSql = (operation: 'confirm' | 'draw') => `context AS MATERIALIZED (
   SELECT r.*,(r.creator_id=$2) AS is_creator,
     ARRAY(SELECT user_id FROM round_members WHERE round_id=r.id ORDER BY user_id) AS user_ids,
     (SELECT jsonb_agg(jsonb_build_object('user_id',m.user_id,'display_name_snapshot',m.display_name_snapshot,
@@ -313,19 +313,19 @@ const roundConfirmationContextSql = `context AS MATERIALIZED (
         FROM expense_shares s WHERE s.expense_id=e.id)) ORDER BY e.id) FROM expenses e WHERE e.round_id=r.id),'[]'::jsonb) AS expenses
     FROM rounds r JOIN round_members viewer ON viewer.round_id=r.id AND viewer.user_id=$2 WHERE r.id=$1
 ), saved AS MATERIALIZED (
-  SELECT request_digest,response_metadata FROM mutation_requests WHERE actor_id=$2 AND operation='round.confirm' AND request_key=$3
+  SELECT request_digest,response_metadata FROM mutation_requests WHERE actor_id=$2 AND operation='round.${operation}' AND request_key=$3
 ), actor AS (
   SELECT EXISTS(SELECT 1 FROM users WHERE id=$2 AND deleted_at IS NULL AND onboarding_completed_at IS NOT NULL) AS active
 )`
 
-export function findRoundConfirmation(client: Database, roundId: string, userId: string, key: string) {
-  return client.query<RoundConfirmationRow>(`WITH ${roundConfirmationContextSql}
+export function findRoundConfirmation(client: Database, roundId: string, userId: string, key: string, operation: 'confirm' | 'draw' = 'confirm') {
+  return client.query<RoundConfirmationRow>(`WITH ${roundSettlementContextSql(operation)}
     SELECT context.*,actor.active AS actor_active,saved.request_digest,saved.response_metadata FROM actor
     LEFT JOIN context ON true LEFT JOIN saved ON true`, [roundId, userId, key])
 }
 
 export async function confirmRound(client: Database, roundId: string, userId: string, key: string, digest: string, expectedVersion: number, now: number) {
-  return (await client.query<RoundConfirmationRow>(`WITH ${roundConfirmationContextSql}, confirmed AS (
+  return (await client.query<RoundConfirmationRow>(`WITH ${roundSettlementContextSql('confirm')}, confirmed AS (
     UPDATE rounds SET status='CONFIRMED',confirmed_at=$6,version=version+1
     WHERE id=$1 AND creator_id=$2 AND version=$5 AND status='RECORDING' AND completed_at IS NULL
       AND (SELECT active FROM actor) AND NOT EXISTS(SELECT 1 FROM saved)
@@ -343,6 +343,47 @@ export async function confirmRound(client: Database, roundId: string, userId: st
     COALESCE(recorded.response_metadata,saved.response_metadata) AS response_metadata,EXISTS(SELECT 1 FROM confirmed) AS confirmed
     FROM actor LEFT JOIN context ON true LEFT JOIN saved ON true LEFT JOIN recorded ON true`,
   [roundId, userId, key, digest, expectedVersion, now])).rows[0]
+}
+
+export async function drawRound(client: Database, roundId: string, userId: string, key: string, digest: string, expectedVersion: number, now: number, result: ReturnType<typeof finalizeSettlement> | null) {
+  return (await client.query<RoundRow & { actor_active: boolean; request_digest: string | null; response_metadata: unknown; drawn: boolean }>(`WITH actor AS (
+    SELECT EXISTS(SELECT 1 FROM users WHERE id=$2 AND deleted_at IS NULL AND onboarding_completed_at IS NOT NULL) AS active
+  ), locked AS MATERIALIZED (
+    SELECT r.*,(r.creator_id=$2) AS is_creator FROM rounds r
+    JOIN round_members viewer ON viewer.round_id=r.id AND viewer.user_id=$2 WHERE r.id=$1 FOR UPDATE OF r
+  ), recorded AS (
+    INSERT INTO mutation_requests(actor_id,operation,request_key,request_digest,resource_id,response_metadata,created_at)
+    SELECT $2,'round.draw',$3,$4,$1,jsonb_build_object('id',$1::text,'roundId',$1::text,'status',status,
+      'version',version+CASE WHEN finalized_at IS NULL THEN 1 ELSE 0 END),$6
+    FROM locked WHERE is_creator AND (SELECT active FROM actor)
+      AND (finalized_at IS NOT NULL OR (status='LOCKED' AND completed_at IS NULL AND version=$5))
+    ON CONFLICT (actor_id,operation,request_key) DO UPDATE SET request_key=EXCLUDED.request_key
+    RETURNING request_digest,response_metadata
+  ), finalized AS (
+    UPDATE rounds r SET finalized_at=$6,version=r.version+1 FROM locked,recorded
+    WHERE r.id=locked.id AND locked.finalized_at IS NULL AND locked.status='LOCKED'
+      AND locked.completed_at IS NULL AND locked.version=$5 AND recorded.request_digest=$4
+    RETURNING r.id
+  ), shares AS (
+    UPDATE expense_shares s SET final_amount_minor=data.amount_minor,received_remainder=data.received_remainder
+    FROM jsonb_to_recordset($7::jsonb) AS data(expense_id text,user_id text,amount_minor numeric,received_remainder boolean)
+    WHERE s.round_id=$1 AND s.expense_id=data.expense_id AND s.user_id=data.user_id AND EXISTS(SELECT 1 FROM finalized)
+  ), balances AS (
+    INSERT INTO settlement_balances(round_id,user_id,paid_minor,burden_minor,balance_minor)
+    SELECT $1,data.user_id,data.paid_minor,data.burden_minor,data.balance_minor
+    FROM jsonb_to_recordset($8::jsonb) AS data(user_id text,paid_minor numeric,burden_minor numeric,balance_minor numeric)
+    WHERE EXISTS(SELECT 1 FROM finalized)
+  ), transfers AS (
+    INSERT INTO settlement_transfers(round_id,sender_id,receiver_id,amount_minor)
+    SELECT $1,data.sender_id,data.receiver_id,data.amount_minor
+    FROM jsonb_to_recordset($9::jsonb) AS data(sender_id text,receiver_id text,amount_minor numeric)
+    WHERE EXISTS(SELECT 1 FROM finalized)
+  ) SELECT locked.*,actor.active AS actor_active,recorded.request_digest,recorded.response_metadata,
+    EXISTS(SELECT 1 FROM finalized) AS drawn FROM actor LEFT JOIN locked ON true LEFT JOIN recorded ON true`,
+  [roundId, userId, key, digest, expectedVersion, now,
+    JSON.stringify(result?.shares.map(s => ({ expense_id: s.expenseId, user_id: s.userId, amount_minor: s.amountMinor, received_remainder: s.receivedRemainder })) ?? []),
+    JSON.stringify(result?.balances.map(b => ({ user_id: b.userId, paid_minor: b.paidMinor, burden_minor: b.burdenMinor, balance_minor: b.balanceMinor })) ?? []),
+    JSON.stringify(result?.transfers.map(t => ({ sender_id: t.senderId, receiver_id: t.receiverId, amount_minor: t.amountMinor })) ?? [])])).rows[0]
 }
 
 export function findRoundReopening(client: Database, roundId: string, userId: string) {

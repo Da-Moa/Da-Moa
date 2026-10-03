@@ -1072,15 +1072,19 @@ RoundClient.command('send')의 확인 → POST → Node Proxy → JWT Guard → 
 
 ### S14. POST /api/rounds/{roundId}/draw — 나머지 한 번 추첨
 
-SettlementClient.command('draw') → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.roundCommand('draw',VersionRequestDTO) → W → MutationResult → 정산 안내 재조회.
+SettlementClient.command('draw') → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.roundCommand('draw',VersionRequestDTO) → MutationResult → WebSocket invalidation 시 정산 안내 GET 1회.
 
-1. expectedVersion만 허용. W → S-ROUND → 생성자 확인. finalized_at이 이미 있으면 버전/상태 검사 전에 저장된 상태·버전을 반환하여 재추첨을 막는다.
-2. 미저장 회차는 버전·LOCKED 확인 → S-MEMBERS → S-SETTLEMENT-EXPENSES로 지출·부담금 재검증.
-3. finalizeSettlement()에 crypto.randomInt를 전달한다. 지출별 서로 다른 균등 부담자에게 최소 단위 1씩 나머지를 배분하고 CUSTOM 지정 부담금은 유지한다.
-4. S-FINAL-SHARE × S → S-BALANCE-INSERT × M → S-TRANSFER-INSERT × T → S-FINALIZE → S-BUMP.
-5. IDEM-SAVE → COMMIT. 중간 저장 실패는 전체 ROLLBACK이며 최종 결과가 저장된 회차를 다시 뽑지 않는다.
+1. 공용 풀 연결에서 AUTH로 가입 완료·미탈퇴 회원을 조회한다(+1). expectedVersion만 허용하고 mutationDigest()로 요청 키·본문을 검증한다.
+2. findRoundConfirmation(...,'draw')의 단일 조회(+1)로 참여 이력이 있는 회차·전체 참여자·지출별 부담자·CUSTOM 지정 부담금·같은 키의 성공 응답을 확보한다. 같은 키 성공은 재생하고 다른 본문은 idempotency_conflict다. 미저장 회차는 회차 생성자·버전·LOCKED·미종료를 검사하고 기존 validateExpenses()로 지출을 재검증한다(SQL 0회).
+3. 기존 finalizeSettlement()와 crypto.randomInt로 지출별 서로 다른 균등 부담자에게 최소 단위 1을 배분한다(KRW 1원·JPY 1엔·USD 1센트). CUSTOM 지정 부담금은 유지하며 BigInt로 최종 분담·잔액·송금을 계산한다. 이미 finalized_at이 있으면 계산하지 않는다.
+4. drawRound()의 단일 CTE 저장(+1)에서 해당 회차 행만 FOR UPDATE로 잠그고 현재 회원·생성자·상태·버전·finalized_at을 재검사한다. mutation_requests의 유일 키와 ON CONFLICT로 동시 멱등 충돌을 확인하고, 최초 추첨만 최종 분담·잔액·송금·finalized_at·버전 증가·성공 응답을 원자적으로 저장한다. LOCKED를 유지하면서 finalized_at을 설정해 최종 정산 안내를 활성화한다. 나중에 도착한 추첨은 저장된 응답을 반환하며 결과를 덮어쓰지 않는다. 어느 저장 단계가 실패해도 SQL 문장 전체가 취소된다.
+5. 성공 후 조회에서 확보한 참여자에게 invalidation 키만 발행한다. 알림 대상 추가 SQL은 없고 성공 재생·이미 저장된 추첨은 알림을 발행하지 않는다. 성공 POST는 직접 GET을 보내지 않으며 WebSocket invalidation을 받은 useResource만 정산 안내를 조회한다. 실패 시 기존 복구 조회·수동 새로고침은 유지한다.
 
-SQL: W 6회 + S-ROUND → S-MEMBERS → S-SETTLEMENT-EXPENSES → 최종 행 저장 F회 → S-FINALIZE → S-BUMP = **11 + F회**. 이미 저장된 결과를 새 키로 요청하면 W 6회 + S-ROUND = **7회**, 같은 키 성공 재생은 5회다.
+SQL 순서: **AUTH → 회차 통합 조회 → 생성자·상태·버전 검사/난수 계산(SQL 0회) → 최종 결과 단일 저장 = 3회**. 지출·분담금·참여자·송금 행 수와 무관하며 WebSocket 발행까지 포함한다. 명시적 BEGIN/COMMIT·공통 advisory lock은 없고 저장 SQL 내부의 회차 행 잠금은 문장 종료 시 해제된다. 같은 키 성공 재생·권한/회차 없음·상태/버전 거절은 **2회**, 이미 최종 저장된 회차를 새 키로 요청하면 성공 응답 기록까지 **3회**, 회원/입력/키 거절은 **1회**, JWT Guard 거절은 **0회**다.
+
+검증: `scripts/settle-sql.integration.test.ts`는 실제 SQL 순서·3회·생성자 권한·멱등 재생·알림 대상을 확인한다. `scripts/settlement.integration.test.ts`는 중간 저장 실패의 원자성·동시 추첨·재추첨 방지·정확한 최소 단위/CUSTOM 보존을, `scripts/concurrency.integration.test.ts`는 조회 이후 같은 키/새 키 선행 추첨과 다른 회차의 같은 키 충돌을 검증한다. `scripts/routes.integration.test.ts`는 HTTP 권한·성공·재시도·충돌을, `scripts/realtime.integration.test.mjs`는 WebSocket 발행까지 SQL 3회를, `scripts/browser-check.mjs`는 추첨 POST의 직접 GET 0회·invalidation 후 정산 GET 1회를 검증한다.
+
+검증(2026-10-04): `npm test` **96개**, 전용 로컬 테스트 PostgreSQL·MinIO와 격리 복사본의 `npm run test:integration` **58개**, `npm run build` 통과. `scripts/browser-check.mjs --expenses-only`에서 지출·확정·재오픈·추첨 POST의 직접 GET **0회**·WebSocket 후 리소스 GET **1회**를 확인했다. 전체 브라우저 검증은 추첨 이전 CUSTOM 지출 삭제 단계의 stale_round로 중단되어 전체 통과로 기록하지 않는다.
 
 ### S15. GET /api/rounds/{roundId}/settlement — 내 정산·최신 수취 계좌
 
