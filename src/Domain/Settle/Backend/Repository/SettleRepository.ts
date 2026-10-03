@@ -2,7 +2,7 @@ import 'server-only'
 import type { Database } from '../../../../Global/Util/Backend'
 import { roundCreationCandidatesSql } from '../../../Group/Backend'
 import type { Currency, Expense, MutationResult } from '../../Shared'
-import type { RoundRow, RoundDetailRow, ExpenseUpdateRow, ExpenseDeletionRow, MemberRow, ExpenseRow, ShareRow, ReceiptRow, SettlementExpenseRow, ExclusionExpenseRow, OutgoingRow, IncomingRow } from '../DAO/SettleDAO'
+import type { RoundRow, RoundDetailRow, ExpenseUpdateRow, ExpenseDeletionRow, MemberExclusionRow, MemberRow, ExpenseRow, ShareRow, ReceiptRow, SettlementExpenseRow, OutgoingRow, IncomingRow } from '../DAO/SettleDAO'
 
 export function findRound(client: Database, id: string, userId: string) {
   return client.query<RoundRow>(`SELECT r.*,g.name AS group_name,g.creator_id AS group_creator_id,
@@ -241,8 +241,7 @@ export async function deleteExpense(client: Database, roundId: string, expenseId
   [roundId, expenseId, userId, key, digest, expectedVersion, now])).rows[0]
 }
 
-export function findExclusionExpenses(client: Database, roundId: string, targetId: string) {
-  return client.query<Pick<MemberRow, 'excluded_at'> & { member_count: string; expenses: ExclusionExpenseRow[] }>(`SELECT m.excluded_at,
+const exclusionFields = `m.excluded_at,
     (SELECT count(*) FROM round_members WHERE round_id=$1 AND excluded_at IS NULL) AS member_count,
     COALESCE((SELECT jsonb_agg(jsonb_build_object('id',e.id,'description',e.description,'amount_minor',e.amount_minor::text,
       'author_id',e.author_id,'author_name',a.display_name_snapshot,'reason',
@@ -250,16 +249,40 @@ export function findExclusionExpenses(client: Database, roundId: string, targetI
       ORDER BY e.created_at,e.id)
       FROM expenses e JOIN expense_shares s ON s.expense_id=e.id AND s.user_id=$2
       JOIN round_members a ON a.round_id=e.round_id AND a.user_id=e.author_id
-      WHERE e.round_id=$1 AND (e.payer_id=$2 OR e.split_mode IN ('SELECTED','CUSTOM'))),'[]'::jsonb) AS expenses
+      WHERE e.round_id=$1 AND (e.payer_id=$2 OR e.split_mode IN ('SELECTED','CUSTOM'))),'[]'::jsonb) AS expenses`
+
+export function findExclusionExpenses(client: Database, roundId: string, targetId: string) {
+  return client.query<Pick<MemberExclusionRow, 'excluded_at' | 'member_count' | 'expenses'>>(`SELECT ${exclusionFields}
     FROM round_members m WHERE m.round_id=$1 AND m.user_id=$2`, [roundId, targetId])
 }
 
-export function excludeMember(client: Database, roundId: string, targetId: string, now: number) {
-  return client.query('UPDATE round_members SET excluded_at=$3 WHERE round_id=$1 AND user_id=$2', [roundId, targetId, now])
+export function findMemberExclusion(client: Database, roundId: string, targetId: string, userId: string) {
+  return client.query<MemberExclusionRow>(`SELECT r.*,g.name AS group_name,g.creator_id AS group_creator_id,
+    (r.creator_id=$3) AS is_creator,m.user_id AS target_id,${exclusionFields},
+    ARRAY(SELECT user_id FROM round_members WHERE round_id=r.id ORDER BY user_id) AS user_ids,
+    ARRAY(SELECT gm.user_id FROM group_members gm JOIN users u ON u.id=gm.user_id
+      WHERE gm.group_id=r.group_id AND gm.left_at IS NULL AND u.deleted_at IS NULL ORDER BY gm.user_id) AS group_user_ids
+    FROM rounds r JOIN groups g ON g.id=r.group_id JOIN round_members viewer ON viewer.round_id=r.id AND viewer.user_id=$3
+    LEFT JOIN round_members m ON m.round_id=r.id AND m.user_id=$2 WHERE r.id=$1`, [roundId, targetId, userId])
 }
 
-export function removeAllShareMember(client: Database, roundId: string, targetId: string) {
-  return client.query("DELETE FROM expense_shares s USING expenses e WHERE s.expense_id=e.id AND e.round_id=$1 AND e.split_mode='ALL' AND s.user_id=$2", [roundId, targetId])
+export async function excludeMember(client: Database, roundId: string, targetId: string, userId: string, expectedVersion: number, now: number) {
+  return (await client.query<MutationResult>(`WITH bumped AS (
+    UPDATE rounds r SET version=version+1 WHERE r.id=$1 AND r.creator_id=$3 AND r.creator_id<>$2
+      AND r.version=$4 AND r.status='RECORDING' AND r.completed_at IS NULL
+      AND EXISTS(SELECT 1 FROM users WHERE id=$3 AND deleted_at IS NULL AND onboarding_completed_at IS NOT NULL)
+      AND EXISTS(SELECT 1 FROM round_members WHERE round_id=r.id AND user_id=$2 AND excluded_at IS NULL)
+      AND (SELECT count(*) FROM round_members WHERE round_id=r.id AND excluded_at IS NULL)>2
+      AND NOT EXISTS(SELECT 1 FROM expenses e JOIN expense_shares s ON s.expense_id=e.id AND s.user_id=$2
+        WHERE e.round_id=r.id AND (e.payer_id=$2 OR e.split_mode IN ('SELECTED','CUSTOM')))
+    RETURNING id AS "roundId",status,version
+  ), excluded AS (
+    UPDATE round_members SET excluded_at=$5 WHERE round_id=$1 AND user_id=$2 AND excluded_at IS NULL
+      AND EXISTS(SELECT 1 FROM bumped) RETURNING user_id
+  ), removed AS (
+    DELETE FROM expense_shares s USING expenses e WHERE s.expense_id=e.id AND e.round_id=$1
+      AND e.split_mode='ALL' AND s.user_id IN (SELECT user_id FROM excluded)
+  ) SELECT * FROM bumped WHERE EXISTS(SELECT 1 FROM excluded)`, [roundId, targetId, userId, expectedVersion, now])).rows[0]
 }
 
 export function saveFinalShare(client: Database, expenseId: string, userId: string, amountMinor: string, receivedRemainder: boolean) {

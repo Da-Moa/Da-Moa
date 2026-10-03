@@ -7,7 +7,7 @@ import { CURRENCIES, formatMoney, MAX_EXPENSE_MAJOR, MAX_ROUND_TOTAL_MAJOR, mino
 import { calculateBase, finalizeSettlement, previewSettlement, validateCustomShares } from '../../Shared'
 import type { ExclusionCheck, Expense, MutationResult, RoundDetail, RoundMember, RoundStatus, RoundSummary, SettlementDTO, SettlementTransfer } from '../../Shared'
 
-import type { RoundRow, MemberRow, ExpenseRow, ShareRow, ReceiptRow, ExpenseUpdateRow, ExpenseDeletionRow } from '../DAO/SettleDAO'
+import type { RoundRow, MemberRow, ExpenseRow, ShareRow, ReceiptRow, ExpenseUpdateRow, ExpenseDeletionRow, MemberExclusionRow } from '../DAO/SettleDAO'
 import { duplicateRound, missing } from '../Exception/SettleException'
 import * as repository from '../Repository/SettleRepository'
 
@@ -347,6 +347,10 @@ async function cleanupReceiptObjects(keys: string[]) {
 async function exclusions(client: Database, round: RoundRow, targetId: string): Promise<ExclusionCheck> {
   const { rows: [member] } = await repository.findExclusionExpenses(client, round.id, targetId)
   if (!member) throw missing()
+  return exclusionCheck(round, targetId, member)
+}
+
+function exclusionCheck(round: RoundRow, targetId: string, member: Pick<MemberExclusionRow, 'excluded_at' | 'member_count' | 'expenses'>): ExclusionCheck {
   const rows = member.expenses
   const reason = round.creator_id === targetId ? 'round_creator_cannot_leave' : member.excluded_at !== null ? 'already_excluded' : !['RECORDING', 'CONFIRMED'].includes(round.status) ? 'invalid_round_state' : rows.length ? 'member_exclusion_blocked' : Number(member.member_count) <= 2 ? 'minimum_participants' : null
   return { allowed: reason === null, reason, expenses: rows.map(e => ({ id: e.id, description: e.description, amountMinor: e.amount_minor, authorId: e.author_id, authorName: e.author_name, reason: e.reason })) }
@@ -360,18 +364,22 @@ export async function checkExclusion(access: Identity, roundId: string, userId: 
   })
 }
 
-export async function excludeMember(access: Identity, key: string, roundId: string, targetId: string, body: VersionRequestDTO | Record<string, unknown>) {
-  onlyKeys(body, ['expectedVersion'])
-  return domainMutation(access, key, 'member.exclude', { roundId, targetId, ...body }, async (client, userId) => {
-    const round = await roundFor(client, roundId, userId)
+export async function excludeMember(access: Identity, key: string, roundId: string, targetId: string, body: VersionRequestDTO | Record<string, unknown>, captureAudience?: (audience: { groupId: string; userIds: string[]; groupUserIds: string[] }) => void) {
+  return withDatabaseConnection(async client => {
+    const account = await requireAccount(client, access)
+    onlyKeys(body, ['expectedVersion'])
+    mutationDigest(key, { roundId, targetId, ...body })
+    const { rows: [round] } = await repository.findMemberExclusion(client, roundId, targetId, account.id)
+    if (!round) throw missing()
     creator(round)
+    if (!round.target_id || round.excluded_at !== null) throw missing()
     state(round, 'RECORDING')
     version(round, body.expectedVersion)
-    const check = await exclusions(client, round, targetId)
+    const check = exclusionCheck(round, targetId, round)
     if (!check.allowed) throw new AppError(409, check.reason === 'minimum_participants' ? check.reason : 'member_exclusion_blocked', check.expenses.length ? '해당 사용자와 연관된 정산이 있습니다.' : check.reason === 'minimum_participants' ? '회차는 최소 2명이어야 합니다' : '해당 사용자는 제외할 수 없어요', check)
-    const result = await bump(client, roundId, round.version)
-    await repository.excludeMember(client, roundId, targetId, nowSeconds())
-    await repository.removeAllShareMember(client, roundId, targetId)
+    const result = await repository.excludeMember(client, roundId, targetId, account.id, round.version, nowSeconds())
+    if (!result) throw new AppError(409, 'stale_round', '다른 변경이 먼저 저장됐어요. 최신 내역을 확인해 주세요')
+    captureAudience?.({ groupId: round.group_id, userIds: round.user_ids, groupUserIds: round.group_user_ids })
     return result
   })
 }

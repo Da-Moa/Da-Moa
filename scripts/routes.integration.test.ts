@@ -175,6 +175,19 @@ test('Route Handler contracts enforce Bearer JWTs, origin, idempotency, normaliz
     const checked = (await (await request(`rounds/${roundId}/settlement`, a.accessToken)).json()).data
     assert.deepEqual({ checkedCount: checked.checkedCount, requiredCount: checked.requiredCount, allChecked: checked.allChecked }, { checkedCount: 1, requiredCount: 1, allChecked: true })
     assert.equal((await request(`rounds/${roundId}/complete`, a.accessToken, 'POST', { expectedVersion: locked.version })).status, 200)
+    assert.equal((await request(`invites/${token}/accept`, outsider.accessToken, 'POST')).status, 200)
+    const exclusionRound = (await (await request(`groups/${groupId}/rounds`, b.accessToken, 'POST', { name: '제외 API 계약', currency: 'KRW', participantIds: [a.userId, b.userId, outsider.userId] })).json()).data
+    const exclusionPath = `rounds/${exclusionRound.id}/members/${a.userId}/exclude`
+    assert.equal((await request(exclusionPath, a.accessToken, 'POST', { expectedVersion: 1 })).status, 403, 'group creator cannot exclude in another member’s round')
+    const exclusionKey = randomUUID()
+    const exclusion = await request(exclusionPath, b.accessToken, 'POST', { expectedVersion: 1 }, { 'Idempotency-Key': exclusionKey })
+    assert.equal(exclusion.status, 200)
+    assert.deepEqual((await exclusion.json()).data, { roundId: exclusionRound.id, status: 'RECORDING', version: 2 })
+    for (const ticket of [exclusionKey, randomUUID()]) {
+      const repeated = await request(exclusionPath, b.accessToken, 'POST', { expectedVersion: 1 }, { 'Idempotency-Key': ticket })
+      assert.equal(repeated.status, 404)
+      assert.equal((await repeated.json()).error, 'not_found')
+    }
     assert.equal((await request('unknown/endpoint', a.accessToken)).status, 404)
   } finally { await client.end() }
 })

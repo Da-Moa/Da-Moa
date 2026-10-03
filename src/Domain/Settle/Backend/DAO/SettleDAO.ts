@@ -40,6 +40,10 @@ export type RoundDetailRow = RoundRow & {
 export type ExclusionExpenseRow = {
   id: string; description: string; amount_minor: string; author_id: string; author_name: string; reason: string
 }
+export type MemberExclusionRow = RoundRow & {
+  target_id: string | null; excluded_at: string | null; member_count: string; expenses: ExclusionExpenseRow[];
+  user_ids: string[]; group_user_ids: string[]
+}
 export type OutgoingRow = {
   receiver_id: string; amount_minor: string; display_name_snapshot: string; profile_image_url: string | null;
   bank_name: string | null; account_number: string | null; account_number_formatted: string | null;

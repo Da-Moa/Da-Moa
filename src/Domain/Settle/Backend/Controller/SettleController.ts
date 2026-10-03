@@ -43,7 +43,10 @@ export async function getSettleResponse(request: NextRequest, path: string[]): P
       data = await deleteExpense(access, key, path[1], path[3], await jsonBody(request), audience => { affectedAudience = audience })
     }
     else if (path[0] === 'rounds' && path.length === 5 && path[2] === 'members' && path[4] === 'exclusion-check' && method === 'GET') data = await checkExclusion(access, path[1], path[3])
-    else if (path[0] === 'rounds' && path.length === 5 && path[2] === 'members' && path[4] === 'exclude' && method === 'POST') data = await excludeMember(access, key, path[1], path[3], await jsonBody(request))
+    else if (path[0] === 'rounds' && path.length === 5 && path[2] === 'members' && path[4] === 'exclude' && method === 'POST') {
+      affectedAudience = null
+      data = await excludeMember(access, key, path[1], path[3], await jsonBody(request), audience => { affectedAudience = audience })
+    }
     else if (path[0] === 'rounds' && path.length === 5 && path[2] === 'expenses' && path[4] === 'receipts' && method === 'POST') {
       if (!access) throw new AppError(401, 'unauthorized', '로그인이 필요합니다')
       let form: FormData
