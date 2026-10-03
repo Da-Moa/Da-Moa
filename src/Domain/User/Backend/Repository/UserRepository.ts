@@ -60,12 +60,14 @@ export async function saveOnboarding(client: Database, userId: string, bank: Ban
 }
 
 export async function saveBankAccount(client: Database, userId: string, bank: BankAccountInput, now: number) {
-  await client.query(`UPDATE users SET bank_name = $2, account_number = $3, account_holder = $4,
+  const { rowCount } = await client.query(`UPDATE users SET bank_name = $2, account_number = $3, account_holder = $4,
       bank_updated_at = $5, updated_at = $5, bank_code = $6, account_number_formatted = $7,
       bank_verified_at = CASE WHEN bank_code=$6 AND account_number=$3 AND account_holder=$4 THEN bank_verified_at ELSE NULL END,
       bank_verification_tran_id = CASE WHEN bank_code=$6 AND account_number=$3 AND account_holder=$4 THEN bank_verification_tran_id ELSE NULL END,
-      bank_version = bank_version + 1 WHERE id = $1`,
-    [userId, bank.bankName, bank.accountNumber, bank.accountHolder, now, bank.bankCode, bank.formattedAccountNumber])
+      bank_version = bank_version + 1 WHERE id = $1 AND bank_version = $8
+        AND deleted_at IS NULL AND onboarding_completed_at IS NOT NULL`,
+    [userId, bank.bankName, bank.accountNumber, bank.accountHolder, now, bank.bankCode, bank.formattedAccountNumber, bank.expectedBankVersion])
+  return rowCount === 1
 }
 
 export async function softDeleteUser(client: Database, userId: string, now: number) {

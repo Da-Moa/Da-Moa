@@ -67,7 +67,7 @@ GroupSummary는 모임 ID·이름·생성자 ID·생성 시각이다. 목록은 
 |---|---|---|---|---|
 | GET /api/me | getMeResponse() → getMe() | 없음 | `{ data: Account }`: 프로필·가입/탈퇴 상태·본인 계좌·bankVersion | 본인 정보만 조회, 가입 전 JWT 허용 |
 | POST /api/me/onboarding | getOnboardingResponse() → completeOnboarding() | OnboardingRequestDTO: bankCode·accountNumber·accountHolder·expectedBankVersion·선택 confirmRejoin | `{ data: { id, returnTo, accessToken } }` + Refresh 쿠키 | 온보딩 목적·최신 계좌 버전·탈퇴 회원의 명시적 재가입 동의 |
-| PUT /api/me/bank-account | getBankAccountResponse() → updateBankAccount() | BankAccountRequestDTO + Idempotency-Key | `{ data: { id, bankVersion } }` | 가입 완료 회원, 성공 재생을 버전 검사보다 먼저 처리 |
+| PUT /api/me/bank-account | getBankAccountResponse() → updateBankAccount() | BankAccountRequestDTO + Idempotency-Key | `{ data: { id, bankVersion } }` | 가입 완료 회원, 계좌 버전 조건부 갱신·실패 시 409 |
 | POST /api/auth/withdraw | getWithdrawalResponse() → withdrawAccount() | 없음 | `{ ok: true }` + 인증·복귀·OIDC 쿠키 삭제 | 제외된 참여 이력까지 모든 미종료 회차가 없어야 함 |
 
 은행 입력은 기존 수동 등록만 지원한다. 계좌 원본 숫자·표시 형식을 분리하며, 신규 가입/재가입은 확인 이력을 초기화한다. 계좌 변경은 같은 정규화 은행·번호·예금주일 때만 기존 확인 이력을 보존한다. 진행 중 정산이 있어도 대표 계좌 변경은 가능하다. 가입 완료·탈퇴에는 멱등 기록을 새로 추가하지 않았다.
@@ -787,7 +787,7 @@ JWT 인증 전환 검증 결과(2026-10-02): 단위 85개, 격리된 로컬 DB·
 
 ## 7. User 요청 흐름·SQL
 
-최초 User 분리는 기존 SQL·트랜잭션을 유지했다. 후속 개선으로 GET /api/me는 공용 풀 연결에서 AUTH 한 문장만 실행하고, POST /api/me/onboarding은 AUTH와 조건부 UPDATE만 실행한다. 두 API는 트랜잭션·명시적 락을 사용하지 않는다. 대표 계좌 변경·탈퇴의 기존 트랜잭션은 유지한다. 아래 수는 `BEGIN`·기존 advisory lock·`COMMIT`까지 포함하며, 응답 후 실시간 알림의 별도 조회는 제외한다.
+최초 User 분리는 기존 SQL·트랜잭션을 유지했다. 후속 개선으로 GET /api/me는 공용 풀 연결에서 AUTH 한 문장만 실행하고, POST /api/me/onboarding과 PUT /api/me/bank-account는 AUTH와 조건부 UPDATE만 실행한다. 세 API는 트랜잭션·명시적 락을 사용하지 않는다. 탈퇴의 기존 트랜잭션은 유지한다. 아래 수는 `BEGIN`·기존 advisory lock·`COMMIT`까지 포함하며, 응답 후 실시간 알림의 별도 조회는 제외한다.
 
 ### U1. GET /api/me — 내 정보 조회
 
@@ -819,17 +819,17 @@ OnboardingForm.register() → POST → Node Proxy → JWT Guard(Access JWT 검�
 
 ### U3. PUT /api/me/bank-account — 대표 계좌 변경
 
-AccountPanel.save() → PUT → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 User 위임 → UserController.getBankAccountResponse() → updateBankAccount() → 공용 풀의 두 쓰기 트랜잭션 → BankAccountResponseDTO → 입력 정리·최신 /api/me 재조회·폼 닫기.
+AccountPanel.save() → PUT → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 User 위임 → UserController.getBankAccountResponse() → updateBankAccount() → 공용 풀 연결 → BankAccountResponseDTO → 입력 정리·최신 /api/me 재조회·폼 닫기.
 
-1. Controller가 sameOrigin() 검사 → 최대 16,384바이트 JSON·Idempotency-Key 읽기. Service가 objectBody()·normalizeBankAccountInput()으로 수동 계좌 입력과 expectedBankVersion 검증·정규화. 입력 오류는 DB 접근 전에 거절한다.
-2. 첫 W-START(2) → AUTH로 가입 완료·미탈퇴 회원 확인. 서버 비밀키로 경로·회원 ID·정규화 은행/번호/예금주·계좌 버전 등의 HMAC fingerprint 생성. replayMutation()이 UUID 요청 키를 검사하고 operation='bank-account.update'의 IDEM-READ 실행.
-3. 같은 키·같은 fingerprint의 성공 기록이 있으면 TX-COMMIT 후 기존 `{ id, bankVersion }` 반환. 같은 키의 입력이 다르면 idempotency_conflict·TX-ROLLBACK. 성공 기록이 없으면 첫 트랜잭션을 COMMIT하고 fingerprint 유지.
-4. 두 번째 W-START(2) → AUTH → IDEM-READ로 현재 회원 상태와 성공 기록 재확인. 다른 동시 요청이 같은 작업을 이미 저장했다면 버전 검사 전에 성공 재생. 성공 기록이 없을 때만 assertBankVersion()으로 expectedBankVersion 확인.
-5. U-BANK-UPDATE: UserRepository.saveBankAccount()가 계좌 원본·표시 형식·은행·예금주·갱신 시각을 UPDATE하고 bank_version 증가. 기존 은행 코드·계좌번호·예금주가 정규화 입력과 같을 때만 확인 이력을 유지하며, 다르면 초기화한다.
-6. IDEM-SAVE로 `{ id, bankVersion: expectedBankVersion + 1 }` 성공 메타데이터 저장 → TX-COMMIT. 계좌와 성공 기록은 같은 트랜잭션에서 저장하며 실패는 함께 ROLLBACK.
-7. Controller가 `{ data: { id, bankVersion } }` 반환·after()로 publishBankInvalidation() 예약. 프론트의 최신 내 정보 재조회가 실패하면 재제출을 잠그고 다시 불러오기 안내를 표시한다.
+1. Controller가 sameOrigin() 검사 → 최대 16,384바이트 JSON·Idempotency-Key 읽기. 공용 풀 연결을 확보하며 BEGIN·COMMIT·ROLLBACK·명시적 락·SET은 실행하지 않는다.
+2. AUTH: requireAccount()가 본인 회원을 조회하고 가입 완료·미탈퇴·app 목적을 확인한다.
+3. objectBody()·normalizeBankAccountInput()으로 허용 필드·은행 코드·계좌번호·예금주·expectedBankVersion 검증 및 정규화. 은행명은 지원 은행 코드의 이름을 사용한다. 기존 mutationDigest()로 UUID 요청 키 형식만 검사하며 성공 기록을 조회·저장하지 않는다.
+4. U-BANK-UPDATE: UserRepository.saveBankAccount()가 `id`·expectedBankVersion과 일치하고 현재도 활성 가입 상태(`deleted_at IS NULL AND onboarding_completed_at IS NOT NULL`)인 행만 UPDATE한다. 계좌 원본·표시 형식·은행·예금주·갱신 시각·bank_version 증가를 한 문장으로 저장한다. 기존 은행 코드·계좌번호·예금주가 정규화 입력과 같을 때만 확인 이력을 유지하며, 다르면 초기화한다. 갱신 행이 0개면 409 bank_account_conflict로 거절한다.
+5. 성공하면 `{ data: { id, bankVersion: expectedBankVersion + 1 } }` 반환·after()로 publishBankInvalidation() 예약. 연결은 성공·실패 모두 finally에서 풀에 반환한다. 프론트는 기존 ErrorNotice로 실패를 표시하고 버전 충돌 시 최신 정보 다시 불러오기를 제공한다.
 
-정상 SQL: 첫 W-START(2) → AUTH → IDEM-READ → TX-COMMIT = 5회, 두 번째 W-START(2) → AUTH → IDEM-READ → U-BANK-UPDATE → IDEM-SAVE → TX-COMMIT = 7회, 합계 12회. 첫 조회의 성공 재생은 5회, 두 번째 조회의 성공 재생·버전 충돌은 합계 10회다. 입력 오류는 0회이며 진행 중 정산 조회·외부 계좌 확인은 없다. 응답 유실은 같은 키·같은 입력으로 재시도하며 성공 재생은 버전 검사보다 먼저 처리한다.
+정상 SQL: **AUTH 내 정보 읽기 (+1) → 입력 검증 → U-BANK-UPDATE 조건부 UPDATE (+1) = 2회**. 기존 12회에서 트랜잭션·락·중복 AUTH·멱등 기록 SQL을 제거했다. 출처·JSON·JWT 거절은 0회, 회원 상태·계좌 입력·요청 키 오류는 AUTH 1회, 버전 충돌과 AUTH 후 상태 변경 거절은 AUTH + UPDATE 2회다. 같은 버전의 동시 요청은 하나만 성공하며, 같은 요청 키·본문의 재전송도 이미 저장된 버전이면 409다. 응답이 유실되면 최신 내 정보를 조회해 저장 결과를 확인한다. 진행 중 정산 조회·외부 계좌 확인은 없다.
+
+[scripts/user.integration.test.ts](../scripts/user.integration.test.ts)에서 실제 SQL 2회·트랜잭션/락/멱등 기록 미실행, AUTH 우선 검증, 동시 수정의 단일 성공, 409 응답과 안내, 동일 계좌 확인 보존·변경 시 초기화, AUTH 후 탈퇴/가입 상태 변경 거절 및 연결 반환을 검증한다.
 
 ### U4. POST /api/auth/withdraw — 회원탈퇴
 

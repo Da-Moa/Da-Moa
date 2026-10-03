@@ -4,12 +4,13 @@ import test from 'node:test'
 import { NextRequest } from 'next/server'
 import { createAccessToken, currentTimestamp, readAccessToken } from '../src/lib/auth.ts'
 import { signInKakao } from '../src/Global/Auth/Backend/index.ts'
-import { completeOnboarding } from '../src/Domain/User/Backend/index.ts'
-import { findUser, saveOnboarding } from '../src/Domain/User/Backend/Repository/UserRepository.ts'
+import { completeOnboarding, updateBankAccount } from '../src/Domain/User/Backend/index.ts'
+import { findUser, saveBankAccount, saveOnboarding } from '../src/Domain/User/Backend/Repository/UserRepository.ts'
 import { normalizeBankAccountInput } from '../src/Domain/User/Shared/index.ts'
 import { createDatabaseClient, withDatabaseConnection } from '../src/lib/db.ts'
 import { getDatabasePool } from '../src/lib/db-client.mjs'
 import { GET } from '../src/app/api/me/route.ts'
+import { PUT } from '../src/app/api/me/bank-account/route.ts'
 import { applyMigrations } from './migrations.mjs'
 import { completeTestOnboarding } from './bank-test-support.ts'
 
@@ -61,6 +62,76 @@ test('GET /api/me uses one AUTH SELECT without transaction SQL for app, onboardi
     assert.equal(statements.length, 0)
     const pool = getDatabasePool(database)
     assert.equal(pool.idleCount, pool.totalCount, 'all borrowed connections are returned after success and rejection')
+  } finally {
+    if (previousLog === undefined) delete process.env.DB_QUERY_LOG
+    else process.env.DB_QUERY_LOG = previousLog
+    await client.end()
+  }
+})
+
+test('bank account uses AUTH then validation then conditional UPDATE; one concurrent request wins and conflicts return 409', async t => {
+  const client = createDatabaseClient(database)
+  await client.connect()
+  const previousLog = process.env.DB_QUERY_LOG
+  const input = { bankCode: '004', accountNumber: '001234', accountHolder: '계좌 검증', expectedBankVersion: 1 }
+  const code = (expected: string) => (error: unknown) => (error as { code?: string }).code === expected
+  let statements: string[] = []
+  try {
+    await applyMigrations(client)
+    const signup = await signInKakao(`user-bank:${randomUUID()}`, { displayName: input.accountHolder, email: null, profileImageUrl: null })
+    const app = await completeOnboarding(readAccessToken(signup.accessToken), { ...input, expectedBankVersion: 0 })
+    const access = readAccessToken(app.accessToken)
+    process.env.DB_QUERY_LOG = 'true'
+    t.mock.method(console, 'info', (message: string) => { statements.push(message.replace(/^SQL:\s*/, '').replace(/\s+/g, ' ').trim()) })
+    const trace = async <T>(count: number, work: () => Promise<T>) => {
+      statements = []
+      const result = await work()
+      assert.equal(statements.length, count, statements.join('\n'))
+      assert.doesNotMatch(statements.join('\n'), /^(?:BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory|FOR UPDATE|FOR SHARE|mutation_requests/m)
+      if (count) assert.match(statements[0], /^SELECT .* FROM users u WHERE u\.id = \$1$/)
+      if (count === 2) assert.match(statements[1], /^UPDATE users SET .* WHERE id = \$1 AND bank_version = \$8 AND deleted_at IS NULL AND onboarding_completed_at IS NOT NULL$/)
+      return result
+    }
+    await trace(0, () => assert.rejects(updateBankAccount(null, randomUUID(), { bankCode: 'invalid' }), code('unauthorized')))
+    await trace(1, () => assert.rejects(updateBankAccount(access, randomUUID(), { ...input, bankCode: 'invalid' }), code('invalid_input')))
+    await trace(1, () => assert.rejects(updateBankAccount(access, randomUUID(), { ...input, accountNumber: 'abc' }), code('invalid_input')))
+    await trace(1, () => assert.rejects(updateBankAccount(access, 'invalid', input), code('invalid_request_key')))
+    await trace(1, () => assert.rejects(updateBankAccount(readAccessToken(signup.accessToken), randomUUID(), input), code('unauthorized')))
+    await client.query("UPDATE users SET bank_verified_at=1, bank_verification_tran_id='test-verification' WHERE id=$1", [app.userId])
+    const key = randomUUID()
+    assert.deepEqual(await trace(2, () => updateBankAccount(access, key, input)), { id: app.userId, bankVersion: 2 })
+    assert.equal((await client.query('SELECT bank_verified_at FROM users WHERE id=$1', [app.userId])).rows[0].bank_verified_at, '1')
+    const conflict = await trace(2, () => PUT(new NextRequest('http://localhost/api/me/bank-account', {
+      method: 'PUT', headers: { origin: 'http://localhost', authorization: `Bearer ${app.accessToken}`, 'Idempotency-Key': key, 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    })))
+    assert.equal(conflict.status, 409)
+    const body = await conflict.json()
+    assert.equal(body.error, 'bank_account_conflict')
+    assert.match(body.message, /최신 계좌/)
+
+    statements = []
+    const outcomes = await Promise.allSettled(Array.from({ length: 6 }, (_, index) => updateBankAccount(access, randomUUID(), {
+      ...input, accountNumber: `00123${index}`, expectedBankVersion: 2,
+    })))
+    assert.equal(outcomes.filter(outcome => outcome.status === 'fulfilled').length, 1)
+    for (const outcome of outcomes) if (outcome.status === 'rejected') assert.equal(outcome.reason.code, 'bank_account_conflict')
+    assert.equal(statements.length, 12)
+    assert.doesNotMatch(statements.join('\n'), /^(?:BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory|FOR UPDATE|FOR SHARE|mutation_requests/m)
+    const winner = outcomes.findIndex(outcome => outcome.status === 'fulfilled')
+    const saved = (await client.query('SELECT bank_version, account_number, bank_verified_at FROM users WHERE id=$1', [app.userId])).rows[0]
+    assert.equal(Number(saved.bank_version), 3)
+    assert.equal(saved.account_number, `00123${winner}`)
+    assert.equal(saved.bank_verified_at, winner === 4 ? '1' : null)
+
+    const normalized = normalizeBankAccountInput({ ...input, expectedBankVersion: 3 })
+    for (const state of ['deleted_at=1', 'deleted_at=NULL, onboarding_completed_at=NULL']) {
+      await client.query(`UPDATE users SET ${state} WHERE id=$1`, [app.userId])
+      assert.equal(await withDatabaseConnection(connection => saveBankAccount(connection, app.userId, normalized, currentTimestamp())), false,
+        'a user withdrawn or no longer onboarded after AUTH cannot be updated')
+    }
+    const pool = getDatabasePool(database)
+    assert.equal(pool.idleCount, pool.totalCount)
   } finally {
     if (previousLog === undefined) delete process.env.DB_QUERY_LOG
     else process.env.DB_QUERY_LOG = previousLog

@@ -1,7 +1,6 @@
 import 'server-only'
-import { createHmac } from 'node:crypto'
 import { currentTimestamp, issueTokens, requireAccount, type AccessToken, type KakaoProfile } from '../../../../Global/Auth/Backend'
-import { withDatabaseConnection, withWriteTransaction, objectBody, replayMutation, saveMutation, type Database } from '../../../../Global/Util/Backend'
+import { withDatabaseConnection, withWriteTransaction, objectBody, mutationDigest, type Database } from '../../../../Global/Util/Backend'
 import { endUserMemberships } from '../../../Group/Backend'
 import { getUnfinishedUserRounds } from '../../../Settle/Backend'
 import { normalizeBankAccountInput, type Account, type BankAccountInput, type UserAccountState, type SignInUserDTO, type BankAccountResponseDTO } from '../../Shared'
@@ -33,29 +32,12 @@ export async function completeOnboarding(access: AccessToken | null, input: unkn
 }
 
 export async function updateBankAccount(access: AccessToken | null, requestKey: string, input: unknown): Promise<BankAccountResponseDTO> {
-  const bank = normalizeBankAccountInput(objectBody(input))
-  const operation = 'bank-account.update'
-  const initial = await withWriteTransaction(async client => {
+  return withDatabaseConnection(async client => {
     const account = await requireAccount(client, access)
-    const secret = process.env.AUTH_JWT_SECRET
-    if (!secret || Buffer.byteLength(secret) < 32) throw new Error('AUTH_JWT_SECRET must be at least 32 bytes')
-    const fingerprint = createHmac('sha256', secret).update(JSON.stringify(['PUT /api/me/bank-account', account.id,
-      bank.bankCode, bank.accountNumber, '', bank.accountHolder, bank.expectedBankVersion, false])).digest('hex')
-    const prior = await replayMutation<{ id: string; bankVersion: number }>(client, account.id, operation, requestKey, fingerprint)
-    return { ...prior, fingerprint }
-  })
-  if (initial.result) return initial.result
-  return withWriteTransaction(async client => {
-    // Replay precedes the version assertion: a concurrent copy may already have committed this exact request.
-    const current = await requireAccount(client, access)
-    const prior = await replayMutation<{ id: string; bankVersion: number }>(client, current.id, operation, requestKey, initial.fingerprint)
-    if (prior.result) return prior.result
-    assertBankVersion(current, bank.expectedBankVersion)
-    const now = currentTimestamp()
-    await repository.saveBankAccount(client, current.id, bank, now)
-    const result = { id: current.id, bankVersion: bank.expectedBankVersion + 1 }
-    await saveMutation(client, current.id, operation, requestKey, prior.digest, current.id, result)
-    return result
+    const bank = normalizeBankAccountInput(objectBody(input))
+    mutationDigest(requestKey, null)
+    if (!await repository.saveBankAccount(client, account.id, bank, currentTimestamp())) throw bankAccountConflict()
+    return { id: account.id, bankVersion: bank.expectedBankVersion + 1 }
   })
 }
 

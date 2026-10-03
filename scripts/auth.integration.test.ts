@@ -114,7 +114,7 @@ before(async () => {
   } finally { await client.end() }
 })
 
-test('onboarding purpose, bank normalization, request replay, stateless authentication, and historical migration', async () => {
+test('onboarding purpose, bank normalization, version conflicts, stateless authentication, and historical migration', async () => {
   const subject = `integration-${randomUUID()}`
   const limited = await signInKakao(subject, profile)
   const limitedAccess = accessOf(limited)
@@ -133,11 +133,12 @@ test('onboarding purpose, bank normalization, request replay, stateless authenti
   const key = randomUUID()
   const nextBank = { ...bank, accountNumber: '12340312345679' }
   const result = await updateBankAccount(access, key, nextBank)
-  assert.deepEqual(await updateBankAccount(access, key, nextBank), result)
-  await assert.rejects(updateBankAccount(access, key, { ...nextBank, accountNumber: '12340312345670' }), codeIs('idempotency_conflict'))
+  assert.deepEqual(result, { id: app.userId, bankVersion: 2 })
+  await assert.rejects(updateBankAccount(access, key, nextBank), codeIs('bank_account_conflict'))
+  await assert.rejects(updateBankAccount(access, key, { ...nextBank, accountNumber: '12340312345670' }), codeIs('bank_account_conflict'))
   assert.equal((await getAccount(access)).accountNumber, '12340312345679')
   const mutation = await withReadTransaction(async client => client.query('SELECT response_metadata FROM mutation_requests WHERE actor_id=$1 AND request_key=$2', [app.userId, key]))
-  assert.deepEqual(mutation.rows.map(row => row.response_metadata), [{ id: app.userId, bankVersion: 2 }])
+  assert.deepEqual(mutation.rows, [])
 
   const client = createDatabaseClient(process.env.TEST_DATABASE_URL!)
   try {
