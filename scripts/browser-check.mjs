@@ -1,5 +1,5 @@
 import { uuidV7 } from '../src/lib/uuid.ts'
-// UI regression in an isolated local DB; --forms-only checks controls, --account-only checks bank invalidation.
+// UI regression in an isolated local DB; --expenses-only checks round mutation invalidation.
 // Run with a dev server using that same test DB and Chrome --remote-debugging-port=9223.
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
@@ -142,6 +142,63 @@ try {
   await cdp('Fetch.enable', { patterns: [{ urlPattern: `${origin}/api/rounds/*/expenses`, requestStage: 'Response' }] })
   await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
   await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
+  if (process.argv.includes('--expenses-only')) {
+    const owner = await user('지출 생성자', '001234567890'), participant = await user('지출 참여자', '002234567890')
+    const group = await api(owner.session, '/api/groups', 'POST', { name: `지출 재조회 ${runId}` })
+    const invite = await api(owner.session, `/api/groups/${group.id}/invites`, 'POST', {})
+    await api(participant.session, `/api${invite.sharePath}/accept`, 'POST', {})
+    const round = await api(owner.session, `/api/groups/${group.id}/rounds`, 'POST', { name: '웹소켓 지출 갱신', currency: 'KRW', participantIds: [owner.session.userId, participant.session.userId] })
+    await setSession(owner.session)
+    const hold = await cdp('Page.addScriptToEvaluateOnNewDocument', { source: `
+      window.__roundInvalidations = [];
+      const NativeSocket = window.WebSocket;
+      window.WebSocket = class extends NativeSocket {
+        constructor(...args) {
+          super(...args);
+          if (!String(args[0]).includes('/realtime')) return;
+          window.__roundSocket = this;
+          this.addEventListener('message', event => {
+            const data = JSON.parse(event.data);
+            if (data.type === 'invalidate' && data.keys.includes(${JSON.stringify(`round:${round.id}`)})) {
+              event.stopImmediatePropagation();
+              window.__roundInvalidations.push({ socket: this, data: event.data });
+            }
+          });
+        }
+      };
+    ` })
+    await navigate(`/home/rounds/${round.id}`, '지출 내역이 없습니다.')
+    await waitFor('window.__roundSocket?.readyState === WebSocket.OPEN')
+    await new Promise(resolve => setTimeout(resolve, 700))
+    async function websocketOnly(label, action, updated) {
+      const reads = apiReads.length
+      await action()
+      await waitFor('window.__roundInvalidations.length > 0')
+      await new Promise(resolve => setTimeout(resolve, 700))
+      assert.equal(apiReads.length, reads, `${label}: mutation must not trigger GET before invalidation delivery`)
+      await evaluate("window.__roundInvalidations.splice(0).forEach(({ socket, data }) => socket.onmessage(new MessageEvent('message', { data })))")
+      await waitFor(updated)
+      await new Promise(resolve => setTimeout(resolve, 700))
+      assert.deepEqual(apiReads.slice(reads), [`/api/rounds/${round.id}`], `${label}: exactly one GET after invalidation`)
+      console.log(`PASS ${label}: mutation GET 0, WebSocket GET 1`)
+    }
+    await click('지출 추가')
+    await fill('[name=description]', '웹소켓 생성 검증')
+    await fill('[name=amount]', '100')
+    await websocketOnly('expense POST', async () => { await click('지출 저장'); await waitFor("!document.querySelector('.expense-form')") }, hasText('웹소켓 생성 검증'))
+    await click('수정')
+    await fill('[name=description]', '웹소켓 수정 검증')
+    await fill('[name=amount]', '200')
+    await websocketOnly('expense PATCH', async () => { await click('지출 저장'); await waitFor("!document.querySelector('.expense-form')") }, hasText('웹소켓 수정 검증'))
+    await websocketOnly('confirm POST', () => click('정산 확정'), "Boolean(document.querySelector('.state-confirmed'))")
+    await websocketOnly('reopen POST', () => click('기록 단계로 다시 열기'), "Boolean(document.querySelector('.state-recording'))")
+    await websocketOnly('expense DELETE', () => click('삭제'), hasText('지출 내역이 없습니다.'))
+    assert.deepEqual(exceptions, [])
+    await cdp('Page.removeScriptToEvaluateOnNewDocument', { identifier: hold.identifier })
+    ws.close()
+    await fetch(`${debuggerOrigin}/json/close/${tab.id}`)
+    process.exit(0)
+  }
   if (process.argv.includes('--account-only')) {
     const member = await user('계좌 재조회', '001234567890')
     await setSession(member.session)

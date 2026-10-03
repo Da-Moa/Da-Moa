@@ -398,7 +398,9 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
         const failedKey = key()
         await assert.rejects(saveExpense(a, failedKey, r.id, { ...body, amount: unit(40) }), code('custom_share_total_mismatch'))
         for (const amount of [0, '', '0', '-1', '1e1', currency === 'USD' ? '0.101' : '10.1']) {
-          await assert.rejects(saveExpense(a, key(), r.id, { ...body, customShares: [{ userId: a.userId, amount }] }), code('invalid_amount'))
+          // Keep currency precision errors independent of the pre-transaction total check.
+          const total = typeof amount === 'string' && amount.includes('.') ? amount : body.amount
+          await assert.rejects(saveExpense(a, key(), r.id, { ...body, amount: total, customShares: [{ userId: a.userId, amount }] }), code('invalid_amount'))
         }
         for (const shares of [[], [customShares[0], customShares[0]], [{ userId: outsider.userId, amount: unit(30) }]]) {
           await assert.rejects(saveExpense(a, key(), r.id, { ...body, customShares: shares }), code('invalid_participants'))

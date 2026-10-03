@@ -34,11 +34,21 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
     process.env.DB_QUERY_LOG = 'true'
     let statements: string[] = []
     const logger = t.mock.method(console, 'info', (message: string) => { statements.push(message.replace(/^SQL:\s*/, '').replace(/\s+/g, ' ').trim()) })
-    const trace = async <T>(count: number, write: boolean | 'receipt' | 'session' | 'connection' | 'cancel', work: () => Promise<T>) => {
+    const trace = async <T>(count: number, write: boolean | 'receipt' | 'session' | 'connection' | 'cancel' | 'expense', work: () => Promise<T>) => {
       statements = []
       const result = await work()
       assert.equal(statements.length, count, statements.join('\n'))
-      if (write === 'cancel') {
+      if (write === 'expense') {
+        if (count) assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
+        if (count > 1) {
+          assert.equal(statements[1], 'BEGIN')
+          assert.equal(statements[2], 'SELECT pg_advisory_xact_lock(1684106607)')
+          assert.match(statements[3], /INSERT INTO expenses/)
+          if (count === 6) assert.match(statements[4], /INSERT INTO expense_shares.*UPDATE rounds.*INSERT INTO mutation_requests/)
+          assert.ok(['COMMIT', 'ROLLBACK'].includes(statements.at(-1)!))
+        }
+        assert.ok(statements.every(sql => !sql.includes('pg_advisory_unlock')))
+      } else if (write === 'cancel') {
         assert.equal(statements[0], 'BEGIN')
         assert.match(statements[1], /FROM users u WHERE u.id = \$1/)
         assert.equal(statements[2], 'SELECT pg_advisory_xact_lock(1684106607)')
@@ -132,12 +142,50 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       await trace(2, 'connection', () => assert.rejects(getRound(nonParticipant, round.id, new URLSearchParams()), (error: { code: string }) => error.code === 'not_found'))
       let version = 1
       const expenseKey = key(), expenseBody = { description: '지출', amount: '100', payerId: b.userId, splitMode: 'ALL', expectedVersion: version }
-      const expense = await trace(13, true, () => saveExpense(a, expenseKey, round.id, expenseBody))
+      let expenseAudience: { groupId: string; userIds: string[] } | undefined
+      const expense = await trace(6, 'expense', () => saveExpense(a, expenseKey, round.id, expenseBody, undefined, audience => { expenseAudience = audience }))
+      assert.equal(expenseAudience?.groupId, group.id)
+      assert.deepEqual(new Set(expenseAudience?.userIds), new Set([a.userId, b.userId, c.userId]))
       version = expense.version!
-      await trace(5, true, () => saveExpense(a, expenseKey, round.id, expenseBody))
+      assert.deepEqual(await trace(5, 'expense', () => saveExpense(a, expenseKey, round.id, expenseBody, undefined, () => assert.fail('replay must not publish again'))), expense)
+      await trace(0, 'expense', () => assert.rejects(saveExpense(null, '', round.id, {}), (error: { code: string }) => error.code === 'unauthorized'))
+      await trace(1, 'expense', () => assert.rejects(saveExpense({ ...a, userId: randomUUID() }, '', round.id, {}), (error: { code: string }) => error.code === 'unauthorized'))
+      for (const [input, expected] of [
+        [{ ...expenseBody, description: '' }, 'invalid_input'],
+        [{ ...expenseBody, amount: 100 }, 'invalid_amount'],
+        [{ ...expenseBody, amount: '100000001' }, 'expense_amount_limit_exceeded'],
+        [{ ...expenseBody, expectedVersion: '1' }, 'invalid_version'],
+        [{ ...expenseBody, participantIds: [a.userId] }, 'invalid_participants'],
+        [{ ...expenseBody, splitMode: 'SELECTED', participantIds: [a.userId, a.userId] }, 'invalid_participants'],
+        [{ ...expenseBody, splitMode: 'CUSTOM', customShares: [{ userId: a.userId, amount: '99' }] }, 'custom_share_total_mismatch'],
+      ] as const) await trace(1, 'expense', () => assert.rejects(saveExpense(a, key(), round.id, input), (error: { code: string }) => error.code === expected))
+      for (const [actor, id, input, expected] of [
+        [nonParticipant, round.id, { ...expenseBody, expectedVersion: version }, 'not_found'],
+        [a, randomUUID(), { ...expenseBody, expectedVersion: version }, 'not_found'],
+        [a, round.id, expenseBody, 'stale_round'],
+        [a, round.id, { ...expenseBody, expectedVersion: version, amount: '1.00' }, 'invalid_amount'],
+        [a, round.id, { ...expenseBody, expectedVersion: version, payerId: nonParticipant.userId }, 'invalid_participants'],
+        [a, round.id, { ...expenseBody, expectedVersion: version, splitMode: 'SELECTED', participantIds: [nonParticipant.userId] }, 'invalid_participants'],
+        [a, round.id, { ...expenseBody, expectedVersion: version, splitMode: 'CUSTOM', customShares: [{ userId: a.userId, amount: '100.00' }] }, 'invalid_amount'],
+      ] as const) await trace(5, 'expense', () => assert.rejects(saveExpense(actor, key(), id, input), (error: { code: string }) => error.code === expected))
+      await trace(5, 'expense', () => assert.rejects(saveExpense(a, expenseKey, round.id, { ...expenseBody, description: '다른 지출' }), (error: { code: string }) => error.code === 'idempotency_conflict'))
+      const failedExpenseKey = key(), expenseConstraint = `expense_create_test_${key().replaceAll('-', '')}`
+      await db.query(`ALTER TABLE mutation_requests ADD CONSTRAINT ${expenseConstraint} CHECK (request_key <> '${failedExpenseKey}') NOT VALID`)
+      try {
+        await trace(6, 'expense', () => assert.rejects(saveExpense(a, failedExpenseKey, round.id, { ...expenseBody, expectedVersion: version }), (error: { code: string; constraint: string }) => error.code === '23514' && error.constraint === expenseConstraint))
+        assert.equal((await db.query('SELECT version FROM rounds WHERE id=$1', [round.id])).rows[0].version, version)
+        assert.equal((await db.query('SELECT 1 FROM expenses WHERE round_id=$1', [round.id])).rowCount, 1)
+        assert.equal((await db.query('SELECT 1 FROM expense_shares WHERE round_id=$1', [round.id])).rowCount, 3)
+        assert.equal((await db.query('SELECT 1 FROM mutation_requests WHERE request_key=$1', [failedExpenseKey])).rowCount, 0)
+      } finally { await db.query(`ALTER TABLE mutation_requests DROP CONSTRAINT ${expenseConstraint}`) }
+      const expenseRaceRound = await createRound(a, uuidV7(), group.id, body), expenseRaceKey = key()
+      const expenseRace = await Promise.all(Array.from({ length: 5 }, () => saveExpense(a, expenseRaceKey, expenseRaceRound.id, expenseBody)))
+      assert.ok(expenseRace.every(result => JSON.stringify(result) === JSON.stringify(expenseRace[0])))
+      assert.equal((await db.query('SELECT 1 FROM expenses WHERE round_id=$1', [expenseRaceRound.id])).rowCount, 1)
+      assert.equal((await db.query('SELECT version FROM rounds WHERE id=$1', [expenseRaceRound.id])).rows[0].version, 2)
       const updated = await trace(14, true, () => saveExpense(a, key(), round.id, { amount: '101', expectedVersion: version }, expense.id))
       version = updated.version!
-      const participantExpense = await trace(14, true, () => saveExpense(b, key(), round.id, { ...expenseBody, expectedVersion: version }))
+      const participantExpense = await trace(6, 'expense', () => saveExpense(b, key(), round.id, { ...expenseBody, expectedVersion: version }))
       version = participantExpense.version!
       const firstPage = await trace(2, 'connection', () => getRound(a, round.id, new URLSearchParams({ limit: '1' })))
       const secondPage = await trace(2, 'connection', () => getRound(a, round.id, new URLSearchParams({ limit: '1', cursor: firstPage.expensesNextCursor! })))
@@ -232,7 +280,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       if (race[0].status === 'fulfilled') assert.equal((await db.query('SELECT 1 FROM expenses WHERE round_id=$1', [racing.id])).rowCount, 0)
       else assert.equal((await getRound(a, racing.id, new URLSearchParams())).expenses.length, 1)
       const even = await trace(4, 'session', () => createRound(a, uuidV7(), group.id, { ...body, participantIds: [a.userId, b.userId] }))
-      let evenVersion = (await trace(13, true, () => saveExpense(a, key(), even.id, { ...expenseBody, amount: '100', expectedVersion: 1 }))).version!
+      let evenVersion = (await trace(6, 'expense', () => saveExpense(a, key(), even.id, { ...expenseBody, amount: '100', expectedVersion: 1 }))).version!
       const nonemptyKey = key()
       await trace(5, 'cancel', () => assert.rejects(roundCommand(a, nonemptyKey, even.id, 'cancel', { expectedVersion: evenVersion }), (error: { code: string }) => error.code === 'round_has_expenses'))
       assert.equal((await db.query('SELECT 1 FROM mutation_requests WHERE request_key=$1', [nonemptyKey])).rowCount, 0)
@@ -249,7 +297,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       await trace(9, true, () => roundCommand(a, key(), even.id, 'force-complete', { expectedVersion: evenVersion }))
       statements = []
       await assert.rejects(saveExpense(a, key(), even.id, { ...expenseBody, expectedVersion: evenVersion }), (error: { code: string }) => error.code === 'invalid_round_state')
-      assert.equal(statements.length, 6)
+      assert.equal(statements.length, 5)
       assert.equal(statements.at(-1), 'ROLLBACK')
     } finally { logger.mock.restore() }
   } finally {

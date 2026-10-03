@@ -33,10 +33,13 @@ export async function withWriteLock<T>(client: Database, discardConnection: () =
   }
 }
 
-async function transaction<T>(write: boolean, work: (client: Database) => Promise<T>, beforeLock?: (client: Database) => Promise<void>): Promise<T> {
+async function transaction<T>(write: boolean, work: (client: Database) => Promise<T>, beforeLock?: (client: Database) => Promise<void>, beforeBegin?: (client: Database) => Promise<void>): Promise<T> {
   const client = await getDatabasePool(connectionString()).connect()
   let discard = false
+  let begun = false
   try {
+    await beforeBegin?.(client)
+    begun = true
     await client.query(write ? 'BEGIN' : 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
     await beforeLock?.(client)
     // ponytail: serialize writes initially; use ordered user/group/round locks when measured contention warrants it.
@@ -45,15 +48,15 @@ async function transaction<T>(write: boolean, work: (client: Database) => Promis
     await client.query('COMMIT')
     return result
   } catch (error) {
-    try { await client.query('ROLLBACK') } catch { discard = true /* A lost COMMIT response is resolved with the request key. */ }
+    if (begun) try { await client.query('ROLLBACK') } catch { discard = true /* A lost COMMIT response is resolved with the request key. */ }
     throw error
   } finally {
     client.release(discard)
   }
 }
 
-export function withWriteTransaction<T>(work: (client: Database) => Promise<T>, beforeLock?: (client: Database) => Promise<void>): Promise<T> {
-  return transaction(true, work, beforeLock)
+export function withWriteTransaction<T>(work: (client: Database) => Promise<T>, beforeLock?: (client: Database) => Promise<void>, beforeBegin?: (client: Database) => Promise<void>): Promise<T> {
+  return transaction(true, work, beforeLock, beforeBegin)
 }
 
 export function withReadTransaction<T>(work: (client: Database) => Promise<T>): Promise<T> {

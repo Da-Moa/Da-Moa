@@ -1,8 +1,9 @@
 import 'server-only'
 import { createHash, randomInt, randomUUID } from 'node:crypto'
 import { requireAccount } from '../../../../Global/Auth/Backend'
+import { MAX_GROUP_MEMBERS } from '../../../Group/Shared'
 import { AppError, badInput, withDatabaseConnection, withWriteLock, withWriteTransaction, withReadTransaction, mutationDigest, mutationResult, replayMutation, deleteReceiptObject, putReceipt, readReceipt, convertReceipt, type Database, domainMutation, idsInput, nowSeconds, onlyKeys, pageOf, pagination, textInput, type Identity } from '../../../../Global/Util/Backend'
-import { formatMoney, MAX_EXPENSE_MAJOR, MAX_ROUND_TOTAL_MAJOR, minorLimit, parseAmount, requireCurrency, type Currency, type CreateRoundRequestDTO, type ExpenseRequestDTO, type VersionRequestDTO, type SettlementCheckRequestDTO } from '../../Shared'
+import { CURRENCIES, formatMoney, MAX_EXPENSE_MAJOR, MAX_ROUND_TOTAL_MAJOR, minorLimit, parseAmount, requireCurrency, type Currency, type CreateRoundRequestDTO, type ExpenseRequestDTO, type VersionRequestDTO, type SettlementCheckRequestDTO } from '../../Shared'
 import { calculateBase, finalizeSettlement, previewSettlement, validateCustomShares } from '../../Shared'
 import type { ExclusionCheck, Expense, MutationResult, RoundDetail, RoundMember, RoundStatus, RoundSummary, SettlementDTO, SettlementTransfer } from '../../Shared'
 
@@ -150,18 +151,35 @@ async function editable(client: Database, round: RoundRow, userId: string, expen
   if (!rows.length || (expense && expense.author_id !== userId)) throw new AppError(403, 'forbidden', '지출 작성자 또는 회차 생성자만 수정할 수 있어요')
 }
 
-async function expenseInput(client: Database, round: RoundRow, body: ExpenseRequestDTO | Record<string, unknown>, previous?: ExpenseRow): Promise<{ description: string; amount: string; payerId: string; splitMode: Expense['splitMode']; participantIds: string[]; assignedShares: { userId: string; assignedAmountMinor: string | null }[] }> {
+function expenseFields(body: ExpenseRequestDTO | Record<string, unknown>, currency?: Currency, previous?: ExpenseRow): { description: string; amount: string; payerId: string; splitMode: Expense['splitMode'] } {
   onlyKeys(body, ['description', 'amount', 'payerId', 'splitMode', 'participantIds', 'customShares', 'expectedVersion'])
   const description = textInput(body.description === undefined ? previous?.description : body.description, 500)
-  const currency = round.currency as Currency
   let amount: bigint
-  try { amount = body.amount === undefined && previous ? BigInt(previous.amount_minor) : parseAmount(body.amount, currency) } catch { badInput('invalid_amount', '통화에 맞는 양의 금액을 정확히 입력해 주세요') }
-  const maximum = minorLimit(MAX_EXPENSE_MAJOR, currency)
-  if (amount > maximum) badInput('expense_amount_limit_exceeded', `지출 금액은 ${formatMoney(maximum.toString(), currency)} 이하여야 해요`)
+  // ponytail: currencies use 0/2 decimals; widen this parser if the catalog adds another precision.
+  try { amount = body.amount === undefined && previous ? BigInt(previous.amount_minor) : parseAmount(body.amount, currency ?? 'USD') } catch { badInput('invalid_amount', '통화에 맞는 양의 금액을 정확히 입력해 주세요') }
+  const maximum = minorLimit(MAX_EXPENSE_MAJOR, currency ?? 'USD')
+  if (amount > maximum) badInput('expense_amount_limit_exceeded', currency ? `지출 금액은 ${formatMoney(maximum.toString(), currency)} 이하여야 해요` : '지출 금액은 회차 통화 기준 100,000,000 이하여야 해요')
   const payerId = textInput(body.payerId === undefined ? previous?.payer_id : body.payerId, 128)
   const splitMode = body.splitMode === undefined ? previous?.split_mode : body.splitMode
   if (splitMode !== 'ALL' && splitMode !== 'SELECTED' && splitMode !== 'CUSTOM') badInput('invalid_participants', '분배 방식을 선택해 주세요')
   if (splitMode !== 'CUSTOM' && body.customShares !== undefined) badInput('invalid_input', '개별 부담금은 개별 항목 분배에서만 입력해 주세요')
+  return { description, amount: amount.toString(), payerId, splitMode }
+}
+
+function customSharesInput(value: unknown, currency?: Currency) {
+  if (!Array.isArray(value) || !value.length || value.length > MAX_GROUP_MEMBERS) badInput('invalid_participants', '부담자와 부담금을 선택해 주세요')
+  return value.map(share => {
+    if (!share || typeof share !== 'object' || Array.isArray(share)) badInput('invalid_participants', '부담자와 부담금을 선택해 주세요')
+    onlyKeys(share, ['userId', 'amount'])
+    let assignedAmount: bigint
+    try { assignedAmount = parseAmount(share.amount, currency ?? 'USD') } catch { badInput('invalid_amount', '통화에 맞는 양의 부담금을 정확히 입력해 주세요') }
+    return { userId: share.userId as string, assignedAmountMinor: assignedAmount.toString() }
+  })
+}
+
+async function expenseInput(client: Database, round: RoundRow, body: ExpenseRequestDTO | Record<string, unknown>, previous?: ExpenseRow) {
+  const input = expenseFields(body, round.currency, previous)
+  const { payerId, splitMode } = input
   const members = await membersFor(client, round.id), active = members.filter(m => m.excludedAt === null).map(m => m.userId)
   if (!active.includes(payerId) && payerId !== previous?.payer_id) badInput('invalid_participants', '결제자는 이번 회차 참여자여야 합니다')
   let participantIds: string[]
@@ -175,25 +193,18 @@ async function expenseInput(client: Database, round: RoundRow, body: ExpenseRequ
       const { rows } = await repository.findAssignedShares(client, previous.id)
       assignedShares = rows.map(share => ({ userId: share.user_id, assignedAmountMinor: share.assigned_amount_minor }))
     } else {
-      if (!Array.isArray(body.customShares) || !body.customShares.length || body.customShares.length > active.length) badInput('invalid_participants', '부담자와 부담금을 선택해 주세요')
-      assignedShares = body.customShares.map(share => {
-        if (!share || typeof share !== 'object' || Array.isArray(share)) badInput('invalid_participants', '부담자와 부담금을 선택해 주세요')
-        onlyKeys(share, ['userId', 'amount'])
-        let assignedAmount: bigint
-        try { assignedAmount = parseAmount(share.amount, currency) } catch { badInput('invalid_amount', '통화에 맞는 양의 부담금을 정확히 입력해 주세요') }
-        return { userId: share.userId, assignedAmountMinor: assignedAmount.toString() }
-      })
+      assignedShares = customSharesInput(body.customShares, round.currency)
     }
     participantIds = idsInput(assignedShares.map(share => share.userId))
     if (participantIds.some(id => !active.includes(id))) badInput('invalid_participants', '부담자는 제외되지 않은 회차 참여자여야 합니다')
-    checkCustomShares(amount, participantIds, assignedShares)
+    checkCustomShares(BigInt(input.amount), participantIds, assignedShares)
   } else {
     const previousShares = previous && body.participantIds === undefined ? await repository.findShareMembers(client, previous.id) : null
     participantIds = idsInput(body.participantIds === undefined ? previousShares?.rows.map(s => s.user_id) : body.participantIds)
     if (participantIds.some(id => !active.includes(id))) badInput('invalid_participants', '부담자는 제외되지 않은 회차 참여자여야 합니다')
   }
   if (!participantIds.length) badInput('invalid_participants', '부담자가 필요합니다')
-  return { description, amount: amount.toString(), payerId, splitMode, participantIds, assignedShares }
+  return { ...input, participantIds, assignedShares }
 }
 
 function checkCustomShares(amount: bigint, participantIds: string[], shares: { userId: string; assignedAmountMinor: string | null }[]) {
@@ -210,22 +221,63 @@ async function storeShares(client: Database, expenseId: string, roundId: string,
   await repository.insertShares(client, expenseId, roundId, ids, amounts)
 }
 
-export async function saveExpense(access: Identity, key: string, roundId: string, body: ExpenseRequestDTO | Record<string, unknown>, expenseId?: string) {
-  return domainMutation(access, key, expenseId ? 'expense.update' : 'expense.create', { roundId, expenseId, ...body }, async (client, userId) => {
+async function createExpense(access: Identity, key: string, roundId: string, body: ExpenseRequestDTO | Record<string, unknown>, captureAudience?: (audience: { groupId: string; userIds: string[] }) => void) {
+  let userId: string, digest: string, input: ReturnType<typeof expenseFields>
+  let participantIds: string[] = [], assignedShares: ReturnType<typeof customSharesInput> = []
+  return withWriteTransaction(async client => {
+    const id = randomUUID(), now = nowSeconds()
+    const scales = Object.fromEntries(Object.entries(CURRENCIES).map(([code, info]) => [code, (10n ** BigInt(info.decimals)).toString()]))
+    const hasDecimal = (body.amount as string).includes('.') || (input.splitMode === 'CUSTOM' && (body.customShares as { amount: string }[]).some(share => share.amount.includes('.')))
+    const round = await repository.insertExpenseCreation(client, id, roundId, userId, key, { ...input, participantIds }, body.expectedVersion as number,
+      hasDecimal, scales, MAX_EXPENSE_MAJOR.toString(), MAX_ROUND_TOTAL_MAJOR.toString(), now)
+    if (!round.actor_active) throw new AppError(401, 'unauthorized', '로그인이 필요합니다')
+    const replay = mutationResult<MutationResult>(round, digest)
+    if (replay) return replay
+    if (!round.id) throw missing()
+    state(round, 'RECORDING')
+    if (!round.is_creator && !round.active_ids.includes(userId)) throw new AppError(403, 'forbidden', '지출 작성자 또는 회차 생성자만 수정할 수 있어요')
+    version(round, body.expectedVersion)
+    const actual = expenseFields(body, round.currency)
+    if (!round.active_ids.includes(actual.payerId)) badInput('invalid_participants', '결제자는 이번 회차 참여자여야 합니다')
+    if (actual.splitMode === 'ALL') participantIds = round.active_ids
+    if (!participantIds.length || participantIds.some(id => !round.active_ids.includes(id))) badInput('invalid_participants', '부담자는 제외되지 않은 회차 참여자여야 합니다')
+    if (actual.splitMode === 'CUSTOM') assignedShares = customSharesInput(body.customShares, round.currency)
+    const maximum = minorLimit(MAX_ROUND_TOTAL_MAJOR, round.currency)
+    if (BigInt(round.total_minor) + BigInt(actual.amount) > maximum) badInput('round_total_limit_exceeded', `회차 전체 지출은 ${formatMoney(maximum.toString(), round.currency)} 이하여야 해요`)
+    if (!round.created) throw new Error('Validated expense was not inserted')
+    const amounts = participantIds.map(id => assignedShares.find(share => share.userId === id)?.assignedAmountMinor ?? null)
+    const result = await repository.finishExpenseCreation(client, id, roundId, userId, key, digest, participantIds, amounts, now)
+    captureAudience?.({ groupId: round.group_id, userIds: round.user_ids })
+    return result
+  }, undefined, async client => {
+    userId = (await requireAccount(client, access)).id
+    digest = mutationDigest(key, { roundId, expenseId: undefined, ...body })
+    input = expenseFields(body)
+    if (typeof body.expectedVersion !== 'number' || !Number.isSafeInteger(body.expectedVersion) || body.expectedVersion < 1) badInput('invalid_version', '회차 버전이 필요합니다')
+    if (input.splitMode === 'ALL') {
+      if (body.participantIds !== undefined) badInput('invalid_participants', '전체 분배의 참여자는 서버에서 결정합니다')
+    } else if (input.splitMode === 'CUSTOM') {
+      if (body.participantIds !== undefined) badInput('invalid_input', '개별 항목 분배의 부담자는 부담금과 함께 선택해 주세요')
+      assignedShares = customSharesInput(body.customShares)
+      participantIds = idsInput(assignedShares.map(share => share.userId))
+      checkCustomShares(BigInt(input.amount), participantIds, assignedShares)
+    } else participantIds = idsInput(body.participantIds)
+  })
+}
+
+export async function saveExpense(access: Identity, key: string, roundId: string, body: ExpenseRequestDTO | Record<string, unknown>, expenseId?: string, captureAudience?: (audience: { groupId: string; userIds: string[] }) => void) {
+  if (!expenseId) return createExpense(access, key, roundId, body, captureAudience)
+  return domainMutation(access, key, 'expense.update', { roundId, expenseId, ...body }, async (client, userId) => {
     const round = await roundFor(client, roundId, userId)
-    const previous = expenseId ? await expenseFor(client, roundId, expenseId) : undefined
+    const previous = await expenseFor(client, roundId, expenseId)
     await editable(client, round, userId, previous)
     version(round, body.expectedVersion)
-    const input = await expenseInput(client, round, body, previous), now = nowSeconds(), id = expenseId ?? randomUUID()
+    const input = await expenseInput(client, round, body, previous), now = nowSeconds(), id = expenseId
     const { rows: totals } = await repository.findTotal(client, roundId)
-    const nextTotal = BigInt(totals[0].total_minor) - BigInt(previous?.amount_minor ?? 0) + BigInt(input.amount)
+    const nextTotal = BigInt(totals[0].total_minor) - BigInt(previous.amount_minor) + BigInt(input.amount)
     const maximum = minorLimit(MAX_ROUND_TOTAL_MAJOR, round.currency as Currency)
     if (nextTotal > maximum) badInput('round_total_limit_exceeded', `회차 전체 지출은 ${formatMoney(maximum.toString(), round.currency as Currency)} 이하여야 해요`)
-    if (previous) {
-      await repository.updateExpense(client, id, input.description, input.amount, input.payerId, input.splitMode, now, userId)
-    } else {
-      await repository.insertExpense(client, id, roundId, userId, input.payerId, input.description, input.amount, input.splitMode, now)
-    }
+    await repository.updateExpense(client, id, input.description, input.amount, input.payerId, input.splitMode, now, userId)
     await storeShares(client, id, roundId, input.participantIds, input.assignedShares)
     return { ...await bump(client, roundId), id }
   })

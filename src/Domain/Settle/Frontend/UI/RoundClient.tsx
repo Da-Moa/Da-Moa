@@ -19,7 +19,7 @@ function expenseDay(createdAt: number) {
   return { dateTime, label: expenseDayFormatter.format(date) }
 }
 
-function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: RoundDetail; expense: Expense | null; onSaved: () => Promise<unknown>; onCancel: () => void; reload: () => Promise<RoundDetail | null> }) {
+function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: RoundDetail; expense: Expense | null; onSaved: () => void; onCancel: () => void; reload: () => Promise<RoundDetail | null> }) {
   const { account } = useAccount()
   const action = useAction()
   const expectedVersion = useRef(round.version)
@@ -64,7 +64,7 @@ function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: Rou
         return apiRequest<MutationResult>(path, { method, body })
       }
     })
-    if (result) await onSaved()
+    if (result) onSaved()
   }
   function changeAmount(input: HTMLInputElement, userId?: string) {
     const cursor = input.selectionStart ?? input.value.length
@@ -126,20 +126,18 @@ function ExpenseCard({ expense, round, canEdit, highlighted, edit, reload }: { e
   const name = (id: string) => round.members.find(member => member.userId === id)?.displayName ?? '과거 참여자'
   async function remove() {
     if (!window.confirm('이 지출과 첨부한 증빙을 삭제할까요?')) return
-    const result = await action.run(() => apiRequest(`/api/rounds/${round.id}/expenses/${expense.id}`, { method: 'DELETE', body: { expectedVersion: round.version } }))
-    if (result) await reload()
+    await action.run(() => apiRequest(`/api/rounds/${round.id}/expenses/${expense.id}`, { method: 'DELETE', body: { expectedVersion: round.version } }))
   }
   async function upload() {
     if (!file) return
     if (file.type && !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { uploadAction.setError(new Error('JPEG·PNG·WebP 이미지만 올릴 수 있어요.')); return }
     const form = new FormData(); form.set('file', file); form.set('expectedVersion', String(round.version))
     const result = await uploadAction.run(() => apiRequest(`/api/rounds/${round.id}/expenses/${expense.id}/receipts`, { method: 'POST', body: form }))
-    if (result) { uploadDialog.current?.close(); await reload() }
+    if (result) uploadDialog.current?.close()
   }
   async function removeReceipt(id: string) {
     if (!window.confirm('이 증빙 이미지를 삭제할까요? 지출 기록은 유지돼요.')) return
-    const result = await action.run(() => apiRequest(`/api/rounds/${round.id}/expenses/${expense.id}/receipts/${id}`, { method: 'DELETE', body: { expectedVersion: round.version } }))
-    if (result) await reload()
+    await action.run(() => apiRequest(`/api/rounds/${round.id}/expenses/${expense.id}/receipts/${id}`, { method: 'DELETE', body: { expectedVersion: round.version } }))
   }
   return <article id={`expense-${expense.id}`} tabIndex={-1} className={`domain-card expense-card stack${highlighted ? ' expense-highlight' : ''}`}>
     {highlighted && <p className="highlight-label">제외 전 수정 필요</p>}
@@ -201,7 +199,6 @@ export default function RoundClient({ roundId }: { roundId: string }) {
       setCheck(null)
       if (name === 'send') router.push(`/settlements/${roundId}`)
       else {
-        await refresh()
         if (name === 'confirm' || name === 'reopen') requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'smooth' }))
       }
     }
@@ -233,7 +230,7 @@ export default function RoundClient({ roundId }: { roundId: string }) {
     await action.run(async () => {
       try {
         await apiRequest(`/api/rounds/${roundId}/members/${check.userId}/exclude`, { method: 'POST', body: { expectedVersion: data.version } })
-        exclusionDialog.current?.close(); setCheck(null); await refresh()
+        exclusionDialog.current?.close(); setCheck(null)
       } catch (error) {
         if (error instanceof ApiError && error.code === 'member_exclusion_blocked') {
           const details = error.details as ExclusionCheck | undefined
@@ -293,7 +290,7 @@ export default function RoundClient({ roundId }: { roundId: string }) {
       </dialog>
       <div className="row-between expense-heading" id="expense-section-heading"><h2 className="section-heading">지출 내역</h2><div className="inline-actions">{recording && myself && !myself.excludedAt && !editing && <button className="text-button" onClick={() => { setExpensesOpen(true); setEditing('new') }} type="button"><Plus size={17} /> 지출 추가</button>}<button aria-controls="round-expenses" aria-expanded={expensesOpen} aria-label={expensesOpen ? '모든 지출 내역 숨기기' : '모든 지출 내역 펼치기'} className="text-button expense-toggle" onClick={() => setExpensesOpen(open => !open)} title={expensesOpen ? '모든 지출 내역 숨기기' : '모든 지출 내역 펼치기'} type="button"><ChevronDown aria-hidden="true" className={expensesOpen ? 'expense-toggle-open' : undefined} size={24} /></button></div></div>
       <div className="stack" hidden={!expensesOpen} id="round-expenses">
-        {editing && <ExpenseForm key={editing === 'new' ? 'new' : editing.id} round={data} expense={editing === 'new' ? null : editing} reload={refresh} onSaved={async () => { setEditing(null); setCheck(null); await refresh() }} onCancel={closeEditor} />}
+        {editing && <ExpenseForm key={editing === 'new' ? 'new' : editing.id} round={data} expense={editing === 'new' ? null : editing} reload={refresh} onSaved={() => { setEditing(null); setCheck(null) }} onCancel={closeEditor} />}
         {data.expenses.length === 0 && <p className="empty-card">지출 내역이 없습니다. 지출을 기록한 뒤 정산을 확정해 주세요.</p>}
         {orderedExpenses.map((expense, index) => {
           const day = expenseDay(expense.createdAt), previousDay = index ? expenseDay(orderedExpenses[index - 1].createdAt).dateTime : null

@@ -966,15 +966,16 @@ SQL 순서: BEGIN → AUTH → 락 → 통합 조회 → 삭제·성공 기록 �
 
 ### S6. POST /api/rounds/{roundId}/expenses — 지출 기록
 
-RoundClient.ExpenseForm.save() → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.saveExpense(ExpenseRequestDTO) → W → MutationResult → 지출 폼 종료·상세 재조회.
+RoundClient.ExpenseForm.save() → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.saveExpense()의 createExpense() → MutationResult → 지출 폼 종료 → WebSocket invalidation 시 상세 GET 1회.
 
-1. W → S-ROUND → RECORDING·편집 가능 참여자·expectedVersion 검사. 회차 생성자는 추가 활성 참여 조회 없이 허용하고 다른 작성자는 S-ACTIVE-MEMBER 1회로 제외 여부를 검사한다.
-2. 허용 필드 description·amount·payerId·splitMode·participantIds·customShares·expectedVersion 검사. description은 trim 후 1~500자, 금액은 해당 통화의 정확한 BigInt 최소 단위로 파싱한다. 1건 100,000,000 주 단위 한도를 확인한다.
-3. S-MEMBERS로 이번 회차의 활성 결제자/부담자 검사. ALL은 서버가 전체 부담자를 결정, SELECTED는 선택 ID, CUSTOM은 중복 없는 ID·양의 개별 금액·합계의 정확한 일치를 확인한다.
-4. S-TOTAL로 전체 지출 1,000,000,000 주 단위 한도 확인 → S-EXPENSE-INSERT → S-SHARES-DELETE → S-SHARES-INSERT(unnest 일괄 저장) → S-BUMP로 회차 버전 증가.
-5. IDEM-SAVE → COMMIT → 응답·after() invalidation. stale_round이면 프론트는 입력을 유지한 채 최신 상세를 조회하고 버전을 바꿔 한 번 재저장한다.
+1. 공용 풀의 한 연결에서 AUTH 회원 조회(+1). 가입 완료·미탈퇴 회원을 확인한 뒤 Service에서 요청 키·허용 필드·description·양의 금액 형식/1건 한도·결제자 ID·분배 방식·expectedVersion 형식을 검증한다. SELECTED는 중복 없는 부담자 ID, CUSTOM은 양의 개별 금액·중복 없는 ID·정확한 합계를 확인한다. ALL 부담자는 서버가 결정한다. 이 단계의 입력 오류는 BEGIN·락 없이 AUTH 1회로 종료한다.
+2. 같은 연결에서 BEGIN(+1) → SELECT pg_advisory_xact_lock(1684106607)(+1). 기존 회차 변경·모임 이탈·회원 탈퇴와 같은 락을 사용한다.
+3. Repository.insertExpenseCreation()의 조건부 INSERT(+1). CTE로 본인의 회차 참여·현재 회원 상태·RECORDING·expectedVersion·제외 여부·활성 결제자/부담자·회차 통화·전체 지출 한도·같은 키 성공 기록을 함께 조회한다. 허용된 새 요청만 expenses에 삽입하며 현재 회차 정보·전체 참여자 알림 대상도 반환한다. Service는 반환한 현재 정보로 권한/버전/통화별 오류를 판별한다. 통화별 소수점 허용 여부는 DB 정보가 필요하므로 이 단계에서 검사하며 별도 SELECT를 추가하지 않는다. 금액은 BigInt와 PostgreSQL numeric으로 정확히 변환하고 정수 최소 단위로 저장한다.
+4. Repository.finishExpenseCreation()의 CTE SQL(+1). expense_shares를 unnest로 일괄 삽입하고 rounds.version 증가·mutation_requests 성공 응답 저장을 묶는다. 기록 중 전체 합계는 expenses의 SUM, 예상 송금은 expenses·expense_shares의 previewSettlement로 계산한다. 별도 합계/예상 송금 캐시를 만들지 않으며 최종 settlement_balances/transfers 저장은 기존 전송/추첨 단계에서 수행한다.
+5. COMMIT(+1)이 transaction advisory lock을 자동 해제한다. 실패는 ROLLBACK(+1)으로 지출·부담금·버전·성공 기록을 전부 취소하고 락도 해제한다. 롤백 실패 연결은 폐기한다.
+6. 성공 응답 뒤 after()는 INSERT에서 확보한 알림 대상에 invalidation 키만 발행하여 대상 조회 SQL을 실행하지 않는다. 같은 키·본문 성공 재생은 INSERT/부담금/버전 증가를 반복하지 않고 저장 응답을 반환하며 알림도 다시 발행하지 않는다. 다른 본문은 409 idempotency_conflict. stale_round 복구는 기존처럼 최신 상세를 조회하고 버전을 바꿔 한 번 재저장한다.
 
-SQL 순서: W의 6회 + S-ROUND → [S-ACTIVE-MEMBER] → S-MEMBERS → S-TOTAL → S-EXPENSE-INSERT → S-SHARES-DELETE → S-SHARES-INSERT → S-BUMP = **13 + A회**(생성자 13회, 일반 작성자 14회). 실패는 지출·부담금·버전·성공 기록 전체 ROLLBACK이다.
+SQL 순서: **AUTH → 요청 검증(SQL 0회) → BEGIN → transaction lock → 조건부 지출 INSERT → 부담금·버전·성공 기록 저장 → COMMIT/락 자동 해제 = 6회**. 생성자·일반 참여자·ALL/SELECTED/CUSTOM 모두 동일하며 WebSocket 발행까지 포함한다. 성공 직후 프론트에서 직접 GET을 보내지 않고 WebSocket invalidation을 받은 useResource만 상세를 조회한다. 버전 충돌 복구·수동 새로고침 GET은 유지하며 후속 GET의 SQL은 별도로 센다. 성공 재생·권한/상태/버전/통화/전체 한도 거절은 마지막 저장 SQL 없이 **5회**다. 실제 SQL은 [SettleRepository.ts](../src/Domain/Settle/Backend/Repository/SettleRepository.ts)의 insertExpenseCreation()/finishExpenseCreation()에 있다.
 
 ### S7. PATCH /api/rounds/{roundId}/expenses/{expenseId} — 지출 수정
 
@@ -1155,7 +1156,7 @@ SQL: W 6회 + S-ROUND → S-EXPENSE → [S-ACTIVE-MEMBER] → S-RECEIPT-DELETE �
 
 회차 생성 알림은 저장한 참여자 ID를 전달받아 수신자 SQL 0회다. 나머지 일반 변경 후 알림 수신자 조회는 BEGIN → 회차 group_id → round_members → COMMIT = **별도 4회**다. 참여자 제외는 활성 모임 멤버 조회까지 **5회**다. 취소는 S5의 기록 확인 SQL에서 삭제 전 허가된 수신자를 함께 읽으므로 삭제 전후 추가 조회 **0회**이며 성공 재생 시 재발행하지 않는다. 실시간 비활성화 시 모두 SQL 0회다. after() 알림 실패는 이미 저장한 변경을 롤백하지 않는다. 메시지에는 rounds·group-rounds·round·settlement와 필요한 groups/group 키만 넣고 금액·계좌·영수증·초대 토큰은 넣지 않는다.
 
-[scripts/settle-sql.integration.test.ts](../scripts/settle-sql.integration.test.ts)는 실제 PostgreSQL SQL 로그로 생성 4회·UUIDv7 PK·중복 409·동시 중복 단일 성공·세션 락 획득/해제·참여자 저장 실패 원자성·목록 4회·상세 10/11회·지출 작성자별 13/14회·수정 14회·삭제 12회·제외 검토 6회·제외 12회·확정 12회·재오픈 10회·나머지 있는 전송 12회·없는 전송 20회·추첨 17회/재추첨 방지 7회·최종 전/후 안내 5/8회·수취 확인 8회·일반/강제 종료 10/9회·취소 9회·영수증 생성/조회/삭제 16/4/10회·일반 성공 재생 5회·영수증 재생 4회·종료 후 편집 거절 ROLLBACK을 검증한다. 숫자는 해당 테스트의 참여자·분담금·송금 행 수 기준이며 위 계산식이 일반 규칙이다.
+[scripts/settle-sql.integration.test.ts](../scripts/settle-sql.integration.test.ts)는 실제 PostgreSQL SQL 로그로 생성 4회·UUIDv7 PK·중복 409·동시 중복 단일 성공·세션 락 획득/해제·참여자 저장 실패 원자성·목록 4회·상세 10/11회·지출 생성 6회·생성 입력 오류 AUTH 1회·생성 성공 재생 5회·생성 실패 전체 롤백·같은 키 동시 생성 단일 저장·수정 14회·삭제 12회·제외 검토 6회·제외 12회·확정 12회·재오픈 10회·나머지 있는 전송 12회·없는 전송 20회·추첨 17회/재추첨 방지 7회·최종 전/후 안내 5/8회·수취 확인 8회·일반/강제 종료 10/9회·취소 9회·영수증 생성/조회/삭제 16/4/10회·일반 성공 재생 5회·영수증 재생 4회·종료 후 편집 거절 ROLLBACK을 검증한다. 숫자는 해당 테스트의 참여자·분담금·송금 행 수 기준이며 위 계산식이 일반 규칙이다.
 
 기존 [settlement.integration.test.ts](../scripts/settlement.integration.test.ts)·[concurrency.integration.test.ts](../scripts/concurrency.integration.test.ts)·[receipt-migration.integration.test.ts](../scripts/receipt-migration.integration.test.ts)·[routes.integration.test.ts](../scripts/routes.integration.test.ts)는 Settle 공개 진입점을 통해 권한·과거 조회·정확한 통화/금액·CUSTOM 합계·멱등성·버전 충돌·추첨 중간 실패 취소·상태 전이 경합·사전 검사 후 업로드 경합·최신 수취 계좌 제한·기존 BYTEA 영수증을 검증한다. [domain-boundaries.test.ts](../src/lib/domain-boundaries.test.ts)는 Frontend/Shared→Backend 금지, 서버 전용 표시, 다른 도메인 내부 import 금지와 Controller/Service의 SQL 미포함을 검사한다. [settle.test.ts](../src/lib/settle.test.ts)는 경로 분배·출처·JSON/multipart 오류를 검사한다.
 

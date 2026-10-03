@@ -214,6 +214,41 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     assert.equal((await fetch(`${origin}/api/rounds/${ticket}`, { method: 'DELETE', headers: cancelHeaders, body: cancelBody })).status, 200)
     await new Promise(resolve => setTimeout(resolve, 250))
     assert.equal((output.slice(replayOutput).match(/SQL:/g) ?? []).length, 5, 'cancel replay uses the saved result without post-delete audience reads')
+    const expenseRoundId = uuidV7()
+    const expenseRoundMessages = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
+    assert.equal((await fetch(`${origin}/api/groups/${groupId}/rounds`, { method: 'POST', headers: { ...roundHeaders, 'idempotency-key': expenseRoundId }, body: JSON.stringify(roundBody) })).status, 200)
+    await Promise.all(expenseRoundMessages)
+    const expenseHeaders = { ...roundHeaders, 'idempotency-key': randomUUID() }
+    const expenseBody = JSON.stringify({ description: '지출 SQL 검증', amount: '100', payerId: memberId, splitMode: 'ALL', expectedVersion: 1 })
+    const expenseMessages = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
+    const expenseOutput = output.length
+    const expenseResponse = await fetch(`${origin}/api/rounds/${expenseRoundId}/expenses`, { method: 'POST', headers: expenseHeaders, body: expenseBody })
+    assert.equal(expenseResponse.status, 200, await expenseResponse.clone().text())
+    const savedExpense = (await expenseResponse.json()).data
+    for (const [bytes] of await Promise.all(expenseMessages)) assert.deepEqual(JSON.parse(bytes.toString()), {
+      type: 'invalidate', keys: ['rounds', `group-rounds:${groupId}`, `round:${expenseRoundId}`, `settlement:${expenseRoundId}`],
+    })
+    const expenseSql = output.slice(expenseOutput).split('SQL:').slice(1).map(sql => sql.trim())
+    assert.equal(expenseSql.length, 6, 'expense creation and WebSocket publication do not add audience reads')
+    assert.match(expenseSql[0], /FROM\s+users/)
+    assert.match(expenseSql[1], /^BEGIN/)
+    assert.match(expenseSql[2], /pg_advisory_xact_lock/)
+    assert.match(expenseSql[3], /INSERT INTO\s+expenses/)
+    assert.match(expenseSql[4], /INSERT INTO\s+expense_shares/)
+    assert.match(expenseSql[5], /^COMMIT/)
+    const expenseReplayOutput = output.length
+    const expenseReplay = await fetch(`${origin}/api/rounds/${expenseRoundId}/expenses`, { method: 'POST', headers: expenseHeaders, body: expenseBody })
+    assert.deepEqual((await expenseReplay.json()).data, savedExpense)
+    await new Promise(resolve => setTimeout(resolve, 250))
+    assert.equal((output.slice(expenseReplayOutput).match(/SQL:/g) ?? []).length, 5)
+    let expenseVersion = savedExpense.version
+    for (const path of [`rounds/${expenseRoundId}/expenses/${savedExpense.id}`, `rounds/${expenseRoundId}`]) {
+      const cleanupMessages = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
+      const cleanup = await fetch(`${origin}/api/${path}`, { method: 'DELETE', headers: { ...roundHeaders, 'idempotency-key': randomUUID() }, body: JSON.stringify({ expectedVersion: expenseVersion }) })
+      assert.equal(cleanup.status, 200)
+      expenseVersion = (await cleanup.json()).data.version
+      await Promise.all(cleanupMessages)
+    }
     const refreshCookie = mine.cookie.split('; ').find(value => value.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`))
     const refreshed = await fetch(`${origin}/api/auth/refresh`, { method: 'POST', headers: { origin, cookie: refreshCookie } })
     assert.equal(refreshed.status, 200, 'Refresh JWT works without an Access JWT')
