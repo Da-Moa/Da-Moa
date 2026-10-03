@@ -94,7 +94,7 @@ async function request<T>(path: string, options: RequestOptions): Promise<T> {
       }
       throw error
     }
-    pending ??= { signature, key: method === 'POST' && path === '/api/groups' ? uuidV7() : crypto.randomUUID(), body: snapshot(options.body) }
+    pending ??= { signature, key: method === 'POST' && (path === '/api/groups' || /^\/api\/groups\/[^/]+\/rounds$/.test(path)) ? uuidV7() : crypto.randomUUID(), body: snapshot(options.body) }
     unfinishedRequests.set(operation, pending)
   }
   const body = pending ? pending.body : options.body

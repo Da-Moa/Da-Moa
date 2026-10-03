@@ -1,5 +1,6 @@
 import 'server-only'
 import type { Database } from '../../../../Global/Util/Backend'
+import { roundCreationCandidatesSql } from '../../../Group/Backend'
 import type { Currency, Expense } from '../../Shared'
 import type { RoundRow, MemberRow, ExpenseRow, ShareRow, ReceiptRow, ExclusionExpenseRow, OutgoingRow, IncomingRow } from '../DAO/SettleDAO'
 
@@ -71,12 +72,19 @@ export function findViewerTransfers(client: Database, roundId: string, userId: s
   return client.query<{ sender_id: string; receiver_id: string; amount_minor: string }>('SELECT sender_id,receiver_id,amount_minor FROM settlement_transfers WHERE round_id=$1 AND (sender_id=$2 OR receiver_id=$2) ORDER BY sender_id,receiver_id', [roundId, userId])
 }
 
-export function insertRound(client: Database, id: string, groupId: string, userId: string, name: string, currency: Currency, now: number) {
-  return client.query('INSERT INTO rounds(id,group_id,creator_id,name,currency,status,version,created_at) VALUES($1,$2,$3,$4,$5,\'RECORDING\',1,$6)', [id, groupId, userId, name, currency, now])
-}
-
-export function insertMember(client: Database, id: string, memberId: string, memberName: string, now: number) {
-  return client.query('INSERT INTO round_members(round_id,user_id,display_name_snapshot,joined_at) VALUES($1,$2,$3,$4)', [id, memberId, memberName, now])
+export async function insertRound(client: Database, id: string, groupId: string, userId: string, name: string, currency: Currency, now: number, ids: string[]) {
+  return (await client.query<{ actor_active: boolean; is_member: boolean; created: boolean }>(`${roundCreationCandidatesSql}, created AS (
+    INSERT INTO rounds(id,group_id,creator_id,name,currency,status,version,created_at)
+    SELECT $3,$1,actor.id,$5,$6,'RECORDING',1,$7 FROM actor
+    WHERE actor.is_member AND (SELECT count(*) FROM candidates)=cardinality($2::text[])
+    RETURNING id
+  ), members AS (
+    INSERT INTO round_members(round_id,user_id,display_name_snapshot,joined_at)
+    SELECT created.id,candidates.id,candidates.name,$7 FROM created CROSS JOIN candidates
+    RETURNING user_id
+  ) SELECT EXISTS(SELECT 1 FROM actor) AS actor_active,
+    COALESCE((SELECT is_member FROM actor),false) AS is_member,
+    EXISTS(SELECT 1 FROM members) AS created`, [groupId, ids, id, userId, name, currency, now])).rows[0]
 }
 
 export function findExpense(client: Database, expenseId: string, roundId: string) {

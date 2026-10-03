@@ -112,7 +112,7 @@ async function setSession(session) {
   await cdp('Page.removeScriptToEvaluateOnNewDocument', { identifier: script.identifier })
 }
 async function api(session, path, method = 'GET', body) {
-  const response = await fetch(`${origin}${path}`, { method, headers: { Origin: origin, Authorization: `Bearer ${session.accessToken}`, 'Content-Type': 'application/json', 'Idempotency-Key': path === '/api/groups' && method === 'POST' ? uuidV7() : randomUUID() }, body: body === undefined ? undefined : JSON.stringify(body) })
+  const response = await fetch(`${origin}${path}`, { method, headers: { Origin: origin, Authorization: `Bearer ${session.accessToken}`, 'Content-Type': 'application/json', 'Idempotency-Key': method === 'POST' && (path === '/api/groups' || /^\/api\/groups\/[^/]+\/rounds$/.test(path)) ? uuidV7() : randomUUID() }, body: body === undefined ? undefined : JSON.stringify(body) })
   const result = await response.json()
   assert.ok(response.ok, `${method} ${path}: ${response.status} ${result.message ?? ''}`)
   return result.data ?? result

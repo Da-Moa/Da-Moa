@@ -34,20 +34,52 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
     process.env.DB_QUERY_LOG = 'true'
     let statements: string[] = []
     const logger = t.mock.method(console, 'info', (message: string) => { statements.push(message.replace(/^SQL:\s*/, '').replace(/\s+/g, ' ').trim()) })
-    const trace = async <T>(count: number, write: boolean | 'receipt', work: () => Promise<T>) => {
+    const trace = async <T>(count: number, write: boolean | 'receipt' | null, work: () => Promise<T>) => {
       statements = []
       const result = await work()
       assert.equal(statements.length, count, statements.join('\n'))
-      assert.equal(statements[0], write === true ? 'BEGIN' : 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
-      assert.equal(statements.at(-1), 'COMMIT')
-      assert.equal(statements.some(sql => sql.includes('pg_advisory_xact_lock')), write !== false)
+      if (write === null) {
+        assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b/.test(sql) && !/pg_advisory|FOR UPDATE|FOR SHARE|mutation_requests/.test(sql)))
+      } else {
+        assert.equal(statements[0], write === true ? 'BEGIN' : 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
+        assert.equal(statements.at(-1), 'COMMIT')
+        assert.equal(statements.some(sql => sql.includes('pg_advisory_xact_lock')), write !== false)
+      }
       assert.ok(statements.every(sql => !/^SET\b/.test(sql) && !sql.includes('refresh_sessions')))
       return result
     }
     try {
-      const createKey = key(), body = { name: '호출 수 검증', currency: 'KRW', participantIds: [a.userId, b.userId, c.userId] }
-      const round = await trace(12, true, () => createRound(a, createKey, group.id, body))
-      await trace(5, true, () => createRound(a, createKey, group.id, body))
+      const createKey = uuidV7(), body = { name: '호출 수 검증', currency: 'KRW', participantIds: [a.userId, b.userId, c.userId] }
+      const round = await trace(2, null, () => createRound(a, createKey, group.id, body))
+      await trace(2, null, () => assert.rejects(createRound(a, createKey, group.id, body), (error: { code: string }) => error.code === 'round_already_exists'))
+      assert.equal(round.id, createKey)
+      await trace(2, null, () => assert.rejects(createRound(a, createKey.toUpperCase(), group.id, { ...body, name: '다른 제목' }), (error: { code: string }) => error.code === 'round_already_exists'))
+      for (const [actor, ticket, input, expected, count] of [
+        [null, '', {}, 'unauthorized', 0],
+        [{ ...a, userId: randomUUID() }, '', {}, 'unauthorized', 1],
+        [a, randomUUID(), body, 'invalid_request_key', 1],
+        [a, '', body, 'invalid_request_key', 1],
+        [a, uuidV7(), { ...body, name: '' }, 'invalid_input', 1],
+        [a, uuidV7(), { ...body, currency: 'INVALID' }, 'unsupported_currency', 1],
+        [a, uuidV7(), { ...body, participantIds: [a.userId] }, 'minimum_participants', 1],
+        [a, uuidV7(), { ...body, participantIds: [a.userId, a.userId] }, 'invalid_participants', 1],
+        [a, uuidV7(), { ...body, participantIds: [a.userId, randomUUID()] }, 'invalid_participants', 2],
+      ] as const) await trace(count, null, () => assert.rejects(createRound(actor, ticket, group.id, input), (error: { code: string }) => error.code === expected))
+      await trace(2, null, () => assert.rejects(createRound(a, uuidV7(), randomUUID(), body), (error: { code: string }) => error.code === 'not_found'))
+      assert.equal((await db.query('SELECT 1 FROM mutation_requests WHERE request_key=$1', [createKey])).rowCount, 0)
+      const concurrentKey = uuidV7()
+      const outcomes = await Promise.allSettled(Array.from({ length: 5 }, () => createRound(b, concurrentKey, group.id, body)))
+      assert.equal(outcomes.filter(result => result.status === 'fulfilled').length, 1)
+      assert.ok(outcomes.filter(result => result.status === 'rejected').every(result => result.reason.code === 'round_already_exists'))
+      assert.equal((await db.query('SELECT COUNT(*)::int AS count FROM round_members WHERE round_id=$1', [concurrentKey])).rows[0].count, 3)
+      const rejectedKey = uuidV7(), constraint = `round_create_test_${randomUUID().replaceAll('-', '')}`
+      await db.query(`ALTER TABLE round_members ADD CONSTRAINT ${constraint} CHECK (round_id <> '${rejectedKey}') NOT VALID`)
+      try {
+        await trace(2, null, () => assert.rejects(createRound(a, rejectedKey, group.id, body), (error: { code: string; constraint: string }) => error.code === '23514' && error.constraint === constraint))
+        assert.equal((await db.query('SELECT 1 FROM rounds WHERE id=$1', [rejectedKey])).rowCount, 0)
+        assert.equal((await db.query('SELECT 1 FROM round_members WHERE round_id=$1', [rejectedKey])).rowCount, 0)
+      } finally { await db.query(`ALTER TABLE round_members DROP CONSTRAINT ${constraint}`) }
+
       await trace(4, false, () => listRounds(a, new URLSearchParams(), group.id))
       await trace(4, false, () => listRounds(a, new URLSearchParams({ q: '없는회차' })))
       await trace(10, false, () => getRound(a, round.id, new URLSearchParams()))
@@ -95,9 +127,9 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       await trace(8, true, () => setSettlementCheck(b, checkKey, round.id, checkBody))
       await trace(5, true, () => setSettlementCheck(b, checkKey, round.id, checkBody))
       await command('complete', 10)
-      const cancelled = await trace(11, true, () => createRound(a, key(), group.id, { ...body, participantIds: [a.userId, b.userId] }))
+      const cancelled = await trace(2, null, () => createRound(a, uuidV7(), group.id, { ...body, participantIds: [a.userId, b.userId] }))
       await trace(9, true, () => roundCommand(a, key(), cancelled.id, 'cancel', { expectedVersion: 1 }))
-      const even = await trace(11, true, () => createRound(a, key(), group.id, { ...body, participantIds: [a.userId, b.userId] }))
+      const even = await trace(2, null, () => createRound(a, uuidV7(), group.id, { ...body, participantIds: [a.userId, b.userId] }))
       let evenVersion = (await trace(13, true, () => saveExpense(a, key(), even.id, { ...expenseBody, amount: '100', expectedVersion: 1 }))).version!
       evenVersion = (await trace(12, true, () => roundCommand(a, key(), even.id, 'confirm', { expectedVersion: evenVersion }))).version!
       // Two shares + two balances + one transfer, finalized directly by send.

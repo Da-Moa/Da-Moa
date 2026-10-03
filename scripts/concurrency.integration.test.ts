@@ -41,7 +41,7 @@ async function group(join = true) {
 
 async function recordingRound() {
   const fixture = await group()
-  const round = await createRound(fixture.owner, key(), fixture.groupId, { name: '경합 검증 회차', currency: 'KRW', participantIds: [fixture.owner.userId, fixture.participant.userId] })
+  const round = await createRound(fixture.owner, uuidV7(), fixture.groupId, { name: '경합 검증 회차', currency: 'KRW', participantIds: [fixture.owner.userId, fixture.participant.userId] })
   const expense = await saveExpense(fixture.participant, key(), round.id, { description: '경합 지출', amount: '3', payerId: fixture.owner.userId, splitMode: 'ALL', expectedVersion: round.version })
   return { ...fixture, roundId: round.id, expenseId: expense.id, version: expense.version! }
 }
@@ -53,22 +53,15 @@ async function inspect<T>(work: (client: ReturnType<typeof createDatabaseClient>
 
 before(async () => { await inspect(client => applyMigrations(client)) })
 
-test('group departure and round creation serialize for participants and creators', async () => {
+test('round creation rejects committed group departures and departure rejects existing unfinished rounds', async () => {
   for (const creatorDeparture of [false, true]) {
-    const fixture = await group()
-    const actor = creatorDeparture ? fixture.owner : fixture.participant
-    const outcomes = await Promise.allSettled([
-      createRound(fixture.owner, key(), fixture.groupId, { name: '탈퇴 경합 회차', currency: 'KRW', participantIds: [fixture.owner.userId, fixture.participant.userId] }),
-      leaveGroup(actor, key(), fixture.groupId),
-    ])
-    assert.equal(outcomes.filter(outcome => outcome.status === 'fulfilled').length, 1)
-    if (outcomes[0].status === 'fulfilled') {
-      assert.equal((outcomes[1] as PromiseRejectedResult).reason.code, creatorDeparture ? 'unfinished_group_rounds' : 'unfinished_rounds')
-      const active = await inspect(async client => (await client.query('SELECT left_at FROM group_members WHERE group_id=$1 AND user_id=$2', [fixture.groupId, actor.userId])).rows[0])
-      assert.equal(active.left_at, null)
-    } else {
-      assert.equal(outcomes[0].reason.code, creatorDeparture ? 'not_found' : 'invalid_participants')
-    }
+    const fixture = await group(), actor = creatorDeparture ? fixture.owner : fixture.participant
+    const body = { name: '이탈 순서 검증', currency: 'KRW', participantIds: [fixture.owner.userId, fixture.participant.userId] }
+    const round = await createRound(fixture.owner, uuidV7(), fixture.groupId, body)
+    await assert.rejects(leaveGroup(actor, key(), fixture.groupId), (error: { code: string }) => error.code === (creatorDeparture ? 'unfinished_group_rounds' : 'unfinished_rounds'))
+    await roundCommand(fixture.owner, key(), round.id, 'cancel', { expectedVersion: 1 })
+    await leaveGroup(actor, key(), fixture.groupId)
+    await assert.rejects(createRound(fixture.owner, uuidV7(), fixture.groupId, body), (error: { code: string }) => error.code === (creatorDeparture ? 'not_found' : 'invalid_participants'))
   }
 })
 
@@ -108,7 +101,7 @@ test('settlement checks compose concurrently and normal/forced completion cannot
   const simultaneous = await group()
   const third = await member()
   await acceptInvite(third, key(), simultaneous.token)
-  const round = await createRound(simultaneous.owner, key(), simultaneous.groupId, { name: '복수 수취 경합', currency: 'KRW', participantIds: [simultaneous.owner.userId, simultaneous.participant.userId, third.userId] })
+  const round = await createRound(simultaneous.owner, uuidV7(), simultaneous.groupId, { name: '복수 수취 경합', currency: 'KRW', participantIds: [simultaneous.owner.userId, simultaneous.participant.userId, third.userId] })
   const expense = await saveExpense(simultaneous.owner, key(), round.id, { description: '복수 송금', amount: '6', payerId: simultaneous.owner.userId, splitMode: 'ALL', expectedVersion: round.version })
   const confirmed = await roundCommand(simultaneous.owner, key(), round.id, 'confirm', { expectedVersion: expense.version })
   const locked = await roundCommand(simultaneous.owner, key(), round.id, 'send', { expectedVersion: confirmed.version })
@@ -139,35 +132,21 @@ test('settlement checks compose concurrently and normal/forced completion cannot
   if (current.status === 'LOCKED') await roundCommand(lastCheck.owner, key(), lastCheck.roundId, 'complete', { expectedVersion: current.version })
 })
 
-test('round creation racing participant withdrawal never creates unfinished participation for a deleted member', async () => {
+test('round creation rejects committed withdrawal and withdrawal rejects existing unfinished participation', async () => {
   const fixture = await group()
-  const outcomes = await Promise.allSettled([
-    createRound(fixture.owner, key(), fixture.groupId, { name: '탈퇴와 경합', currency: 'KRW', participantIds: [fixture.owner.userId, fixture.participant.userId] }),
-    withdrawAccount(fixture.participant),
-  ])
-  assert.equal(outcomes.filter(outcome => outcome.status === 'fulfilled').length, 1)
-  const state = await inspect(async client => (await client.query(`
-    SELECT u.deleted_at,
-      (SELECT COUNT(*)::int FROM round_members m JOIN rounds r ON r.id=m.round_id WHERE m.user_id=u.id AND r.status<>'COMPLETED') AS unfinished
-    FROM users u WHERE u.id=$1`, [fixture.participant.userId])).rows[0])
-  if (outcomes[0].status === 'fulfilled') {
-    assert.equal(state.deleted_at, null)
-    assert.equal(state.unfinished, 1)
-    assert.ok(outcomes[1].status === 'rejected' && outcomes[1].reason instanceof AppError)
-    assert.equal(outcomes[1].reason.code, 'unfinished_rounds')
-    await roundCommand(fixture.owner, key(), outcomes[0].value.id, 'cancel', { expectedVersion: 1 })
-  } else {
-    assert.ok(outcomes[0].reason instanceof AppError)
-    assert.equal(outcomes[0].reason.code, 'invalid_participants')
-    assert.notEqual(state.deleted_at, null)
-    assert.equal(state.unfinished, 0)
-  }
+  const body = { name: '탈퇴 순서 검증', currency: 'KRW', participantIds: [fixture.owner.userId, fixture.participant.userId] }
+  const round = await createRound(fixture.owner, uuidV7(), fixture.groupId, body)
+  await assert.rejects(withdrawAccount(fixture.participant), (error: { code: string }) => error.code === 'unfinished_rounds')
+  await roundCommand(fixture.owner, key(), round.id, 'cancel', { expectedVersion: 1 })
+  await withdrawAccount(fixture.participant)
+  await assert.rejects(createRound(fixture.owner, uuidV7(), fixture.groupId, body), (error: { code: string }) => error.code === 'invalid_participants')
+  await assert.rejects(createRound(fixture.participant, uuidV7(), fixture.groupId, body), (error: { code: string }) => error.code === 'unauthorized')
 })
 
-test('withdrawal checks unfinished participation after waiting for a round creation lock', async () => {
+test('round creation ignores the advisory lock and waiting withdrawal sees its committed participation', async () => {
   const fixture = await group()
   const gate = createDatabaseClient(testUrl!)
-  const roundId = key()
+  const roundId = uuidV7()
   let withdrawal: Promise<{ error?: unknown }> | undefined
   let gateHeld = false
   try {
@@ -184,12 +163,10 @@ test('withdrawal checks unfinished participation after waiting for a round creat
       assert.ok(Date.now() < deadline, 'withdrawal did not reach its write-lock wait')
       await sleep(20)
     }
-    // Commit a new round while withdrawal waits: its unfinished check must run after the lock.
-    const now = currentTimestamp()
-    await gate.query(`INSERT INTO rounds(id,group_id,creator_id,name,currency,status,version,created_at)
-      VALUES($1,$2,$3,'락 대기 중 생성','KRW','RECORDING',1,$4)`, [roundId, fixture.groupId, fixture.owner.userId, now])
-    for (const actor of [fixture.owner, fixture.participant]) await gate.query(`
-      INSERT INTO round_members(round_id,user_id,display_name_snapshot,joined_at) VALUES($1,$2,'경합 검증',$3)`, [roundId, actor.userId, now])
+    // The public creation API must finish while another connection holds the advisory lock.
+    await createRound(fixture.owner, roundId, fixture.groupId, {
+      name: '락 대기 중 생성', currency: 'KRW', participantIds: [fixture.owner.userId, fixture.participant.userId],
+    })
     await gate.query('COMMIT')
     gateHeld = false
     const outcome = await withdrawal

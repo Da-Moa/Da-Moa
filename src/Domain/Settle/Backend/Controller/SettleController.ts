@@ -18,10 +18,10 @@ export async function getSettleResponse(request: NextRequest, path: string[]): P
     const key = request.headers.get('idempotency-key') ?? ''
     const query = request.nextUrl.searchParams
     let data: unknown
-    let cancelledAudience: RoundAudience | null | undefined
-    if (path[0] === 'rounds' && path.length === 2 && method === 'DELETE') cancelledAudience = await captureRoundAudience(access, path[1])
+    let affectedAudience: RoundAudience | null | undefined
+    if (path[0] === 'rounds' && path.length === 2 && method === 'DELETE') affectedAudience = await captureRoundAudience(access, path[1])
     if (path[0] === 'groups' && path.length === 3 && path[2] === 'rounds' && method === 'GET') data = await listRounds(access, query, path[1])
-    else if (path[0] === 'groups' && path.length === 3 && path[2] === 'rounds' && method === 'POST') data = await createRound(access, key, path[1], await jsonBody(request))
+    else if (path[0] === 'groups' && path.length === 3 && path[2] === 'rounds' && method === 'POST') data = await createRound(access, key, path[1], await jsonBody(request), userIds => { affectedAudience = { groupId: path[1], userIds } })
     else if (path[0] === 'rounds' && path.length === 1 && method === 'GET') data = await listRounds(access, query)
     else if (path[0] === 'rounds' && path.length === 2 && method === 'GET') data = await getRound(access, path[1], query)
     else if (path[0] === 'rounds' && path.length === 2 && method === 'DELETE') data = await roundCommand(access, key, path[1], 'cancel', await jsonBody(request))
@@ -46,8 +46,8 @@ export async function getSettleResponse(request: NextRequest, path: string[]): P
       return new Response(new Uint8Array(receipt.content).buffer, { headers: { 'Content-Type': receipt.mimeType, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, no-store' } })
     } else throw new AppError(404, 'not_found', '요청한 API를 찾을 수 없어요')
     if (method !== 'GET' && realtimeEnabled()) {
-      if (path[0] === 'groups' && path[2] === 'rounds') after(() => publishRoundInvalidation((data as { roundId?: string; id: string }).roundId ?? (data as { id: string }).id))
-      else if (path[0] === 'rounds') after(() => publishRoundInvalidation(path[1], path[2] === 'members', cancelledAudience))
+      if (path[0] === 'groups' && path[2] === 'rounds') after(() => publishRoundInvalidation((data as { roundId?: string; id: string }).roundId ?? (data as { id: string }).id, false, affectedAudience))
+      else if (path[0] === 'rounds') after(() => publishRoundInvalidation(path[1], path[2] === 'members', affectedAudience))
     }
     return Response.json({ data }, { headers: { 'Cache-Control': 'private, no-store' } })
   } catch (error) { return errorResponse(error) }

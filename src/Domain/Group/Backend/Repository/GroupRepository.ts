@@ -169,7 +169,15 @@ export const endUserMembershipsSql = `
   RETURNING group_id
 `
 
-export function findRoundCandidates(client: Database, groupId: string, ids: string[]) {
-  return client.query<{ id: string; name: string }>(`SELECT u.id,COALESCE(u.display_name,'카카오 사용자') AS name FROM group_members m JOIN users u ON u.id=m.user_id
-      WHERE m.group_id=$1 AND m.user_id=ANY($2::text[]) AND m.left_at IS NULL AND u.deleted_at IS NULL AND u.onboarding_completed_at IS NOT NULL ORDER BY u.id`, [groupId, ids])
-}
+// ponytail: snapshot checks do not serialize departures/withdrawals; coordinate resource locks if that guarantee is needed.
+// Parameters: $1 groupId, $2 participantIds, $4 actorId. Composed by Settle's single INSERT statement.
+export const roundCreationCandidatesSql = `WITH actor AS (
+    SELECT u.id,m.user_id IS NOT NULL AS is_member FROM users u
+    LEFT JOIN group_members m ON m.user_id=u.id AND m.group_id=$1 AND m.left_at IS NULL
+    WHERE u.id=$4 AND u.deleted_at IS NULL AND u.onboarding_completed_at IS NOT NULL
+  ), candidates AS (
+    SELECT u.id,COALESCE(u.display_name,'카카오 사용자') AS name
+    FROM group_members m JOIN users u ON u.id=m.user_id
+    WHERE m.group_id=$1 AND m.user_id=ANY($2::text[]) AND m.left_at IS NULL
+      AND u.deleted_at IS NULL AND u.onboarding_completed_at IS NOT NULL
+  )`

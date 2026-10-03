@@ -1,14 +1,13 @@
 import 'server-only'
 import { createHash, randomInt, randomUUID } from 'node:crypto'
 import { requireAccount } from '../../../../Global/Auth/Backend'
-import { AppError, badInput, withReadTransaction, replayMutation, deleteReceiptObject, putReceipt, readReceipt, convertReceipt, type Database, domainMutation, idsInput, nowSeconds, onlyKeys, pageOf, pagination, textInput, type Identity } from '../../../../Global/Util/Backend'
-import { getActiveRoundCandidates, requireGroupMembership } from '../../../Group/Backend'
+import { AppError, badInput, withDatabaseConnection, withReadTransaction, replayMutation, deleteReceiptObject, putReceipt, readReceipt, convertReceipt, type Database, domainMutation, idsInput, nowSeconds, onlyKeys, pageOf, pagination, textInput, type Identity } from '../../../../Global/Util/Backend'
 import { formatMoney, MAX_EXPENSE_MAJOR, MAX_ROUND_TOTAL_MAJOR, minorLimit, parseAmount, requireCurrency, type Currency, type CreateRoundRequestDTO, type ExpenseRequestDTO, type VersionRequestDTO, type SettlementCheckRequestDTO } from '../../Shared'
 import { calculateBase, finalizeSettlement, previewSettlement, validateCustomShares } from '../../Shared'
 import type { ExclusionCheck, Expense, MutationResult, RoundDetail, RoundMember, RoundStatus, RoundSummary, SettlementDTO, SettlementTransfer } from '../../Shared'
 
 import type { RoundRow, ExpenseRow } from '../DAO/SettleDAO'
-import { missing } from '../Exception/SettleException'
+import { duplicateRound, missing } from '../Exception/SettleException'
 import * as repository from '../Repository/SettleRepository'
 
 async function roundFor(client: Database, id: string, userId: string): Promise<RoundRow> {
@@ -119,20 +118,27 @@ export async function getRound(access: Identity, roundId: string, query: URLSear
   })
 }
 
-export async function createRound(access: Identity, key: string, groupId: string, body: CreateRoundRequestDTO | Record<string, unknown>) {
-  onlyKeys(body, ['name', 'currency', 'participantIds'])
-  const name = textInput(body.name, 100), ids = idsInput(body.participantIds)
-  let currency: Currency
-  try { currency = requireCurrency(body.currency) } catch { badInput('unsupported_currency', '지원하는 회차 통화를 선택해 주세요') }
-  return domainMutation(access, key, 'round.create', { groupId, ...body }, async (client, userId) => {
-    await requireGroupMembership(client, groupId, userId)
-    if (ids.length < 2 || !ids.includes(userId)) throw new AppError(409, 'minimum_participants', '회차 생성자를 포함해 최소 2명을 선택해 주세요')
-    const rows = await getActiveRoundCandidates(client, groupId, ids)
-    if (rows.length !== ids.length) badInput('invalid_participants', '현재 모임 참여자만 선택할 수 있어요')
-    const id = randomUUID(), now = nowSeconds()
-    await repository.insertRound(client, id, groupId, userId, name, currency, now)
-    for (const member of rows) await repository.insertMember(client, id, member.id, member.name, now)
-    return { id, roundId: id, status: 'RECORDING', version: 1 }
+export async function createRound(access: Identity, key: string, groupId: string, body: CreateRoundRequestDTO | Record<string, unknown>, captureAudience?: (userIds: string[]) => void) {
+  return withDatabaseConnection(async client => {
+    const account = await requireAccount(client, access)
+    onlyKeys(body, ['name', 'currency', 'participantIds'])
+    const name = textInput(body.name, 100), ids = idsInput(body.participantIds)
+    let currency: Currency
+    try { currency = requireCurrency(body.currency) } catch { badInput('unsupported_currency', '지원하는 회차 통화를 선택해 주세요') }
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(key)) badInput('invalid_request_key', 'UUIDv7 회차 생성 ticket이 필요합니다')
+    if (ids.length < 2 || !ids.includes(account.id)) throw new AppError(409, 'minimum_participants', '회차 생성자를 포함해 최소 2명을 선택해 주세요')
+    const id = key.toLowerCase()
+    try {
+      const result = await repository.insertRound(client, id, groupId, account.id, name, currency, nowSeconds(), ids)
+      if (!result.actor_active) throw new AppError(401, 'unauthorized', '로그인이 필요합니다')
+      if (!result.is_member) throw missing()
+      if (!result.created) badInput('invalid_participants', '현재 모임 참여자만 선택할 수 있어요')
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === '23505' && 'constraint' in error && error.constraint === 'rounds_pkey') throw duplicateRound()
+      throw error
+    }
+    captureAudience?.(ids)
+    return { id, roundId: id, status: 'RECORDING' as const, version: 1 }
   })
 }
 
