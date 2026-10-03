@@ -1102,15 +1102,16 @@ SQL: AUTH **1회** → S-SETTLEMENT **1회** = **2회**. 최종 저장 전·후�
 
 ### S16. POST /api/rounds/{roundId}/settlement-check — 수취 수동 확인·해제
 
-SettlementClient.setChecked(checked,senderId?) → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.setSettlementCheck(SettlementCheckRequestDTO) → W → MutationResult → 정산 안내 재조회.
+SettlementClient.setChecked(checked,senderId?) → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.setSettlementCheck(SettlementCheckRequestDTO) → 공용 연결 → MutationResult → 정산 안내 재조회.
 
-1. onlyKeys(['expectedVersion','checked','senderId']). checked는 boolean이며 선택 senderId는 공백 없는 1~128자 식별자 형식으로 검사한다.
-2. W → S-ROUND → 버전·LOCKED·최종 저장 완료 검사.
-3. S-RECEIVED 한 UPDATE는 receiver_id=본인과 선택 sender_id로 제한한다. checked=true는 기존 확인 시각을 COALESCE로 유지하고 false는 NULL로 해제한다. senderId 생략은 본인의 모든 incoming에 적용한다.
-4. 영향 행이 없으면 403 forbidden이다. 다른 수취인 확인·종료 후 변경은 거절한다. 이 작업은 회차 버전을 증가시키지 않는다.
-5. IDEM-SAVE → COMMIT → 정산 DTO 재조회·알림 예약. 은행 입금 자동 조회는 없다.
+1. AUTH 회원 조회(+1)로 활성 가입 회원을 확인한 뒤 onlyKeys(['expectedVersion','checked','senderId'])·checked boolean·공백 없는 1~128자 senderId·요청 키 형식을 검사한다. 입력 오류는 AUTH 1회로 끝난다.
+2. findSettlementCheck() 통합 조회(+1)로 회차 참여 권한·상태·버전·최종 저장 여부·본인이 받는 송금자/확인 시각·알림 대상을 읽는다. 버전·LOCKED·최종 저장 완료를 검사하고 요청 senderId가 본인의 수취 목록에 있는지 비교한다. senderId 생략은 본인의 전체 수취 목록이다.
+3. 대상 수취 내역이 없으면 403 forbidden, 이미 요청한 확인 상태라 변경할 기록이 없으면 404 not_found다. 같은 키·새 키 재시도 모두 현재 기록으로 판단하며 성공 응답을 재생하거나 mutation_requests를 저장하지 않는다.
+4. setReceived() 단일 조건부 UPDATE(+1)는 receiver_id=본인·선택 sender_id·현재 확인 상태가 요청과 다른 행에만 적용한다. 저장 문장에서도 활성 회원·LOCKED·미종료·최종 저장·버전을 검사한다. checked=true는 미확인 행에 시각을 기록하고 false는 확인된 행을 NULL로 해제한다. 조회 뒤 선행 확인/종료 때문에 변경 행이 없어져도 404 not_found이며 알림을 발행하지 않는다. 회차 버전은 증가시키지 않는다.
+5. 받을 잔액은 원본 settlement_balances를 보존하고 확인된 incoming 합계만큼 화면에서 차감한다. 보내는 안내의 outgoing도 같은 received_at을 기준으로 제외되므로 별도 금액 UPDATE가 필요 없다. 확인 해제는 양쪽 표시를 복원하고 전체 확인도 SQL 문장 하나로 저장한다.
+6. 자동 커밋 뒤 조회에 포함된 알림 대상으로 WebSocket invalidation을 발행하며 발행에 추가 SQL은 없다. 명시적 트랜잭션·advisory lock·FOR UPDATE/FOR SHARE·멱등 성공 기록은 없다. 은행 입금 자동 조회는 없다.
 
-SQL: W 6회 + S-ROUND → S-RECEIVED = **8회**. 같은 키 성공 재생은 5회이며 동시 수취인 확인을 같은 잠금 아래 합성한다.
+SQL: **AUTH 1 + 수취 목록/권한 1 + 확인 저장 1 = 3회**. 이미 같은 상태인 재요청·수취 대상 불일치·상태/버전 오류는 2회다. `scripts/settle-sql.integration.test.ts`가 실제 SQL 로그의 횟수·순서·락/트랜잭션 부재·알림 대상·원본 잔액 보존을, 정산/Route/경합 통합 테스트가 건별/전체 확인·해제·404 재요청·조회 뒤 선행 확인/종료를 검증한다.
 
 ### S17. POST /api/rounds/{roundId}/complete — 일반 정산 종료
 

@@ -172,6 +172,9 @@ test('Route Handler contracts enforce Bearer JWTs, origin, idempotency, normaliz
     assert.equal((await request(`rounds/${roundId}/settlement-check`, a.accessToken, 'POST', { expectedVersion: locked.version, checked: 'yes' })).status, 400)
     assert.equal((await request(`rounds/${roundId}/settlement-check`, a.accessToken, 'POST', { expectedVersion: locked.version, checked: true })).status, 403)
     assert.equal((await request(`rounds/${roundId}/settlement-check`, b.accessToken, 'POST', { expectedVersion: locked.version, checked: true, senderId: a.userId })).status, 200)
+    const repeatedCheck = await request(`rounds/${roundId}/settlement-check`, b.accessToken, 'POST', { expectedVersion: locked.version, checked: true, senderId: a.userId })
+    assert.equal(repeatedCheck.status, 404)
+    assert.equal((await repeatedCheck.json()).error, 'not_found')
     const checked = (await (await request(`rounds/${roundId}/settlement`, a.accessToken)).json()).data
     assert.deepEqual({ checkedCount: checked.checkedCount, requiredCount: checked.requiredCount, allChecked: checked.allChecked }, { checkedCount: 1, requiredCount: 1, allChecked: true })
     assert.equal((await request(`rounds/${roundId}/complete`, a.accessToken, 'POST', { expectedVersion: locked.version })).status, 200)

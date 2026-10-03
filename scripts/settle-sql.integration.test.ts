@@ -35,11 +35,16 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
     process.env.DB_QUERY_LOG = 'true'
     let statements: string[] = []
     const logger = t.mock.method(console, 'info', (message: string) => { statements.push(message.replace(/^SQL:\s*/, '').replace(/\s+/g, ' ').trim()) })
-    const trace = async <T>(count: number, write: boolean | 'receipt' | 'session' | 'connection' | 'cancel' | 'expense' | 'patch' | 'delete' | 'exclude' | 'confirm' | 'reopen' | 'draw' | 'settlement', work: () => Promise<T>) => {
+    const trace = async <T>(count: number, write: boolean | 'receipt' | 'session' | 'connection' | 'cancel' | 'expense' | 'patch' | 'delete' | 'exclude' | 'confirm' | 'reopen' | 'draw' | 'settlement' | 'check', work: () => Promise<T>) => {
       statements = []
       const result = await work()
       assert.equal(statements.length, count, statements.join('\n'))
-      if (write === 'settlement') {
+      if (write === 'check') {
+        assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory|FOR UPDATE|FOR SHARE|mutation_requests/.test(sql)))
+        if (count) assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
+        if (count > 1) assert.match(statements[1], /t.receiver_id = \$2.*AS incoming.*AS user_ids.*JOIN round_members viewer/)
+        if (count === 3) assert.match(statements[2], /UPDATE settlement_transfers.*receiver_id = \$2.*received_at IS NOT NULL.*status = 'LOCKED'.*version = \$6/)
+      } else if (write === 'settlement') {
         assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
         if (count) assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
         if (count === 2) {
@@ -616,16 +621,39 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       assert.equal(receiver.checkRequired, true)
       assert.deepEqual(receiver.outgoing, [])
       const checkKey = key(), checkBody = { checked: true, senderId: a.userId, expectedVersion: version }
-      await trace(8, true, () => setSettlementCheck(b, checkKey, round.id, checkBody))
-      await trace(5, true, () => setSettlementCheck(b, checkKey, round.id, checkBody))
+      for (const [actor, ticket, input, count, expected] of [
+        [null, checkKey, { checked: 'yes' }, 0, 'unauthorized'],
+        [{ ...b, userId: randomUUID() }, checkKey, { checked: 'yes' }, 1, 'unauthorized'],
+        [b, checkKey, { ...checkBody, checked: 'yes' }, 1, 'invalid_input'],
+        [b, checkKey, { ...checkBody, senderId: ' sender ' }, 1, 'invalid_input'],
+        [b, checkKey, { ...checkBody, extra: true }, 1, 'invalid_input'],
+        [b, 'invalid-key', checkBody, 1, 'invalid_request_key'],
+        [b, checkKey, { ...checkBody, expectedVersion: version + 1 }, 2, 'stale_round'],
+        [b, checkKey, { ...checkBody, senderId: c.userId }, 2, 'forbidden'],
+        [a, checkKey, checkBody, 2, 'forbidden'],
+        [b, checkKey, { ...checkBody, checked: false }, 2, 'not_found'],
+      ] as const) await trace(count, 'check', () => assert.rejects(setSettlementCheck(actor, ticket, round.id, input), (error: { code: string }) => error.code === expected))
+      const checked = await trace(3, 'check', () => setSettlementCheck(b, checkKey, round.id, checkBody, audience => {
+        assert.equal(audience.groupId, group.id)
+        assert.deepEqual(new Set(audience.userIds), new Set([a.userId, b.userId, c.userId]))
+      }))
+      assert.equal(checked.version, version)
+      for (const ticket of [checkKey, key()]) await trace(2, 'check', () => assert.rejects(setSettlementCheck(b, ticket, round.id, checkBody,
+        () => assert.fail('unchanged checks must not publish')), (error: { code: string }) => error.code === 'not_found'))
       const received = await trace(2, 'settlement', () => getSettlement(b, round.id))
       assert.notEqual(received.incoming[0].receivedAt, null)
       assert.equal(received.checkedAt, received.incoming[0].receivedAt)
       assert.equal(received.checkedCount, 1)
       assert.equal(received.allChecked, true)
       assert.deepEqual((await trace(2, 'settlement', () => getSettlement(a, round.id))).outgoing, [])
+      assert.equal(received.balanceMinor, receiver.balanceMinor, 'original settlement balances are immutable')
+      await trace(3, 'check', () => setSettlementCheck(b, key(), round.id, { ...checkBody, checked: false }))
+      assert.notEqual((await trace(2, 'settlement', () => getSettlement(a, round.id))).outgoing.length, 0)
+      await trace(3, 'check', () => setSettlementCheck(b, key(), round.id, checkBody))
       await command('complete', 10)
       assert.equal((await trace(2, 'settlement', () => getSettlement(b, round.id))).status, 'COMPLETED')
+      await trace(2, 'check', () => assert.rejects(setSettlementCheck(b, key(), round.id, { ...checkBody, expectedVersion: version, checked: false }),
+        (error: { code: string }) => error.code === 'invalid_round_state'))
       await t.test('settlement omits accounts for non-KRW transfers in two SQL calls', async () => {
         const foreign = await createRound(a, uuidV7(), group.id, { ...body, currency: 'USD', participantIds: [a.userId, b.userId] })
         const saved = await saveExpense(a, key(), foreign.id, { description: '외화', amount: '0.30', payerId: b.userId, splitMode: 'ALL', expectedVersion: 1 })

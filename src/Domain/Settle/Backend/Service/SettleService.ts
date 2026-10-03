@@ -541,18 +541,25 @@ export async function roundCommand(access: Identity, key: string, roundId: strin
   })
 }
 
-export async function setSettlementCheck(access: Identity, key: string, roundId: string, body: SettlementCheckRequestDTO | Record<string, unknown>) {
-  onlyKeys(body, ['expectedVersion', 'checked', 'senderId'])
-  if (typeof body.checked !== 'boolean') badInput('invalid_input', '정산 확인 여부를 선택해 주세요')
-  if (body.senderId !== undefined && (typeof body.senderId !== 'string' || body.senderId !== body.senderId.trim() || !/^[\w-]{1,128}$/.test(body.senderId))) badInput('invalid_input', '확인할 송금자를 다시 선택해 주세요')
-  const senderId = body.senderId as string | undefined
-  return domainMutation(access, key, 'settlement.check', { roundId, ...body }, async (client, userId) => {
-    const round = await roundFor(client, roundId, userId)
+export async function setSettlementCheck(access: Identity, key: string, roundId: string, body: SettlementCheckRequestDTO | Record<string, unknown>, captureAudience?: (audience: { groupId: string; userIds: string[] }) => void) {
+  return withDatabaseConnection(async client => {
+    const account = await requireAccount(client, access)
+    onlyKeys(body, ['expectedVersion', 'checked', 'senderId'])
+    if (typeof body.checked !== 'boolean') badInput('invalid_input', '정산 확인 여부를 선택해 주세요')
+    if (body.senderId !== undefined && (typeof body.senderId !== 'string' || body.senderId !== body.senderId.trim() || !/^[\w-]{1,128}$/.test(body.senderId))) badInput('invalid_input', '확인할 송금자를 다시 선택해 주세요')
+    mutationDigest(key, { roundId, ...body })
+    const senderId = body.senderId as string | undefined
+    const { rows: [round] } = await repository.findSettlementCheck(client, roundId, account.id)
+    if (!round) throw missing()
     version(round, body.expectedVersion)
     state(round, 'LOCKED')
     if (round.finalized_at === null) throw new AppError(409, 'invalid_round_state', '최종 금액이 정해진 뒤 확인할 수 있어요')
-    const { rowCount } = await repository.setReceived(client, roundId, userId, senderId ?? null, body.checked as boolean, nowSeconds())
-    if (!rowCount) throw new AppError(403, 'forbidden', '확인할 수 있는 수취 내역이 없어요')
+    const incoming = round.incoming.filter(transfer => senderId === undefined || transfer.sender_id === senderId)
+    if (!incoming.length) throw new AppError(403, 'forbidden', '확인할 수 있는 수취 내역이 없어요')
+    if (!incoming.some(transfer => (transfer.received_at !== null) !== body.checked)) throw new AppError(404, 'not_found', '변경할 수취 내역이 없어요')
+    const { rowCount } = await repository.setReceived(client, roundId, account.id, senderId ?? null, body.checked, nowSeconds(), round.version)
+    if (!rowCount) throw new AppError(404, 'not_found', '변경할 수취 내역이 없어요')
+    captureAudience?.({ groupId: round.group_id, userIds: round.user_ids })
     return { id: roundId, roundId, status: round.status, version: round.version }
   })
 }

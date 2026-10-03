@@ -296,8 +296,8 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       const requestKey = key()
       await setSettlementCheck(a, requestKey, r.id, { expectedVersion: initial.version, checked: true })
       const checkedAt = (await getSettlement(a, r.id)).checkedAt
-      await setSettlementCheck(a, requestKey, r.id, { expectedVersion: initial.version, checked: true })
-      await setSettlementCheck(a, key(), r.id, { expectedVersion: initial.version, checked: true })
+      await assert.rejects(setSettlementCheck(a, requestKey, r.id, { expectedVersion: initial.version, checked: true }), code('not_found'))
+      await assert.rejects(setSettlementCheck(a, key(), r.id, { expectedVersion: initial.version, checked: true }), code('not_found'))
       assert.equal((await getSettlement(a, r.id)).checkedAt, checkedAt, 'repeated checks must preserve the first timestamp')
       await setSettlementCheck(a, key(), r.id, { expectedVersion: initial.version, checked: false })
       assert.equal((await getSettlement(a, r.id)).checkedAt, null)

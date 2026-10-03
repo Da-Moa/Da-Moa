@@ -2,7 +2,7 @@ import 'server-only'
 import type { Database } from '../../../../Global/Util/Backend'
 import { roundCreationCandidatesSql } from '../../../Group/Backend'
 import type { Currency, Expense, MutationResult, finalizeSettlement } from '../../Shared'
-import type { RoundRow, RoundDetailRow, RoundConfirmationRow, ExpenseUpdateRow, ExpenseDeletionRow, MemberExclusionRow, MemberRow, ExpenseRow, ShareRow, ReceiptRow, SettlementExpenseRow, SettlementRow } from '../DAO/SettleDAO'
+import type { RoundRow, RoundDetailRow, RoundConfirmationRow, ExpenseUpdateRow, ExpenseDeletionRow, MemberExclusionRow, MemberRow, ExpenseRow, ShareRow, ReceiptRow, SettlementExpenseRow, SettlementCheckRow, SettlementRow } from '../DAO/SettleDAO'
 
 export function findRound(client: Database, id: string, userId: string) {
   return client.query<RoundRow>(`SELECT r.*,g.name AS group_name,g.creator_id AS group_creator_id,
@@ -426,10 +426,24 @@ export function deleteRound(client: Database, roundId: string, userId: string, k
     SELECT $2,'round.cancel',$3,$4,id,$5,$6 FROM deleted`, [roundId, userId, key, digest, JSON.stringify(result), now])
 }
 
-export function setReceived(client: Database, roundId: string, userId: string, senderId: string | null, checked: boolean, now: number) {
+export function findSettlementCheck(client: Database, roundId: string, userId: string) {
+  return client.query<SettlementCheckRow>(`SELECT r.*,g.name AS group_name,g.creator_id AS group_creator_id,(r.creator_id=$2) AS is_creator,
+    COALESCE((SELECT jsonb_agg(jsonb_build_object('sender_id',t.sender_id,'received_at',t.received_at::text) ORDER BY t.sender_id)
+      FROM settlement_transfers t WHERE t.round_id=r.id AND t.receiver_id=$2),'[]'::jsonb) AS incoming,
+    ARRAY(SELECT user_id FROM round_members WHERE round_id=r.id) AS user_ids
+    FROM rounds r JOIN groups g ON g.id=r.group_id JOIN round_members viewer ON viewer.round_id=r.id AND viewer.user_id=$2
+    WHERE r.id=$1`, [roundId, userId])
+}
+
+export function setReceived(client: Database, roundId: string, userId: string, senderId: string | null, checked: boolean, now: number, expectedVersion: number) {
+  // ponytail: receipt changes and round completion are not serialized; use a shared lock if they must overlap safely.
   return client.query(`UPDATE settlement_transfers SET received_at=CASE
-      WHEN $4 THEN COALESCE(received_at,$5) ELSE NULL END
-      WHERE round_id=$1 AND receiver_id=$2 AND ($3::text IS NULL OR sender_id=$3)`, [roundId, userId, senderId, checked, now])
+      WHEN $4 THEN $5::bigint ELSE NULL END
+      WHERE round_id=$1 AND receiver_id=$2 AND ($3::text IS NULL OR sender_id=$3)
+        AND (received_at IS NOT NULL)<>$4
+        AND EXISTS(SELECT 1 FROM rounds WHERE id=$1 AND status='LOCKED' AND completed_at IS NULL AND finalized_at IS NOT NULL AND version=$6)
+        AND EXISTS(SELECT 1 FROM users WHERE id=$2 AND deleted_at IS NULL AND onboarding_completed_at IS NOT NULL)`,
+    [roundId, userId, senderId, checked, now, expectedVersion])
 }
 
 export function findSettlement(client: Database, roundId: string, userId: string) {

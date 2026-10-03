@@ -227,6 +227,45 @@ test('settlement checks compose concurrently and normal/forced completion cannot
   if (current.status === 'LOCKED') await roundCommand(lastCheck.owner, key(), lastCheck.roundId, 'complete', { expectedVersion: current.version })
 })
 
+test('settlement check rechecks a duplicate or completed round after its incoming read', { timeout: 15000 }, async t => {
+  for (const winnerAction of ['check', 'force-complete']) {
+    const fixture = await recordingRound()
+    const confirmed = await roundCommand(fixture.owner, key(), fixture.roundId, 'confirm', { expectedVersion: fixture.version })
+    const locked = await roundCommand(fixture.owner, key(), fixture.roundId, 'send', { expectedVersion: confirmed.version })
+    const finalized = await roundCommand(fixture.owner, key(), fixture.roundId, 'draw', { expectedVersion: locked.version })
+    const body = { expectedVersion: finalized.version, checked: true }
+    const pool = getDatabasePool(process.env.DATABASE_URL!), connect = pool.connect.bind(pool)
+    let resume!: () => void, reached!: () => void
+    const paused = new Promise<void>(resolve => { reached = resolve }), gate = new Promise<void>(resolve => { resume = resolve })
+    const connectionMock = t.mock.method(pool, 'connect', async () => {
+      connectionMock.mock.restore()
+      const borrowed = await connect()
+      const queryMock = t.mock.method(borrowed, 'query', new Proxy(borrowed.query, {
+        apply(target, receiver, args) {
+          const pending = Reflect.apply(target, receiver, args)
+          if (String(args[0]).includes('AS incoming')) {
+            queryMock.mock.restore()
+            return pending.then(async (result: unknown) => { reached(); await gate; return result })
+          }
+          return pending
+        },
+      }))
+      return borrowed
+    })
+    const older = setSettlementCheck(fixture.owner, key(), fixture.roundId, body, () => assert.fail('losing check must not publish'))
+      .then(result => ({ result, error: undefined }), error => ({ result: undefined, error }))
+    try {
+      await paused
+      if (winnerAction === 'check') await setSettlementCheck(fixture.owner, key(), fixture.roundId, body)
+      else await roundCommand(fixture.owner, key(), fixture.roundId, winnerAction, { expectedVersion: finalized.version })
+      const saved = await getSettlement(fixture.owner, fixture.roundId)
+      resume()
+      assert.equal((await older).error?.code, 'not_found')
+      assert.deepEqual(await getSettlement(fixture.owner, fixture.roundId), saved)
+    } finally { resume(); connectionMock.mock.restore(); await older }
+  }
+})
+
 test('round creation racing participant withdrawal never creates unfinished participation for a deleted member', async () => {
   const fixture = await group()
   const outcomes = await Promise.allSettled([

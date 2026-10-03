@@ -285,9 +285,9 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     }
     const refreshCookie = mine.cookie.split('; ').find(value => value.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`))
     const drawRoundId = uuidV7()
-    const roundPost = async (path, body, ticket = randomUUID()) => {
+    const roundPost = async (path, body, ticket = randomUUID(), actor = mine) => {
       const notifications = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
-      const response = await fetch(`${origin}/api/${path}`, { method: 'POST', headers: { ...roundHeaders, 'idempotency-key': ticket }, body: JSON.stringify(body) })
+      const response = await fetch(`${origin}/api/${path}`, { method: 'POST', headers: { ...roundHeaders, authorization: `Bearer ${actor.accessToken}`, 'idempotency-key': ticket }, body: JSON.stringify(body) })
       assert.equal(response.status, 200, await response.clone().text())
       await Promise.all(notifications)
       return (await response.json()).data
@@ -303,6 +303,31 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     assert.match(drawSql[0], /FROM\s+users/)
     assert.match(drawSql[1], /operation = 'round.draw'/)
     assert.match(drawSql[2], /FOR UPDATE OF\s+r[\s\S]*INSERT INTO\s+mutation_requests[\s\S]*UPDATE\s+rounds[\s\S]*UPDATE\s+expense_shares[\s\S]*INSERT INTO\s+settlement_balances[\s\S]*INSERT INTO\s+settlement_transfers/)
+    const checkBody = { expectedVersion: drawResult.version, checked: true, senderId: TEST_ACCOUNTS[0].id }
+    const checkTicket = randomUUID(), checkOutput = output.length
+    const checkResult = await roundPost(`rounds/${drawRoundId}/settlement-check`, checkBody, checkTicket, other)
+    assert.equal(checkResult.version, drawResult.version)
+    const checkSql = output.slice(checkOutput).split('SQL:').slice(1).map(sql => sql.trim())
+    assert.equal(checkSql.length, 3, 'settlement check including WebSocket publication uses exactly three SQL calls')
+    assert.match(checkSql[0], /FROM\s+users/)
+    assert.match(checkSql[1], /AS incoming[\s\S]*AS user_ids/)
+    assert.match(checkSql[2], /UPDATE\s+settlement_transfers[\s\S]*receiver_id = \$2/)
+    assert.ok(checkSql.every(sql => !/\b(BEGIN|COMMIT|ROLLBACK)\b|pg_advisory|FOR UPDATE|FOR SHARE|mutation_requests/.test(sql)))
+    let repeatedCheckInvalidation = false
+    const onRepeatedCheck = () => { repeatedCheckInvalidation = true }
+    mine.socket.on('message', onRepeatedCheck)
+    try {
+      const repeatedCheckOutput = output.length
+      const repeated = await fetch(`${origin}/api/rounds/${drawRoundId}/settlement-check`, {
+        method: 'POST', headers: { ...roundHeaders, authorization: `Bearer ${other.accessToken}`, 'idempotency-key': checkTicket }, body: JSON.stringify(checkBody),
+      })
+      assert.equal(repeated.status, 404)
+      assert.equal((await repeated.json()).error, 'not_found')
+      await new Promise(resolve => setTimeout(resolve, 250))
+      assert.equal(repeatedCheckInvalidation, false, 'unchanged receipt must not publish')
+      assert.equal((output.slice(repeatedCheckOutput).match(/SQL:/g) ?? []).length, 2)
+    } finally { mine.socket.off('message', onRepeatedCheck) }
+    await roundPost(`rounds/${drawRoundId}/settlement-check`, { ...checkBody, checked: false }, randomUUID(), other)
     await roundPost(`rounds/${drawRoundId}/force-complete`, { expectedVersion: drawResult.version })
     const refreshed = await fetch(`${origin}/api/auth/refresh`, { method: 'POST', headers: { origin, cookie: refreshCookie } })
     assert.equal(refreshed.status, 200, 'Refresh JWT works without an Access JWT')
