@@ -1,8 +1,6 @@
 'use client'
 
-import { getAccessToken } from '../../Global/Auth/Frontend'
-
-import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { ChevronDown, ChevronLeft, CircleUserRound, History, House, Menu, Search, Users, X } from 'lucide-react'
@@ -10,13 +8,10 @@ import { ApiError, apiRequest } from '../../lib/api-client'
 import { AccountProvider } from '../../Domain/User/Frontend'
 import type { Account } from '../../Domain/User/Shared'
 import type { RoundStatus } from '../../lib/domain-types'
-import { parseInvalidateEvent, resourceKeysForPath, type ResourceKey } from '../../lib/realtime'
-
-type RealtimeSubscribe = (key: ResourceKey, listener: () => void) => () => void
-const RealtimeContext = createContext<RealtimeSubscribe | null>(null)
+import { RealtimeProvider, resourceKeysForPath, useWebsocketSubscribe } from '../../Global/Websocket/Frontend'
 
 export function useResource<T>(path: string | null) {
-  const subscribe = useContext(RealtimeContext)
+  const subscribe = useWebsocketSubscribe()
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState<Error | null>(null)
   const [loading, setLoading] = useState(Boolean(path))
@@ -167,73 +162,6 @@ export function SheetSelect({ label, name, title, value, onChange, options, disa
       </div>
     </dialog>
   </>
-}
-
-function RealtimeProvider({ accountId, reloadAccount, children }: { accountId: string; reloadAccount: () => Promise<Account | null>; children: ReactNode }) {
-  const listeners = useRef(new Map<ResourceKey, Set<() => void>>())
-  const accountReload = useRef(reloadAccount)
-  accountReload.current = reloadAccount
-  const subscribe = useCallback<RealtimeSubscribe>((key, listener) => {
-    const current = listeners.current.get(key) ?? new Set()
-    current.add(listener); listeners.current.set(key, current)
-    return () => { current.delete(listener); if (!current.size) listeners.current.delete(key) }
-  }, [])
-  useEffect(() => {
-    let socket: WebSocket | null = null
-    let timer: ReturnType<typeof setTimeout> | null = null
-    let reconnect: ReturnType<typeof setTimeout> | null = null
-    let attempts = 0
-    let disposed = false
-    const pending = new Map<ResourceKey, Set<() => void>>()
-    const queue = (keys: ResourceKey[]) => {
-      if (disposed) return
-      keys.forEach(key => {
-        const callbacks = pending.get(key) ?? new Set<() => void>()
-        listeners.current.get(key)?.forEach(listener => callbacks.add(listener))
-        pending.set(key, callbacks)
-      })
-      if (timer) clearTimeout(timer)
-      timer = setTimeout(() => {
-        const callbacks = new Set<() => void>()
-        for (const [key, queued] of pending) {
-          if (key === 'me') void accountReload.current()
-          queued.forEach(listener => { if (listeners.current.get(key)?.has(listener)) callbacks.add(listener) })
-        }
-        pending.clear()
-        callbacks.forEach(listener => listener())
-      }, 120)
-    }
-    const retry = (event?: CloseEvent) => {
-      if (disposed) return
-      reconnect = setTimeout(() => { void connect(true) }, event?.code === 4001 ? 0 : Math.min(30000, 1000 * 2 ** Math.min(attempts++, 5)))
-    }
-    const connect = async (refresh = false) => {
-      try {
-        if (refresh) {
-          const account = await accountReload.current()
-          if (disposed) return
-          if (!account) { retry(); return }
-          if (account.id !== accountId) { window.location.reload(); return }
-        }
-        if (disposed) return
-        const token = getAccessToken()
-        if (!token) { retry(); return }
-        socket = new WebSocket(`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/realtime`, ['da-moa', token])
-        socket.onopen = () => { attempts = 0; if (refresh) queue([...listeners.current.keys()]) }
-        socket.onmessage = message => { const event = parseInvalidateEvent(message.data); if (event) queue(event.keys) }
-        socket.onclose = retry
-        socket.onerror = () => socket?.close()
-      } catch { retry() }
-    }
-    void connect()
-    return () => {
-      disposed = true
-      if (timer) clearTimeout(timer)
-      if (reconnect) clearTimeout(reconnect)
-      if (socket) { socket.onopen = socket.onmessage = socket.onclose = socket.onerror = null; socket.close() }
-    }
-  }, [accountId])
-  return <RealtimeContext.Provider value={subscribe}>{children}</RealtimeContext.Provider>
 }
 
 export function AppShell({ children }: { children: ReactNode }) {

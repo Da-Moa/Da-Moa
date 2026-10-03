@@ -25,7 +25,9 @@ for (const [namespace, domain] of [['Domain', 'Health'], ['Domain', 'Group'], ['
       ts.forEachChild(node, visit)
     }
     visit(source)
-    if (file.startsWith(backend)) assert.ok(imports.includes('server-only'), `Missing server-only marker: ${file}`)
+    // The native WebSocket server runs outside Next.js; Node imports guard its runtime boundary.
+    const nativeWebsocket = namespace === 'Global' && domain === 'Websocket' && file.endsWith('.mjs') && imports.some(specifier => specifier.startsWith('node:'))
+    if (file.startsWith(backend)) assert.ok(imports.includes('server-only') || nativeWebsocket, `Missing server-only marker: ${file}`)
     const dependencies = imports.filter(specifier => specifier.startsWith('.')).flatMap(specifier => {
       const path = resolve(dirname(file), specifier)
       const target = [path, path + '.ts', path + '.tsx', path + '.mjs', path + '/index.ts'].find(candidate => sources.has(candidate))

@@ -1,5 +1,5 @@
 import 'server-only'
 
-export { publishGroupInvalidation, realtimeEnabled } from '../../../lib/realtime-server'
-export { publishBankInvalidation, publishDepartureInvalidation } from '../../../lib/realtime-server'
-export { captureRoundAudience, publishRoundInvalidation, type RoundAudience } from '../../../lib/realtime-server'
+export { publishGroupInvalidation, realtimeEnabled } from './Controller/ws-invalidation-controller'
+export { publishBankInvalidation, publishDepartureInvalidation } from './Controller/ws-invalidation-controller'
+export { captureRoundAudience, publishRoundInvalidation, type RoundAudience } from './Controller/ws-invalidation-controller'
