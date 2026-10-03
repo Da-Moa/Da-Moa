@@ -38,7 +38,7 @@ test('withdrawal locks before checks and releases the transaction lock on commit
     const group = await createGroup(owner, uuidV7(), { name: '탈퇴 검증 모임' })
     const second = await createGroup(owner, uuidV7(), { name: '탈퇴 검증 두 번째 모임' })
     await client.query('INSERT INTO group_members(group_id,user_id,joined_at) VALUES($1,$2,1)', [group.id, participant.userId])
-    const round = await createRound(owner, uuidV7(), group.id, { name: '탈퇴 차단', currency: 'KRW', participantIds: [owner.userId, participant.userId] })
+    const round = await createRound(owner, group.id, { name: '탈퇴 차단', currency: 'KRW', participantIds: [owner.userId, participant.userId] })
     await client.query('UPDATE round_members SET excluded_at=1 WHERE round_id=$1 AND user_id=$2', [round.id, participant.userId])
 
     process.env.DB_QUERY_LOG = 'true'

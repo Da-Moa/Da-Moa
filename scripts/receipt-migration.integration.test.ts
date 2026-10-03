@@ -44,7 +44,7 @@ test('legacy receipt migration preserves images and restores expense deletion an
     const group = await createGroup(a, uuidV7(), { name: '영수증 호환 검증' })
     const invite = await createInvite(a, key(), group.id, {})
     await acceptInvite(b, key(), invite.sharePath!.split('/').at(-1)!)
-    const round = await createRound(a, uuidV7(), group.id, { name: '구버전 영수증', currency: 'KRW', participantIds: [a.userId, b.userId] })
+    const round = await createRound(a, group.id, { name: '구버전 영수증', currency: 'KRW', participantIds: [a.userId, b.userId] })
     const version = async () => ({ expectedVersion: (await getRound(a, round.id, new URLSearchParams())).version })
     const expense = async () => saveExpense(a, key(), round.id, { description: '검증 지출', amount: '1000', payerId: a.userId, splitMode: 'ALL', ...await version() })
     const empty = await expense()

@@ -178,23 +178,24 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     assert.match(output.slice(acceptOutput), /pg_advisory_lock/)
     assert.match(output.slice(acceptOutput), /pg_advisory_unlock/)
     assert.doesNotMatch(output, /GET \/api\/me /, 'WebSocket authentication must not issue internal HTTP me requests')
-    const ticket = uuidV7(), roundBody = { name: 'UUIDv7 회차', currency: 'KRW', participantIds: TEST_ACCOUNTS.slice(0, 2).map(account => account.id) }
-    const roundHeaders = { origin, authorization: `Bearer ${mine.accessToken}`, 'content-type': 'application/json', 'idempotency-key': ticket }
+    const roundBody = { name: '락으로 생성한 회차', currency: 'KRW', participantIds: TEST_ACCOUNTS.slice(0, 2).map(account => account.id) }
+    const roundHeaders = { origin, authorization: `Bearer ${mine.accessToken}`, 'content-type': 'application/json' }
     const roundMessages = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
     const roundOutput = output.length
     const createdRound = await fetch(`${origin}/api/groups/${groupId}/rounds`, { method: 'POST', headers: roundHeaders, body: JSON.stringify(roundBody) })
     assert.equal(createdRound.status, 200)
-    assert.deepEqual((await createdRound.json()).data, { id: ticket, roundId: ticket, status: 'RECORDING', version: 1 })
+    const round = (await createdRound.json()).data
+    assert.match(round.id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    assert.deepEqual(round, { id: round.id, roundId: round.id, status: 'RECORDING', version: 1 })
     for (const [bytes] of await Promise.all(roundMessages)) assert.deepEqual(JSON.parse(bytes.toString()), {
-      type: 'invalidate', keys: ['rounds', `group-rounds:${groupId}`, `round:${ticket}`, `settlement:${ticket}`],
+      type: 'invalidate', keys: ['rounds', `group-rounds:${groupId}`, `round:${round.id}`, `settlement:${round.id}`],
     })
-    assert.equal((output.slice(roundOutput).match(/SQL:/g) ?? []).length, 2, 'creation and WebSocket publication together use only AUTH + one INSERT')
-    assert.doesNotMatch(output.slice(roundOutput), /BEGIN|COMMIT|ROLLBACK|pg_advisory|FOR UPDATE|FOR SHARE|mutation_requests/)
-    const duplicate = await fetch(`${origin}/api/groups/${groupId}/rounds`, { method: 'POST', headers: roundHeaders, body: JSON.stringify(roundBody) })
-    assert.equal(duplicate.status, 409)
-    assert.equal((await duplicate.json()).error, 'round_already_exists')
+    assert.equal((output.slice(roundOutput).match(/SQL:/g) ?? []).length, 4, 'creation and WebSocket publication use lock + AUTH + INSERT + unlock')
+    assert.doesNotMatch(output.slice(roundOutput), /BEGIN|COMMIT|ROLLBACK|pg_advisory_xact_lock|FOR UPDATE|FOR SHARE|mutation_requests/)
+    assert.match(output.slice(roundOutput), /pg_advisory_lock/)
+    assert.match(output.slice(roundOutput), /pg_advisory_unlock/)
     const cancelled = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
-    assert.equal((await fetch(`${origin}/api/rounds/${ticket}`, { method: 'DELETE', headers: { ...roundHeaders, 'idempotency-key': randomUUID() }, body: JSON.stringify({ expectedVersion: 1 }) })).status, 200)
+    assert.equal((await fetch(`${origin}/api/rounds/${round.id}`, { method: 'DELETE', headers: { ...roundHeaders, 'idempotency-key': randomUUID() }, body: JSON.stringify({ expectedVersion: 1 }) })).status, 200)
     await Promise.all(cancelled)
     const refreshCookie = mine.cookie.split('; ').find(value => value.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`))
     const refreshed = await fetch(`${origin}/api/auth/refresh`, { method: 'POST', headers: { origin, cookie: refreshCookie } })

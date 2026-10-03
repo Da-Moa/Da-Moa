@@ -277,7 +277,7 @@ test('Group autocommit reads, group/invite creation/revocation and atomic replay
       assert.deepEqual(await Promise.all(Array.from({ length: 5 }, () => revokeInvite(owner, concurrentRevokeKey, group.id, replaced.id))), Array(5).fill(revoked))
       await assert.rejects(getInvite(participant, replaced.sharePath!.split('/').at(-1)!), (error: { code: string }) => error.code === 'not_found')
       assert.deepEqual((await trace(3, null, () => getGroup(owner, group.id))).invites, [])
-      const unfinished = await createRound(owner, uuidV7(), group.id, { name: '미종료 검사', currency: 'KRW', participantIds: [owner.userId, participant.userId] })
+      const unfinished = await createRound(owner, group.id, { name: '미종료 검사', currency: 'KRW', participantIds: [owner.userId, participant.userId] })
       for (const status of ['RECORDING', 'CONFIRMED', 'LOCKED']) {
         await client.query(`UPDATE rounds SET status=$2,
           confirmed_at=CASE WHEN $2='RECORDING' THEN NULL ELSE created_at END,
@@ -343,8 +343,8 @@ test('Group autocommit reads, group/invite creation/revocation and atomic replay
       const otherRounds = await createGroup(owner, uuidV7(), { name: '본인이 참여하지 않은 회차' })
       const otherInvite = await createInvite(owner, randomUUID(), otherRounds.id, {})
       for (const actor of [participant, outsider]) await acceptInvite(actor, randomUUID(), otherInvite.sharePath!.split('/').at(-1)!)
-      const otherRound = await createRound(participant, uuidV7(), otherRounds.id, { name: '다른 참여자 회차', currency: 'KRW', participantIds: [participant.userId, outsider.userId] })
-      const excludedRound = await createRound(participant, uuidV7(), otherRounds.id, { name: '본인이 제외된 회차', currency: 'KRW', participantIds: [owner.userId, participant.userId] })
+      const otherRound = await createRound(participant, otherRounds.id, { name: '다른 참여자 회차', currency: 'KRW', participantIds: [participant.userId, outsider.userId] })
+      const excludedRound = await createRound(participant, otherRounds.id, { name: '본인이 제외된 회차', currency: 'KRW', participantIds: [owner.userId, participant.userId] })
       await client.query('UPDATE round_members SET excluded_at=joined_at WHERE round_id=$1 AND user_id=$2', [excludedRound.id, owner.userId])
       await assert.rejects(leaveGroup(owner, randomUUID(), otherRounds.id), (error: { code: string }) => error.code === 'unfinished_group_rounds')
       assert.equal((await getRound(participant, otherRound.id, new URLSearchParams())).status, 'RECORDING')

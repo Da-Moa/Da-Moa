@@ -169,7 +169,6 @@ export const endUserMembershipsSql = `
   RETURNING group_id
 `
 
-// ponytail: snapshot checks do not serialize departures/withdrawals; coordinate resource locks if that guarantee is needed.
 // Parameters: $1 groupId, $2 participantIds, $4 actorId. Composed by Settle's single INSERT statement.
 export const roundCreationCandidatesSql = `WITH actor AS (
     SELECT u.id,m.user_id IS NOT NULL AS is_member FROM users u
