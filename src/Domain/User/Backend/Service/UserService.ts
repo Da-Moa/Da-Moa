@@ -21,13 +21,14 @@ function assertOnboarding(account: AuthorizedAccount, bank: BankAccountInput) {
 
 export async function completeOnboarding(access: AccessToken | null, input: unknown) {
   const bank = normalizeBankAccountInput(objectBody(input), { onboarding: true })
-  return withWriteTransaction(async (client) => {
+  return withDatabaseConnection(async (client) => {
     const account = await requireAccount(client, access, true)
     assertOnboarding(account, bank)
     const now = currentTimestamp()
-    await repository.saveOnboarding(client, account.id, bank, now)
+    const session = issueTokens(account.id, 'app', now)
+    if (!await repository.saveOnboarding(client, account.id, bank, now, account.updatedAt)) throw bankAccountConflict()
     // Memberships deliberately stay inactive after rejoining.
-    return issueTokens(account.id, 'app', now)
+    return session
   })
 }
 
@@ -78,6 +79,7 @@ export async function getUserAccountState(client: Database, userId: string): Pro
     bankName: row.bank_name, accountNumber: row.account_number, formattedAccountNumber: row.account_number_formatted,
     accountHolder: row.account_holder, bankCode: row.bank_code,
     bankVerifiedAt: row.bank_verified_at === null ? null : Number(row.bank_verified_at), bankVersion: Number(row.bank_version),
+    updatedAt: Number(row.updated_at),
     deletedAt: row.deleted_at === null ? null : Number(row.deleted_at),
     onboardingCompletedAt: row.onboarding_completed_at === null ? null : Number(row.onboarding_completed_at),
   }

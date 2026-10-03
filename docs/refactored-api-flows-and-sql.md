@@ -321,7 +321,7 @@ SELECT
   u.id, u.display_name, u.email, u.profile_image_url,
   u.bank_name, u.account_number, u.account_number_formatted,
   u.account_holder, u.bank_code, u.bank_verified_at, u.bank_version,
-  u.deleted_at, u.onboarding_completed_at
+  u.deleted_at, u.onboarding_completed_at, u.updated_at
 FROM users u
 WHERE u.id = $1;
 ```
@@ -787,7 +787,7 @@ JWT 인증 전환 검증 결과(2026-10-02): 단위 85개, 격리된 로컬 DB·
 
 ## 7. User 요청 흐름·SQL
 
-최초 User 분리는 기존 SQL·트랜잭션을 유지했다. 후속 개선으로 GET /api/me는 읽기 트랜잭션을 제거하고 공용 풀 연결에서 AUTH 한 문장만 실행한다. 쓰기 트랜잭션·전역 락과 계좌 변경의 두 단계 트랜잭션은 유지한다. 아래 수는 `BEGIN`·기존 advisory lock·`COMMIT`까지 포함하며, 응답 후 실시간 알림의 별도 조회는 제외한다.
+최초 User 분리는 기존 SQL·트랜잭션을 유지했다. 후속 개선으로 GET /api/me는 공용 풀 연결에서 AUTH 한 문장만 실행하고, POST /api/me/onboarding은 AUTH와 조건부 UPDATE만 실행한다. 두 API는 트랜잭션·명시적 락을 사용하지 않는다. 대표 계좌 변경·탈퇴의 기존 트랜잭션은 유지한다. 아래 수는 `BEGIN`·기존 advisory lock·`COMMIT`까지 포함하며, 응답 후 실시간 알림의 별도 조회는 제외한다.
 
 ### U1. GET /api/me — 내 정보 조회
 
@@ -804,16 +804,18 @@ AppShell.useResource()/OnboardingClient.useResource() → GET → Node Proxy →
 
 ### U2. POST /api/me/onboarding — 가입 완료·재가입
 
-OnboardingForm.register() → POST → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 User 위임 → UserController.getOnboardingResponse() → completeOnboarding() → 공용 풀 연결·쓰기 트랜잭션 → OnboardingResponseDTO·Refresh 쿠키 → Access 토큰 저장·폼 입력 정리·returnTo로 이동.
+OnboardingForm.register() → POST → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 User 위임 → UserController.getOnboardingResponse() → completeOnboarding() → 공용 풀 연결 → OnboardingResponseDTO·Refresh 쿠키 → Access 토큰 저장·폼 입력 정리·returnTo로 이동.
 
 1. Controller가 sameOrigin() 검사 → 최대 16,384바이트 JSON 읽기 → 안전한 returnTo 쿠키 해석. Service가 objectBody()·normalizeBankAccountInput()으로 허용 필드·은행·번호·예금주·expectedBankVersion·confirmRejoin 검증 및 정규화. 입력 오류는 DB 접근 전에 거절한다.
-2. W-START: BEGIN → 기존 `pg_advisory_xact_lock(1684106607)` 획득.
+2. 공용 풀에서 연결 확보. BEGIN·COMMIT·ROLLBACK·명시적 락·SET은 실행하지 않는다.
 3. AUTH로 본인 회원 상태 조회. assertOnboarding()이 온보딩 목적·탈퇴 회원의 명시적 confirmRejoin·최신 계좌 버전을 검사한다. 목적이 app이면 already_onboarded, 재가입 동의가 없으면 rejoin_confirmation_required, 버전이 다르면 bank_account_conflict.
-4. U-ONBOARDING: UserRepository.saveOnboarding()이 users의 계좌 원본·표시 형식·예금주·은행 코드를 저장하고 deleted_at을 NULL로 변경. 가입/계좌 갱신 시각 설정·bank_version 증가·기존 계좌 확인 이력 초기화를 한 UPDATE로 처리한다. 기존 모임 멤버십은 복구하지 않는다.
-5. Global/Auth의 issueTokens()로 app 목적 Access/Refresh JWT 발급 → TX-COMMIT. JWT 발급에는 SQL이 없다.
-6. Controller가 `{ data: { id, returnTo, accessToken } }`과 Refresh 쿠키를 반환하고 기존 Access 쿠키·복귀 쿠키를 삭제. 커밋 후 after()로 publishBankInvalidation() 예약.
+4. Global/Auth의 issueTokens()로 app 목적 Access/Refresh JWT를 먼저 생성한다. JWT 발급에는 SQL이 없으며 발급 오류 시 회원을 변경하지 않는다.
+5. U-ONBOARDING: UserRepository.saveOnboarding()이 `id`·AUTH에서 읽은 `updated_at`·expectedBankVersion과 일치하고 아직 온보딩 상태(`deleted_at IS NOT NULL OR onboarding_completed_at IS NULL`)인 행만 UPDATE한다. 계좌 원본·표시 형식·예금주·은행 코드·가입/계좌 갱신 시각·deleted_at=NULL·bank_version 증가·확인 이력 초기화를 한 문장으로 저장한다. 갱신 행이 0개면 bank_account_conflict로 거절한다. 초 단위 updated_at이 같아도 계좌 버전과 상태 조건으로 동시 요청 중 하나만 성공한다. 기존 모임 멤버십은 복구하지 않는다.
+6. UPDATE 성공 후 Controller가 `{ data: { id, returnTo, accessToken } }`과 Refresh 쿠키를 반환하고 기존 Access 쿠키·복귀 쿠키를 삭제. after()로 publishBankInvalidation() 예약. 연결은 성공·실패 모두 finally에서 풀에 반환한다.
 
-정상 SQL: W-START(2) → AUTH → U-ONBOARDING → TX-COMMIT = 5회. 출처·JSON·계좌 입력 오류는 0회, 회원 상태·목적·동의·버전 거절은 W-START(2) → AUTH → TX-ROLLBACK = 4회다. 멱등 기록·외부 계좌 확인은 없다. 실패는 전체 ROLLBACK하며 계좌와 가입 상태를 함께 보존한다.
+정상 SQL: **AUTH 내 정보 읽기 (+1) → U-ONBOARDING 조건부 UPDATE (+1) = 2회**. 기존 5회에서 BEGIN·락·COMMIT의 3회를 제거했다. 출처·JSON·계좌 입력 오류는 0회, 회원 상태·목적·동의·버전 거절은 AUTH 1회, 조회 후 경합 거절은 AUTH + UPDATE 2회다. 멱등 기록·외부 계좌 확인은 없다. 단일 UPDATE가 계좌와 가입 상태를 원자적으로 저장하며 응답 유실은 카카오 재로그인으로 복구한다.
+
+[scripts/user.integration.test.ts](../scripts/user.integration.test.ts)에서 실제 SQL 2회와 트랜잭션·명시적 락 미실행, 동시 가입·재가입의 단일 성공, 변경된 AUTH 시각 거절, 같은 시각의 중복 UPDATE 거절, JWT 발급 오류 시 미수정과 연결 반환을 검증한다.
 
 ### U3. PUT /api/me/bank-account — 대표 계좌 변경
 

@@ -10,6 +10,7 @@ export type UserAccountState = {
   bankCode: string | null
   bankVerifiedAt: number | null
   bankVersion: number
+  updatedAt: number
   deletedAt: number | null
   onboardingCompletedAt: number | null
 }

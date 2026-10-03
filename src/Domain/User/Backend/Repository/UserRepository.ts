@@ -9,7 +9,7 @@ export async function findUser(client: Database, userId: string): Promise<UserRo
   const { rows } = await client.query<UserRow>(`
     SELECT u.id, u.display_name, u.email, u.profile_image_url,
            u.bank_name, u.account_number, u.account_number_formatted, u.account_holder, u.bank_code, u.bank_verified_at, u.bank_version,
-           u.deleted_at, u.onboarding_completed_at
+           u.deleted_at, u.onboarding_completed_at, u.updated_at
     FROM users u WHERE u.id = $1
   `, [userId])
   return rows[0]
@@ -46,14 +46,17 @@ export async function findTestSignInUser(client: Database, id: string, providerS
   return rows[0]?.id
 }
 
-export async function saveOnboarding(client: Database, userId: string, bank: BankAccountInput, now: number) {
-  await client.query(`
+export async function saveOnboarding(client: Database, userId: string, bank: BankAccountInput, now: number, expectedUpdatedAt: number) {
+  const { rowCount } = await client.query(`
       UPDATE users SET bank_name = $2, account_number = $3, account_holder = $4,
         bank_updated_at = $5, deleted_at = NULL, onboarding_completed_at = $5, updated_at = $5,
         bank_code = $6, account_number_formatted = $7,
         bank_verified_at = NULL, bank_verification_tran_id = NULL, bank_version = bank_version + 1
-      WHERE id = $1
-    `, [userId, bank.bankName, bank.accountNumber, bank.accountHolder, now, bank.bankCode, bank.formattedAccountNumber])
+      WHERE id = $1 AND updated_at = $8 AND bank_version = $9
+        AND (deleted_at IS NOT NULL OR onboarding_completed_at IS NULL)
+    `, [userId, bank.bankName, bank.accountNumber, bank.accountHolder, now, bank.bankCode, bank.formattedAccountNumber,
+      expectedUpdatedAt, bank.expectedBankVersion])
+  return rowCount === 1
 }
 
 export async function saveBankAccount(client: Database, userId: string, bank: BankAccountInput, now: number) {
