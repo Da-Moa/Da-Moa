@@ -35,11 +35,18 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
     process.env.DB_QUERY_LOG = 'true'
     let statements: string[] = []
     const logger = t.mock.method(console, 'info', (message: string) => { statements.push(message.replace(/^SQL:\s*/, '').replace(/\s+/g, ' ').trim()) })
-    const trace = async <T>(count: number, write: boolean | 'receipt' | 'session' | 'connection' | 'cancel' | 'expense' | 'patch' | 'delete' | 'exclude' | 'confirm' | 'reopen' | 'draw' | 'settlement' | 'check', work: () => Promise<T>) => {
+    const trace = async <T>(count: number, write: boolean | 'receipt' | 'session' | 'connection' | 'cancel' | 'expense' | 'patch' | 'delete' | 'exclude' | 'confirm' | 'reopen' | 'draw' | 'settlement' | 'check' | 'complete', work: () => Promise<T>) => {
       statements = []
       const result = await work()
       assert.equal(statements.length, count, statements.join('\n'))
-      if (write === 'check') {
+      if (write === 'complete') {
+        assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
+        if (count) assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
+        if (count === 2) {
+          assert.match(statements[1], /received_at IS NULL.*AS pending_count.*AS user_ids.*operation = 'round.complete'/)
+          assert.match(statements[1], /UPDATE rounds.*status = 'LOCKED'.*version = \$5.*NOT EXISTS \( SELECT 1 FROM settlement_transfers WHERE round_id = \$1 AND received_at IS NULL \).*INSERT INTO mutation_requests/)
+        }
+      } else if (write === 'check') {
         assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory|FOR UPDATE|FOR SHARE|mutation_requests/.test(sql)))
         if (count) assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
         if (count > 1) assert.match(statements[1], /t.receiver_id = \$2.*AS incoming.*AS user_ids.*JOIN round_members viewer/)
@@ -585,6 +592,8 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       assert.equal((await trace(2, 'settlement', () => getSettlement(a, round.id))).finalized, false)
       await command('send', 12)
       assert.equal((await trace(2, 'settlement', () => getSettlement(a, round.id))).finalized, false)
+      await trace(2, 'complete', () => assert.rejects(roundCommand(a, key(), round.id, 'complete', { expectedVersion: version }),
+        (error: { code: string }) => error.code === 'invalid_round_state'))
       await t.test('draw uses AUTH then round then one atomic final save', async () => {
         const requestKey = key(), request = { expectedVersion: version }
         for (const [actor, ticket, id, input, expected, count] of [
@@ -650,7 +659,46 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       await trace(3, 'check', () => setSettlementCheck(b, key(), round.id, { ...checkBody, checked: false }))
       assert.notEqual((await trace(2, 'settlement', () => getSettlement(a, round.id))).outgoing.length, 0)
       await trace(3, 'check', () => setSettlementCheck(b, key(), round.id, checkBody))
-      await command('complete', 10)
+      await t.test('complete checks pending transfers inside one atomic save after AUTH; rejection and replay also use two queries', async () => {
+        const requestKey = key(), request = { expectedVersion: version }
+        for (const [actor, ticket, id, input, expected, count] of [
+          [null, '', round.id, {}, 'unauthorized', 0],
+          [{ ...a, userId: randomUUID() }, '', round.id, {}, 'unauthorized', 1],
+          [a, '', round.id, request, 'invalid_request_key', 1],
+          [a, key(), round.id, { unexpected: true }, 'invalid_input', 1],
+          [b, key(), round.id, request, 'forbidden', 2],
+          [nonParticipant, key(), round.id, request, 'not_found', 2],
+          [a, key(), randomUUID(), request, 'not_found', 2],
+          [a, key(), round.id, { expectedVersion: '1' }, 'invalid_version', 2],
+          [a, key(), round.id, { expectedVersion: version - 1 }, 'stale_round', 2],
+        ] as const) await trace(count, 'complete', () => assert.rejects(roundCommand(actor, ticket, id, 'complete', input), (error: { code: string }) => error.code === expected))
+        await setSettlementCheck(b, key(), round.id, { ...checkBody, checked: false })
+        await trace(2, 'complete', () => assert.rejects(roundCommand(a, requestKey, round.id, 'complete', request, () => assert.fail('rejection must not publish')),
+          (error: { code: string; details: { pendingCount: number } }) => error.code === 'pending_settlement_checks' && error.details.pendingCount === 1))
+        assert.equal((await getRound(a, round.id, new URLSearchParams())).status, 'LOCKED')
+        await setSettlementCheck(b, key(), round.id, checkBody)
+        const constraint = `complete_test_${key().replaceAll('-', '')}`
+        await db.query(`ALTER TABLE mutation_requests ADD CONSTRAINT ${constraint} CHECK (request_key <> '${requestKey}') NOT VALID`)
+        try {
+          await trace(2, 'complete', () => assert.rejects(roundCommand(a, requestKey, round.id, 'complete', request, () => assert.fail('failed save must not publish')),
+            (error: { code: string }) => error.code === '23514'))
+          const current = await getRound(a, round.id, new URLSearchParams())
+          assert.equal(current.status, 'LOCKED')
+          assert.equal(current.version, version)
+          assert.equal(current.completedAt, null)
+        } finally { await db.query(`ALTER TABLE mutation_requests DROP CONSTRAINT ${constraint}`) }
+        const result = await trace(2, 'complete', () => roundCommand(a, requestKey, round.id, 'complete', request, audience => {
+          assert.equal(audience.groupId, group.id)
+          assert.deepEqual(new Set(audience.userIds), new Set([a.userId, b.userId, c.userId]))
+        }))
+        assert.deepEqual(result, { id: round.id, roundId: round.id, status: 'COMPLETED', version: version + 1 })
+        assert.deepEqual(await trace(2, 'complete', () => roundCommand(a, requestKey, round.id, 'complete', request, () => assert.fail('replay must not publish'))), result)
+        await trace(2, 'complete', () => assert.rejects(roundCommand(a, requestKey, round.id, 'complete', { expectedVersion: result.version }),
+          (error: { code: string }) => error.code === 'idempotency_conflict'))
+        await trace(2, 'complete', () => assert.rejects(roundCommand(a, key(), round.id, 'complete', { expectedVersion: result.version }),
+          (error: { code: string }) => error.code === 'invalid_round_state'))
+        version = result.version!
+      })
       assert.equal((await trace(2, 'settlement', () => getSettlement(b, round.id))).status, 'COMPLETED')
       await trace(2, 'check', () => assert.rejects(setSettlementCheck(b, key(), round.id, { ...checkBody, expectedVersion: version, checked: false }),
         (error: { code: string }) => error.code === 'invalid_round_state'))

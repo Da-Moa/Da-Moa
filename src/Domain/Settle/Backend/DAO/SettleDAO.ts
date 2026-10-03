@@ -59,6 +59,10 @@ export type IncomingRow = {
 export type SettlementCheckRow = RoundRow & {
   incoming: Pick<IncomingRow, 'sender_id' | 'received_at'>[]; user_ids: string[]
 }
+export type RoundCompletionRow = RoundRow & {
+  pending_count: number; user_ids: string[]; actor_active: boolean; completed: boolean;
+  request_digest: string | null; response_metadata: unknown
+}
 export type SettlementRow = RoundRow & {
   confirmations: (Omit<MemberRow, 'excluded_at'> & { checked_at: string | null })[];
   outgoing: OutgoingRow[]; incoming: IncomingRow[]
