@@ -27,7 +27,7 @@ async function session(name: string) {
 async function request(path: string, token: string | null, method = 'GET', body?: unknown, extraHeaders?: Record<string, string>) {
   const headers = new Headers({ origin, ...extraHeaders })
   if (token) headers.set('authorization', `Bearer ${token}`)
-  if (method !== 'GET' && !/^groups\/[^/]+\/rounds$/.test(path) && !headers.has('Idempotency-Key')) headers.set('Idempotency-Key', path === 'groups' && method === 'POST' ? uuidV7() : randomUUID())
+  if (method !== 'GET' && !headers.has('Idempotency-Key')) headers.set('Idempotency-Key', method === 'POST' && (path === 'groups' || /^groups\/[^/]+\/rounds$/.test(path)) ? uuidV7() : randomUUID())
   const multipart = body instanceof FormData
   if (body !== undefined && !multipart) headers.set('content-type', 'application/json')
   const req = new NextRequest(`${origin}/api/${path}`, { method, headers, ...(body === undefined ? {} : { body: multipart ? body : JSON.stringify(body) }) })
@@ -83,11 +83,14 @@ test('Route Handler contracts enforce Bearer JWTs, origin, idempotency, normaliz
     assert.equal(memberRound.groupCreatorId, a.userId)
     assert.equal(memberRound.isCreator, true)
     assert.equal((await request(`rounds/${memberRoundId}`, b.accessToken, 'DELETE', { expectedVersion: 1 })).status, 200)
-    const body = { name: 'API 회차', currency: 'KRW', participantIds: [a.userId, b.userId] }
-    const created = await request(`groups/${groupId}/rounds`, a.accessToken, 'POST', body)
+    const ticket = uuidV7(), body = { name: 'API 회차', currency: 'KRW', participantIds: [a.userId, b.userId] }
+    const created = await request(`groups/${groupId}/rounds`, a.accessToken, 'POST', body, { 'Idempotency-Key': ticket })
     assert.equal(created.status, 200)
     const roundId = (await created.json()).data.id
-    assert.match(roundId, /^[0-9a-f-]{14}4[0-9a-f-]+$/)
+    assert.equal(roundId, ticket)
+    const duplicate = await request(`groups/${groupId}/rounds`, a.accessToken, 'POST', body, { 'Idempotency-Key': ticket })
+    assert.equal(duplicate.status, 409)
+    assert.equal((await duplicate.json()).error, 'round_already_exists')
     for (const currency of CURRENCY_CODES) {
       const foreign = await request(`groups/${groupId}/rounds`, a.accessToken, 'POST', { name: `${currency} API 회차`, currency, participantIds: [a.userId, b.userId] })
       assert.equal(foreign.status, 200)

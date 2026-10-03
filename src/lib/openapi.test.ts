@@ -69,7 +69,7 @@ test('every group, expense and settlement endpoint has documented authorization 
   for (const [path, method] of mutations) {
     const operation = paths[path]?.[method]
     assert.ok(operation, `${method} ${path}`)
-    assert.equal(operation.parameters?.some(parameter => parameter.name === 'Idempotency-Key' && parameter.required) ?? false, path !== '/api/groups/{groupId}/rounds', path)
+    assert.ok(operation.parameters?.some(parameter => parameter.name === 'Idempotency-Key' && parameter.required), path)
     assert.ok(operation.parameters?.some(parameter => parameter.name === 'Origin' && parameter.required), path)
     assert.ok(operation.responses['409'], path)
     assert.ok(operation.responses['503'], path)

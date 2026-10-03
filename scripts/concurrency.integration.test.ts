@@ -41,7 +41,7 @@ async function group(join = true) {
 
 async function recordingRound() {
   const fixture = await group()
-  const round = await createRound(fixture.owner, fixture.groupId, { name: '경합 검증 회차', currency: 'KRW', participantIds: [fixture.owner.userId, fixture.participant.userId] })
+  const round = await createRound(fixture.owner, uuidV7(), fixture.groupId, { name: '경합 검증 회차', currency: 'KRW', participantIds: [fixture.owner.userId, fixture.participant.userId] })
   const expense = await saveExpense(fixture.participant, key(), round.id, { description: '경합 지출', amount: '3', payerId: fixture.owner.userId, splitMode: 'ALL', expectedVersion: round.version })
   return { ...fixture, roundId: round.id, expenseId: expense.id, version: expense.version! }
 }
@@ -58,7 +58,7 @@ test('group departure and round creation serialize for participants and creators
     const fixture = await group()
     const actor = creatorDeparture ? fixture.owner : fixture.participant
     const outcomes = await Promise.allSettled([
-      createRound(fixture.owner, fixture.groupId, { name: '탈퇴 경합 회차', currency: 'KRW', participantIds: [fixture.owner.userId, fixture.participant.userId] }),
+      createRound(fixture.owner, uuidV7(), fixture.groupId, { name: '탈퇴 경합 회차', currency: 'KRW', participantIds: [fixture.owner.userId, fixture.participant.userId] }),
       leaveGroup(actor, key(), fixture.groupId),
     ])
     assert.equal(outcomes.filter(outcome => outcome.status === 'fulfilled').length, 1)
@@ -108,7 +108,7 @@ test('settlement checks compose concurrently and normal/forced completion cannot
   const simultaneous = await group()
   const third = await member()
   await acceptInvite(third, key(), simultaneous.token)
-  const round = await createRound(simultaneous.owner, simultaneous.groupId, { name: '복수 수취 경합', currency: 'KRW', participantIds: [simultaneous.owner.userId, simultaneous.participant.userId, third.userId] })
+  const round = await createRound(simultaneous.owner, uuidV7(), simultaneous.groupId, { name: '복수 수취 경합', currency: 'KRW', participantIds: [simultaneous.owner.userId, simultaneous.participant.userId, third.userId] })
   const expense = await saveExpense(simultaneous.owner, key(), round.id, { description: '복수 송금', amount: '6', payerId: simultaneous.owner.userId, splitMode: 'ALL', expectedVersion: round.version })
   const confirmed = await roundCommand(simultaneous.owner, key(), round.id, 'confirm', { expectedVersion: expense.version })
   const locked = await roundCommand(simultaneous.owner, key(), round.id, 'send', { expectedVersion: confirmed.version })
@@ -142,7 +142,7 @@ test('settlement checks compose concurrently and normal/forced completion cannot
 test('round creation racing participant withdrawal never creates unfinished participation for a deleted member', async () => {
   const fixture = await group()
   const outcomes = await Promise.allSettled([
-    createRound(fixture.owner, fixture.groupId, { name: '탈퇴와 경합', currency: 'KRW', participantIds: [fixture.owner.userId, fixture.participant.userId] }),
+    createRound(fixture.owner, uuidV7(), fixture.groupId, { name: '탈퇴와 경합', currency: 'KRW', participantIds: [fixture.owner.userId, fixture.participant.userId] }),
     withdrawAccount(fixture.participant),
   ])
   assert.equal(outcomes.filter(outcome => outcome.status === 'fulfilled').length, 1)
@@ -217,7 +217,7 @@ test('round creation waits for the common lock and validates committed departure
       await gate.query('BEGIN')
       held = true
       await gate.query('SELECT pg_advisory_xact_lock(1684106607)')
-      creation = createRound(fixture.owner, fixture.groupId, {
+      creation = createRound(fixture.owner, uuidV7(), fixture.groupId, {
         name: '락 대기 후 상태 확인', currency: 'KRW', participantIds: [fixture.owner.userId, fixture.participant.userId],
       }).then(result => ({ result }), error => ({ error }))
       const deadline = Date.now() + 4000

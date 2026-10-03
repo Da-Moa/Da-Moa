@@ -889,7 +889,7 @@ User 분리 당시 Group·Settle/realtime의 기존 회원·수취 계좌 JOIN�
 
 ## 8. Settle 요청 흐름·SQL
 
-회차·지출·부담자·영수증·개인 정산을 **21개 메서드/경로**로 분리했다. API 주소·응답·화면 동작·SQL 순서·기존 락 정책은 유지한다. 회차 생성은 요청 ticket을 제거하고 공용 세션 락·AUTH·서버 UUIDv4의 단일 저장·락 해제 4회 흐름으로 변경했다. 명시적 트랜잭션·멱등 성공 기록은 없으며 나머지 변경의 기존 정책은 유지한다.
+회차·지출·부담자·영수증·개인 정산을 **21개 메서드/경로**로 분리했다. API 주소·응답·화면 동작·SQL 순서·기존 락 정책은 유지한다. 회차 생성은 UUIDv7 ticket을 PK로 사용하며 공용 세션 락·AUTH·단일 저장·락 해제 4회 흐름으로 처리한다. 명시적 트랜잭션·멱등 성공 기록은 없으며 나머지 변경의 기존 정책은 유지한다.
 
 공개 진입점은 [Settle Backend](../src/Domain/Settle/Backend/index.ts)·[Frontend](../src/Domain/Settle/Frontend/index.ts)·[Shared](../src/Domain/Settle/Shared/index.ts)다. [SettleController](../src/Domain/Settle/Backend/Controller/SettleController.ts)가 JSON/multipart·응답·after() 알림을, [SettleService](../src/Domain/Settle/Backend/Service/SettleService.ts)가 입력·권한·상태·버전·계산·저장 순서를, [SettleRepository](../src/Domain/Settle/Backend/Repository/SettleRepository.ts)가 SQL을 소유한다. SQL 행 타입은 내부 SettleDAO, not_found 오류는 SettleException에 있다. Controller·Service는 query()를 호출하지 않는다.
 
@@ -912,11 +912,11 @@ CreateRoundForm.start() → POST → Node Proxy → JWT Guard(Access JWT 검사)
 
 1. 공용 풀 연결에서 pg_advisory_lock(1684106607)을 획득한다(+1). 모임 이탈·닫기·회원 탈퇴의 transaction lock 및 초대 수락의 session lock과 같은 키다.
 2. 락 획득 후 AUTH 내 정보 조회(+1). 없는/탈퇴한 회원은 401 unauthorized, 가입 전 회원은 403 onboarding_required다. 락 대기 중 변경된 상태도 조회한다.
-3. onlyKeys(['name','currency','participantIds'])·textInput(name,100)·idsInput()·requireCurrency(). 요청자를 포함한 최소 2명의 활성 모임 멤버를 요구한다. ticket·Idempotency-Key 검사는 없고 서버에서 randomUUID()로 회차 ID를 생성한다.
-4. 단일 SQL(+1)의 actor·candidates CTE가 활성 회원·모임 멤버십·선택 참여자를 확인하고 created·members CTE가 회차와 참여자 이름 스냅샷을 원자적으로 저장한다. actor 부재는 401, 비멤버·없는 모임은 404, 후보 누락은 400 invalid_participants다. 저장 실패는 같은 SQL 전체를 취소한다.
+3. onlyKeys(['name','currency','participantIds'])·textInput(name,100)·idsInput()·requireCurrency(). 요청자를 포함한 최소 2명의 활성 모임 멤버를 요구한다. Idempotency-Key의 UUIDv7 형식을 검증하고 소문자로 정규화한 ticket을 회차 ID로 사용한다.
+4. 단일 SQL(+1)의 actor·candidates CTE가 활성 회원·모임 멤버십·선택 참여자를 확인하고 created·members CTE가 회차와 참여자 이름 스냅샷을 원자적으로 저장한다. actor 부재는 401, 비멤버·없는 모임은 404, 후보 누락은 400 invalid_participants다. rounds_pkey 중복은 409 round_already_exists로 반환하며 저장 실패는 같은 SQL 전체를 취소한다.
 5. 성공·실패 모두 finally에서 같은 연결로 pg_advisory_unlock(1684106607)을 실행한다(+1). 획득/해제 결과가 불확실하면 연결을 풀에 반환하지 않고 폐기한다. 연결 반환 후 응답하며 검증한 참여자 ID를 realtime 수신자로 전달해 추가 수신자 SQL을 실행하지 않는다.
 
-SQL 순서: **락 획득 → AUTH → 조건부 회차·참여자 INSERT → 락 해제 = 4회**. 입력/회원 거절은 보통 3회, JWT Guard 거절은 0회다. BEGIN·COMMIT·ROLLBACK·mutation_requests는 없다. 회차 생성과 모임 이탈·닫기·회원 탈퇴가 같은 락 안에서 검사·저장을 수행하므로 양쪽이 동시에 성공하지 않는다. 락은 요청 재전송의 중복 생성을 막지 않으며 응답 유실 시 회차 목록에서 먼저 저장 결과를 확인한다.
+SQL 순서: **락 획득 → AUTH → 조건부 회차·참여자 INSERT → 락 해제 = 4회**. 입력/회원 거절은 보통 3회, JWT Guard 거절은 0회다. BEGIN·COMMIT·ROLLBACK·mutation_requests는 없다. 회차 생성과 모임 이탈·닫기·회원 탈퇴가 같은 락 안에서 검사·저장을 수행하므로 양쪽이 동시에 성공하지 않는다. 같은 ticket의 재전송은 PK 중복으로 거절하고 다른 ticket은 새 회차를 생성한다. 응답 유실 시 같은 ticket을 유지해 재시도하며 중복 응답이면 회차 목록에서 저장 결과를 확인한다.
 
 ### S2. GET /api/groups/{groupId}/rounds — 모임별 회차 목록
 
@@ -1155,7 +1155,7 @@ SQL: W 6회 + S-ROUND → S-EXPENSE → [S-ACTIVE-MEMBER] → S-RECEIPT-DELETE �
 
 회차 생성 알림은 저장한 참여자 ID를 전달받아 수신자 SQL 0회다. 나머지 일반 변경 후 알림 수신자 조회는 BEGIN → 회차 group_id → round_members → COMMIT = **별도 4회**다. 참여자 제외는 활성 모임 멤버 조회까지 **5회**다. 취소는 삭제 전의 허가된 수신자를 읽는 **5회**를 별도 사용하고 삭제 후 DB 조회를 생략한다. 실시간 비활성화 시 모두 SQL 0회다. after() 알림 실패는 이미 저장한 변경을 롤백하지 않는다. 메시지에는 rounds·group-rounds·round·settlement와 필요한 groups/group 키만 넣고 금액·계좌·영수증·초대 토큰은 넣지 않는다.
 
-[scripts/settle-sql.integration.test.ts](../scripts/settle-sql.integration.test.ts)는 실제 PostgreSQL SQL 로그로 생성 4회·서버 UUIDv4·세션 락 획득/해제·참여자 저장 실패 원자성·목록 4회·상세 10/11회·지출 작성자별 13/14회·수정 14회·삭제 12회·제외 검토 6회·제외 12회·확정 12회·재오픈 10회·나머지 있는 전송 12회·없는 전송 20회·추첨 17회/재추첨 방지 7회·최종 전/후 안내 5/8회·수취 확인 8회·일반/강제 종료 10/9회·취소 9회·영수증 생성/조회/삭제 16/4/10회·일반 성공 재생 5회·영수증 재생 4회·종료 후 편집 거절 ROLLBACK을 검증한다. 숫자는 해당 테스트의 참여자·분담금·송금 행 수 기준이며 위 계산식이 일반 규칙이다.
+[scripts/settle-sql.integration.test.ts](../scripts/settle-sql.integration.test.ts)는 실제 PostgreSQL SQL 로그로 생성 4회·UUIDv7 PK·중복 409·동시 중복 단일 성공·세션 락 획득/해제·참여자 저장 실패 원자성·목록 4회·상세 10/11회·지출 작성자별 13/14회·수정 14회·삭제 12회·제외 검토 6회·제외 12회·확정 12회·재오픈 10회·나머지 있는 전송 12회·없는 전송 20회·추첨 17회/재추첨 방지 7회·최종 전/후 안내 5/8회·수취 확인 8회·일반/강제 종료 10/9회·취소 9회·영수증 생성/조회/삭제 16/4/10회·일반 성공 재생 5회·영수증 재생 4회·종료 후 편집 거절 ROLLBACK을 검증한다. 숫자는 해당 테스트의 참여자·분담금·송금 행 수 기준이며 위 계산식이 일반 규칙이다.
 
 기존 [settlement.integration.test.ts](../scripts/settlement.integration.test.ts)·[concurrency.integration.test.ts](../scripts/concurrency.integration.test.ts)·[receipt-migration.integration.test.ts](../scripts/receipt-migration.integration.test.ts)·[routes.integration.test.ts](../scripts/routes.integration.test.ts)는 Settle 공개 진입점을 통해 권한·과거 조회·정확한 통화/금액·CUSTOM 합계·멱등성·버전 충돌·추첨 중간 실패 취소·상태 전이 경합·사전 검사 후 업로드 경합·최신 수취 계좌 제한·기존 BYTEA 영수증을 검증한다. [domain-boundaries.test.ts](../src/lib/domain-boundaries.test.ts)는 Frontend/Shared→Backend 금지, 서버 전용 표시, 다른 도메인 내부 import 금지와 Controller/Service의 SQL 미포함을 검사한다. [settle.test.ts](../src/lib/settle.test.ts)는 경로 분배·출처·JSON/multipart 오류를 검사한다.
 
@@ -1173,4 +1173,4 @@ node --import ./scripts/test-server-only.mjs --import tsx scripts/browser-check.
 Settle 분리 검증 결과(2026-10-03): `npm test` **93개**, 격리된 로컬 PostgreSQL·MinIO의 `npm run test:integration` **45개**, `npm run build`가 통과했다. 전체 `scripts/browser-check.mjs`도 통과하여 실제 Chrome에서 회차 생성·지출/CUSTOM·버전 충돌 재저장·영수증·제외·확정/추첨·최신 수취 계좌·수취 확인·종료/읽기 전용·과거 조회·탈퇴/재가입·응답 유실 재시도를 확인했다. 기존 개발 서버와 분리한 소스/의존성 복사본을 사용했으며 실제 카카오 외부 인증은 이번 검증 대상이 아니다.
 
 
-회차 생성 세션 락 검증 결과(2026-10-03): `npm test` **94개**, 격리된 PostgreSQL·MinIO의 `npm run test:integration` **46개**, `npm run build`, 전체 Chrome `scripts/browser-check.mjs`가 통과했다. 실제 Node 서버에서 ticket 없는 요청·서버 UUIDv4 ID·WebSocket 발행을 포함한 **SQL 4회**와 명시적 트랜잭션/멱등 기록 미실행을 확인했다. 모임 이탈·닫기·회원 탈퇴와 동시 실행 시 단일 성공, 락 대기 후 활성 상태 검사, 성공·입력 오류·AUTH 오류·저장 실패의 락 해제, 참여자 저장 실패 시 원자성을 검증했다. 브라우저 요청은 회차 생성 ticket을 보내거나 응답 유실 후 자동 재생하지 않으며 저장 결과를 먼저 목록에서 확인하도록 안내한다.
+회차 생성 UUIDv7 ticket·세션 락 검증 결과(2026-10-03): `npm test` **94개**, 격리된 PostgreSQL·MinIO의 `npm run test:integration` **46개**, `npm run build`, 전체 Chrome `scripts/browser-check.mjs`가 통과했다. 실제 Node 서버에서 UUIDv7 ticket PK·같은 ticket 중복 409·WebSocket 발행을 포함한 **SQL 4회**와 명시적 트랜잭션/멱등 기록 미실행을 확인했다. 모임 이탈·닫기·회원 탈퇴와 동시 실행 시 단일 성공, 락 대기 후 활성 상태 검사, 성공·입력 오류·AUTH 오류·저장 실패의 락 해제, 참여자 저장 실패 시 원자성을 검증했다. 브라우저 요청은 회차 생성에 UUIDv7 ticket을 보내고 응답 유실 후 같은 ticket을 유지한다. 중복 응답이면 목록에서 저장 결과를 확인하도록 안내한다.

@@ -78,8 +78,7 @@ export function apiRequest<T>(path: string, options: RequestOptions = {}): Promi
 
 async function request<T>(path: string, options: RequestOptions): Promise<T> {
   const method = options.method ?? 'GET'
-  const roundCreation = method === 'POST' && /^\/api\/groups\/[^/]+\/rounds$/.test(path)
-  const mutation = method !== 'GET' && !roundCreation
+  const mutation = method !== 'GET'
   const operation = `${method} ${path}`
   const signature = mutation ? await fingerprint(path, method, options.body) : ''
   options.signal?.throwIfAborted()
@@ -95,7 +94,7 @@ async function request<T>(path: string, options: RequestOptions): Promise<T> {
       }
       throw error
     }
-    pending ??= { signature, key: method === 'POST' && path === '/api/groups' ? uuidV7() : crypto.randomUUID(), body: snapshot(options.body) }
+    pending ??= { signature, key: method === 'POST' && (path === '/api/groups' || /^\/api\/groups\/[^/]+\/rounds$/.test(path)) ? uuidV7() : crypto.randomUUID(), body: snapshot(options.body) }
     unfinishedRequests.set(operation, pending)
   }
   const body = pending ? pending.body : options.body
@@ -134,7 +133,7 @@ async function request<T>(path: string, options: RequestOptions): Promise<T> {
     }
   } catch (error) {
     if (error instanceof ApiError || error instanceof DOMException && error.name === 'AbortError') throw error
-    throw new ApiError(503, 'network_error', roundCreation ? '회차 저장 결과를 확인하지 못했어요. 다시 만들기 전에 회차 목록을 확인해 주세요.' : '연결을 확인해 주세요. 저장 여부를 확인하려면 같은 작업을 다시 시도해 주세요.')
+    throw new ApiError(503, 'network_error', '연결을 확인해 주세요. 저장 여부를 확인하려면 같은 작업을 다시 시도해 주세요.')
   }
   if (response.ok && options.response === 'blob') return await response.blob() as T
   const result = await response.json().catch(() => null) as { data?: T; error?: string; message?: string; details?: unknown } | null
@@ -150,9 +149,9 @@ async function request<T>(path: string, options: RequestOptions): Promise<T> {
   }
   if (!response.ok) {
     if (response.status < 500) forget()
-    throw new ApiError(response.status, result?.error ?? 'request_failed', roundCreation && response.status >= 500 ? '회차 저장 결과를 확인하지 못했어요. 다시 만들기 전에 회차 목록을 확인해 주세요.' : result?.message ?? '요청을 처리하지 못했어요. 다시 시도해 주세요.', result?.details)
+    throw new ApiError(response.status, result?.error ?? 'request_failed', result?.message ?? '요청을 처리하지 못했어요. 다시 시도해 주세요.', result?.details)
   }
-  if (!result) throw new ApiError(503, 'response_unavailable', roundCreation ? '회차 저장 결과를 확인하지 못했어요. 다시 만들기 전에 회차 목록을 확인해 주세요.' : '처리 결과를 확인하지 못했어요. 같은 작업으로 다시 확인해 주세요.')
+  if (!result) throw new ApiError(503, 'response_unavailable', '처리 결과를 확인하지 못했어요. 같은 작업으로 다시 확인해 주세요.')
   const issuedToken = (result.data as { accessToken?: unknown } | undefined)?.accessToken
   if (typeof issuedToken === 'string') setAccessToken(issuedToken)
   if (path === '/api/auth/logout' || path === '/api/auth/withdraw') clearAccessToken()

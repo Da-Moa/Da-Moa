@@ -47,7 +47,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       description: '검증 지출', amount, payerId, splitMode: participantIds ? 'SELECTED' : 'ALL',
       ...(participantIds ? { participantIds } : {}), expectedVersion: (await get(id, actor)).version,
     })
-    const round = async (members = [a, b, c]) => createRound(a, g.id, { name: '검증 회차', currency: 'KRW', participantIds: members.map(m => m.userId) })
+    const round = async (members = [a, b, c]) => createRound(a, uuidV7(), g.id, { name: '검증 회차', currency: 'KRW', participantIds: members.map(m => m.userId) })
 
     await t.test('explicit invites and membership do not auto-add new rounds; response loss has a recoverable invite flow', async () => {
       assert.equal('currency' in (await getGroup(a, g.id)), false)
@@ -65,14 +65,14 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       await assert.rejects(getInvite(b, token), code('not_found'))
       assert.ok(replacement.sharePath)
       await assert.rejects(createGroup(a, uuidV7(), { name: 'x'.repeat(101) }), code('invalid_input'))
-      await assert.rejects(createRound(a, g.id, { name: '한 명', currency: 'KRW', participantIds: [a.userId] }), code('minimum_participants'))
-      await assert.rejects(createRound(b, g.id, { name: '본인 누락', currency: 'KRW', participantIds: [a.userId, c.userId] }), code('minimum_participants'))
-      await assert.rejects(createRound(a, g.id, { name: '외부인', currency: 'KRW', participantIds: [a.userId, outsider.userId] }), code('invalid_participants'))
+      await assert.rejects(createRound(a, uuidV7(), g.id, { name: '한 명', currency: 'KRW', participantIds: [a.userId] }), code('minimum_participants'))
+      await assert.rejects(createRound(b, uuidV7(), g.id, { name: '본인 누락', currency: 'KRW', participantIds: [a.userId, c.userId] }), code('minimum_participants'))
+      await assert.rejects(createRound(a, uuidV7(), g.id, { name: '외부인', currency: 'KRW', participantIds: [a.userId, outsider.userId] }), code('invalid_participants'))
     })
 
     await t.test('round lists search group and round names with existing filters and cursors', async () => {
       const rounds = await Promise.all(['alpha 검색대상', 'beta 검색대상', 'gamma 검색대상'].map(name =>
-        createRound(a, g.id, { name, currency: 'KRW', participantIds: [a.userId, b.userId] })))
+        createRound(a, uuidV7(), g.id, { name, currency: 'KRW', participantIds: [a.userId, b.userId] })))
       const first = await listRounds(a, new URLSearchParams({ q: '검색대상', status: 'RECORDING', limit: '2' }), g.id)
       const second = await listRounds(a, new URLSearchParams({ q: '검색대상', status: 'RECORDING', limit: '2', cursor: first.nextCursor! }), g.id)
       assert.equal(first.items.length, 2)
@@ -114,11 +114,11 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     })
 
     await t.test('any active member starts and manages a round they create', async () => {
-      const withoutGroupOwner = await createRound(b, g.id, { name: '모임 생성자 없는 회차', currency: 'KRW', participantIds: [b.userId, c.userId] })
+      const withoutGroupOwner = await createRound(b, uuidV7(), g.id, { name: '모임 생성자 없는 회차', currency: 'KRW', participantIds: [b.userId, c.userId] })
       await assert.rejects(get(withoutGroupOwner.id, a), code('not_found'))
       await assert.rejects(leaveGroup(a, key(), g.id), code('unfinished_group_rounds'))
       await command(withoutGroupOwner.id, 'cancel', b)
-      const ownerExclusion = await createRound(b, g.id, { name: '모임 생성자 제외', currency: 'KRW', participantIds: [a.userId, b.userId, c.userId] })
+      const ownerExclusion = await createRound(b, uuidV7(), g.id, { name: '모임 생성자 제외', currency: 'KRW', participantIds: [a.userId, b.userId, c.userId] })
       assert.equal((await checkExclusion(b, ownerExclusion.id, a.userId)).allowed, true)
       assert.equal((await checkExclusion(b, ownerExclusion.id, b.userId)).reason, 'round_creator_cannot_leave')
       await excludeMember(b, key(), ownerExclusion.id, a.userId, { expectedVersion: (await get(ownerExclusion.id, b)).version })
@@ -129,10 +129,10 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       assert.notEqual(membership.excluded_at, null)
       assert.equal(membership.left_at, null)
       assert.equal((await getGroup(b, g.id)).members.some(member => member.userId === a.userId), true)
-      const next = await createRound(b, g.id, { name: '제외 후 다음 회차', currency: 'KRW', participantIds: [a.userId, b.userId] })
+      const next = await createRound(b, uuidV7(), g.id, { name: '제외 후 다음 회차', currency: 'KRW', participantIds: [a.userId, b.userId] })
       await command(next.id, 'cancel', b)
       await command(ownerExclusion.id, 'cancel', b)
-      const r = await createRound(b, g.id, { name: 'B가 시작한 회차', currency: 'KRW', participantIds: [a.userId, b.userId, c.userId] })
+      const r = await createRound(b, uuidV7(), g.id, { name: 'B가 시작한 회차', currency: 'KRW', participantIds: [a.userId, b.userId, c.userId] })
       const starterView = await get(r.id, b), groupOwnerView = await get(r.id, a)
       assert.equal(starterView.creatorId, b.userId)
       assert.equal(starterView.groupCreatorId, a.userId)
@@ -156,7 +156,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       const invitation = await createInvite(a, key(), leaving.id, {})
       const invitationToken = invitation.sharePath!.split('/').at(-1)!
       await acceptInvite(b, key(), invitationToken)
-      const past = await createRound(a, leaving.id, { name: '과거 회차', currency: 'KRW', participantIds: [a.userId, b.userId] })
+      const past = await createRound(a, uuidV7(), leaving.id, { name: '과거 회차', currency: 'KRW', participantIds: [a.userId, b.userId] })
       await assert.rejects(leaveGroup(b, key(), leaving.id), code('unfinished_rounds'))
       await assert.rejects(leaveGroup(a, key(), leaving.id), code('unfinished_group_rounds'))
       await saveExpense(a, key(), past.id, { description: '완료할 지출', amount: '2', payerId: a.userId, splitMode: 'ALL', expectedVersion: 1 })
@@ -382,7 +382,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
 
     await t.test('custom shares validate exact totals atomically and survive partial edits and mode changes', async () => {
       for (const currency of ['KRW', 'JPY', 'USD']) {
-        const r = await createRound(a, g.id, { name: '개별 부담금 검증', currency, participantIds: [a.userId, b.userId] })
+        const r = await createRound(a, uuidV7(), g.id, { name: '개별 부담금 검증', currency, participantIds: [a.userId, b.userId] })
         const unit = (value: number) => currency === 'USD' ? `0.${value}` : String(value)
         const customShares = [{ userId: a.userId, amount: unit(10) }, { userId: b.userId, amount: unit(20) }]
         const body = { description: '개별 지출', amount: unit(30), payerId: b.userId, splitMode: 'CUSTOM', customShares, expectedVersion: 1 }
@@ -551,7 +551,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
 
     await t.test('expense and round total limits use each currency major unit and updates replace the old amount', async () => {
       for (const currency of ['KRW', 'JPY', 'USD'] as const) {
-        const r = await createRound(a, g.id, { name: `${currency} 금액 상한`, currency, participantIds: [a.userId, b.userId] })
+        const r = await createRound(a, uuidV7(), g.id, { name: `${currency} 금액 상한`, currency, participantIds: [a.userId, b.userId] })
         const maximum = currency === 'USD' ? '100000000.00' : '100000000'
         const overMaximum = currency === 'USD' ? '100000000.01' : '100000001'
         const belowMaximum = currency === 'USD' ? '99999999.99' : '99999999'
@@ -583,10 +583,10 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       const participants = [a.userId, b.userId]
       await assert.rejects(createGroup(a, uuidV7(), { name: '모임 통화 없음', currency: 'KRW' }), code('invalid_input'))
       for (const currency of [undefined, null, '', 'XXX', 'usd']) {
-        await assert.rejects(createRound(a, g.id, { name: '잘못된 통화', participantIds: participants, ...(currency === undefined ? {} : { currency }) }), code('unsupported_currency'))
+        await assert.rejects(createRound(a, uuidV7(), g.id, { name: '잘못된 통화', participantIds: participants, ...(currency === undefined ? {} : { currency }) }), code('unsupported_currency'))
       }
       const currencies = CURRENCY_CODES
-      const rounds = await Promise.all(currencies.map(currency => createRound(a, g.id, { name: `${currency} 회차`, currency, participantIds: participants })))
+      const rounds = await Promise.all(currencies.map(currency => createRound(a, uuidV7(), g.id, { name: `${currency} 회차`, currency, participantIds: participants })))
       const settled: { id: string; currency: string; balanceMinor: string }[] = []
       for (const [index, currency] of currencies.entries()) {
         const r = rounds[index]
@@ -631,7 +631,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       const profileGroup = await createGroup(a, uuidV7(), { name: '프로필 표시 검증' })
       const profileInvite = await createInvite(a, key(), profileGroup.id, {})
       await acceptInvite(departed, key(), profileInvite.sharePath!.split('/').at(-1)!)
-      const r = await createRound(a, profileGroup.id, { name: '프로필 회차', currency: 'KRW', participantIds: [a.userId, departed.userId] })
+      const r = await createRound(a, uuidV7(), profileGroup.id, { name: '프로필 회차', currency: 'KRW', participantIds: [a.userId, departed.userId] })
       await expense(r.id, a, departed.userId, '2000')
       await command(r.id, 'confirm'); await command(r.id, 'send'); await command(r.id, 'force-complete')
 
