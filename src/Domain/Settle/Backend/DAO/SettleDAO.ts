@@ -56,3 +56,7 @@ export type OutgoingRow = {
 export type IncomingRow = {
   sender_id: string; amount_minor: string; received_at: string | null; display_name_snapshot: string; profile_image_url: string | null
 }
+export type SettlementRow = RoundRow & {
+  confirmations: (Omit<MemberRow, 'excluded_at'> & { checked_at: string | null })[];
+  outgoing: OutgoingRow[]; incoming: IncomingRow[]
+}

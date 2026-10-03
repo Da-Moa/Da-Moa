@@ -35,11 +35,18 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
     process.env.DB_QUERY_LOG = 'true'
     let statements: string[] = []
     const logger = t.mock.method(console, 'info', (message: string) => { statements.push(message.replace(/^SQL:\s*/, '').replace(/\s+/g, ' ').trim()) })
-    const trace = async <T>(count: number, write: boolean | 'receipt' | 'session' | 'connection' | 'cancel' | 'expense' | 'patch' | 'delete' | 'exclude' | 'confirm' | 'reopen' | 'draw', work: () => Promise<T>) => {
+    const trace = async <T>(count: number, write: boolean | 'receipt' | 'session' | 'connection' | 'cancel' | 'expense' | 'patch' | 'delete' | 'exclude' | 'confirm' | 'reopen' | 'draw' | 'settlement', work: () => Promise<T>) => {
       statements = []
       const result = await work()
       assert.equal(statements.length, count, statements.join('\n'))
-      if (write === 'draw') {
+      if (write === 'settlement') {
+        assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
+        if (count) assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
+        if (count === 2) {
+          assert.match(statements[1], /AS confirmations.*AS outgoing.*AS incoming.*FROM rounds r JOIN groups g.*JOIN round_members viewer.*LEFT JOIN settlement_balances/)
+          assert.match(statements[1], /t.sender_id = \$2.*t.received_at IS NULL.*t.receiver_id = \$2/)
+        }
+      } else if (write === 'draw') {
         assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory/.test(sql)))
         if (count) assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
         if (count > 1) assert.match(statements[1], /FROM rounds r JOIN round_members viewer.*operation = 'round.draw'/)
@@ -544,7 +551,25 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         })
       })
       assert.equal((await trace(3, 'connection', () => checkExclusion(a, round.id, c.userId))).reason, 'already_excluded')
-      await trace(5, false, () => getSettlement(a, round.id))
+      await t.test('settlement uses AUTH then one authorized query before finalization', async () => {
+        for (const [actor, id, expected, count] of [
+          [null, round.id, 'unauthorized', 0],
+          [{ ...a, userId: randomUUID() }, round.id, 'unauthorized', 1],
+          [nonParticipant, round.id, 'not_found', 2],
+          [a, randomUUID(), 'not_found', 2],
+        ] as const) await trace(count, 'settlement', () => assert.rejects(getSettlement(actor, id), (error: { code: string }) => error.code === expected))
+        for (const actor of [a, b, c]) {
+          const pending = await trace(2, 'settlement', () => getSettlement(actor, round.id))
+          assert.equal(pending.status, 'RECORDING')
+          assert.equal(pending.finalized, false)
+          assert.equal(pending.balanceMinor, null)
+          assert.equal(pending.sharePath, null)
+          assert.deepEqual(pending.outgoing, [])
+          assert.deepEqual(pending.incoming, [])
+          assert.deepEqual(pending.confirmations, [])
+          assert.equal(pending.allChecked, true)
+        }
+      })
       const command = async (action: string, count: number) => {
         const result = await trace(count, ['confirm', 'reopen', 'draw'].includes(action) ? action as 'confirm' | 'reopen' | 'draw' : true, () => roundCommand(a, key(), round.id, action, { expectedVersion: version }))
         version = result.version!
@@ -552,7 +577,9 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       await command('confirm', 6)
       await command('reopen', 3)
       await command('confirm', 6)
+      assert.equal((await trace(2, 'settlement', () => getSettlement(a, round.id))).finalized, false)
       await command('send', 12)
+      assert.equal((await trace(2, 'settlement', () => getSettlement(a, round.id))).finalized, false)
       await t.test('draw uses AUTH then round then one atomic final save', async () => {
         const requestKey = key(), request = { expectedVersion: version }
         for (const [actor, ticket, id, input, expected, count] of [
@@ -578,13 +605,39 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         version = result.version!
       })
       await trace(2, 'connection', () => getRound(a, round.id, new URLSearchParams()))
-      const settlement = await trace(8, false, () => getSettlement(a, round.id))
+      const settlement = await trace(2, 'settlement', () => getSettlement(a, round.id))
       assert.equal(settlement.outgoing.length, 1)
       assert.ok(settlement.outgoing[0].account)
+      const receiver = await trace(2, 'settlement', () => getSettlement(b, round.id))
+      assert.equal(receiver.incoming.length, 1)
+      assert.equal(receiver.incoming[0].senderId, a.userId)
+      assert.equal(receiver.incoming[0].amountMinor, settlement.outgoing[0].amountMinor)
+      assert.equal(receiver.incoming[0].receivedAt, null)
+      assert.equal(receiver.checkRequired, true)
+      assert.deepEqual(receiver.outgoing, [])
       const checkKey = key(), checkBody = { checked: true, senderId: a.userId, expectedVersion: version }
       await trace(8, true, () => setSettlementCheck(b, checkKey, round.id, checkBody))
       await trace(5, true, () => setSettlementCheck(b, checkKey, round.id, checkBody))
+      const received = await trace(2, 'settlement', () => getSettlement(b, round.id))
+      assert.notEqual(received.incoming[0].receivedAt, null)
+      assert.equal(received.checkedAt, received.incoming[0].receivedAt)
+      assert.equal(received.checkedCount, 1)
+      assert.equal(received.allChecked, true)
+      assert.deepEqual((await trace(2, 'settlement', () => getSettlement(a, round.id))).outgoing, [])
       await command('complete', 10)
+      assert.equal((await trace(2, 'settlement', () => getSettlement(b, round.id))).status, 'COMPLETED')
+      await t.test('settlement omits accounts for non-KRW transfers in two SQL calls', async () => {
+        const foreign = await createRound(a, uuidV7(), group.id, { ...body, currency: 'USD', participantIds: [a.userId, b.userId] })
+        const saved = await saveExpense(a, key(), foreign.id, { description: '외화', amount: '0.30', payerId: b.userId, splitMode: 'ALL', expectedVersion: 1 })
+        const confirmed = await roundCommand(a, key(), foreign.id, 'confirm', { expectedVersion: saved.version })
+        await roundCommand(a, key(), foreign.id, 'send', { expectedVersion: confirmed.version })
+        const sender = await trace(2, 'settlement', () => getSettlement(a, foreign.id))
+        assert.equal(sender.balanceMinor, '15')
+        assert.equal(sender.outgoing[0].amountMinor, '15')
+        assert.equal('account' in sender.outgoing[0], false)
+        assert.equal(JSON.stringify(sender).includes('검증 은행'), false)
+        assert.equal((await trace(2, 'settlement', () => getSettlement(b, foreign.id))).balanceMinor, '-15')
+      })
       const cancelled = await trace(4, 'session', () => createRound(a, uuidV7(), group.id, { ...body, participantIds: [a.userId, b.userId] }))
       for (const [actor, count] of [[null, 2], [{ ...a, userId: randomUUID() }, 3]] as const) {
         statements = []

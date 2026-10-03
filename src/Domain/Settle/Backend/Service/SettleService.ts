@@ -67,12 +67,6 @@ function settlementExpenseDetails(row: SettlementExpenseRow) {
   return { id: row.id, payerId: row.payer_id, amountMinor: row.amount_minor, splitMode: row.split_mode, participantIds: row.participant_ids, shares: row.shares ?? [] }
 }
 
-async function settlementChecksFor(client: Database, roundId: string) {
-  const { rows } = await repository.findSettlementChecks(client, roundId)
-  return rows.map(row => ({ userId: String(row.user_id), displayName: String(row.display_name_snapshot), profileImageUrl: row.profile_image_url as string | null,
-    checkedAt: row.checked_at === null ? null : Number(row.checked_at) }))
-}
-
 function summary(row: RoundRow): RoundSummary {
   return {
     id: row.id, groupId: row.group_id, groupName: row.group_name, name: row.name, currency: row.currency,
@@ -564,23 +558,24 @@ export async function setSettlementCheck(access: Identity, key: string, roundId:
 }
 
 export async function getSettlement(access: Identity, roundId: string): Promise<SettlementDTO> {
-  return withReadTransaction(async client => {
-    const account = await requireAccount(client, access), round = await roundFor(client, roundId, account.id)
-    const checks = await settlementChecksFor(client, roundId), viewerCheck = checks.find(member => member.userId === account.id)
+  return withDatabaseConnection(async client => {
+    const account = await requireAccount(client, access)
+    const { rows: [round] } = await repository.findSettlement(client, roundId, account.id)
+    if (!round) throw missing()
+    const checks = round.confirmations.map(row => ({ userId: row.user_id, displayName: row.display_name_snapshot, profileImageUrl: row.profile_image_url,
+      checkedAt: row.checked_at === null ? null : Number(row.checked_at) }))
+    const viewerCheck = checks.find(member => member.userId === account.id)
     const checkedCount = checks.filter(member => member.checkedAt !== null).length
     const result: SettlementDTO = { roundId, name: round.name, groupName: round.group_name, status: round.status, version: round.version, isCreator: round.is_creator, finalized: round.finalized_at !== null, currency: round.currency, balanceMinor: null,
       checkedAt: viewerCheck?.checkedAt ?? null, checkRequired: Boolean(viewerCheck), checkedCount, requiredCount: checks.length, allChecked: checkedCount === checks.length,
       confirmations: checks, outgoing: [], incoming: [], sharePath: null }
     if (!result.finalized) return result
-    const { rows: balances } = await repository.findBalance(client, roundId, account.id)
-    result.balanceMinor = balances[0]?.balance_minor ?? '0'
+    result.balanceMinor = round.balance_minor ?? '0'
     result.sharePath = `/settlements/${roundId}`
-    const { rows: outgoing } = await repository.findOutgoing(client, roundId, account.id, round.currency)
-    const { rows: incoming } = await repository.findIncoming(client, roundId, account.id)
-    result.outgoing = outgoing.map(row => ({ receiverId: row.receiver_id, displayName: row.display_name_snapshot, profileImageUrl: row.profile_image_url, amountMinor: row.amount_minor,
+    result.outgoing = round.outgoing.map(row => ({ receiverId: row.receiver_id, displayName: row.display_name_snapshot, profileImageUrl: row.profile_image_url, amountMinor: row.amount_minor,
       ...(round.currency === 'KRW' ? { account: { bankName: row.bank_name, accountNumber: row.account_number, formattedAccountNumber: row.account_number_formatted, accountHolder: row.account_holder,
         verifiedAt: row.bank_verified_at === null ? null : Number(row.bank_verified_at) } } : {}) }))
-    result.incoming = incoming.map(row => ({ senderId: row.sender_id, displayName: row.display_name_snapshot, profileImageUrl: row.profile_image_url, amountMinor: row.amount_minor,
+    result.incoming = round.incoming.map(row => ({ senderId: row.sender_id, displayName: row.display_name_snapshot, profileImageUrl: row.profile_image_url, amountMinor: row.amount_minor,
       receivedAt: row.received_at === null ? null : Number(row.received_at) }))
     return result
   })

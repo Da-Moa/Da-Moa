@@ -2,7 +2,7 @@ import 'server-only'
 import type { Database } from '../../../../Global/Util/Backend'
 import { roundCreationCandidatesSql } from '../../../Group/Backend'
 import type { Currency, Expense, MutationResult, finalizeSettlement } from '../../Shared'
-import type { RoundRow, RoundDetailRow, RoundConfirmationRow, ExpenseUpdateRow, ExpenseDeletionRow, MemberExclusionRow, MemberRow, ExpenseRow, ShareRow, ReceiptRow, SettlementExpenseRow, OutgoingRow, IncomingRow } from '../DAO/SettleDAO'
+import type { RoundRow, RoundDetailRow, RoundConfirmationRow, ExpenseUpdateRow, ExpenseDeletionRow, MemberExclusionRow, MemberRow, ExpenseRow, ShareRow, ReceiptRow, SettlementExpenseRow, SettlementRow } from '../DAO/SettleDAO'
 
 export function findRound(client: Database, id: string, userId: string) {
   return client.query<RoundRow>(`SELECT r.*,g.name AS group_name,g.creator_id AS group_creator_id,
@@ -67,15 +67,6 @@ export function findSettlementExpenses(client: Database, roundId: string) {
     FROM expenses e WHERE e.round_id=$1 ORDER BY e.id`, [roundId])
 }
 
-export function findSettlementChecks(client: Database, roundId: string) {
-  return client.query<Omit<MemberRow, 'excluded_at'> & { checked_at: string | null }>(`SELECT rm.user_id,rm.display_name_snapshot,
-    CASE WHEN bool_and(t.received_at IS NOT NULL) THEN max(t.received_at) ELSE NULL END AS checked_at,
-    CASE WHEN u.deleted_at IS NULL THEN u.profile_image_url ELSE NULL END AS profile_image_url
-    FROM settlement_transfers t JOIN round_members rm ON rm.round_id=t.round_id AND rm.user_id=t.receiver_id
-    JOIN users u ON u.id=rm.user_id WHERE t.round_id=$1
-    GROUP BY rm.user_id,rm.display_name_snapshot,u.deleted_at,u.profile_image_url ORDER BY rm.user_id`, [roundId])
-}
-
 export function findRounds(client: Database, userId: string, groupId: string | null, status: string | null, search: string | null, createdAt: string | null, cursorId: string | null, limit: number) {
   return client.query<RoundRow>(`SELECT r.*,g.name AS group_name,b.balance_minor,
       (SELECT COALESCE(sum(amount_minor),0)::text FROM expenses WHERE round_id=r.id) AS total_minor,
@@ -85,10 +76,6 @@ export function findRounds(client: Database, userId: string, groupId: string | n
       WHERE ($2::text IS NULL OR r.group_id=$2) AND ($3::text IS NULL OR ($3='active' AND r.status<>'COMPLETED') OR r.status=$3)
       AND ($4::text IS NULL OR strpos(lower(r.name),lower($4))>0 OR strpos(lower(g.name),lower($4))>0)
       AND ($5::bigint IS NULL OR (r.created_at,r.id)<($5::bigint,$6::text)) ORDER BY r.created_at DESC,r.id DESC LIMIT $7`, [userId, groupId, status, search, createdAt, cursorId, limit])
-}
-
-export function findBalance(client: Database, roundId: string, userId: string) {
-  return client.query<{ balance_minor: string }>('SELECT balance_minor FROM settlement_balances WHERE round_id=$1 AND user_id=$2', [roundId, userId])
 }
 
 export async function insertRound(client: Database, id: string, groupId: string, userId: string, name: string, currency: Currency, now: number, ids: string[]) {
@@ -445,20 +432,40 @@ export function setReceived(client: Database, roundId: string, userId: string, s
       WHERE round_id=$1 AND receiver_id=$2 AND ($3::text IS NULL OR sender_id=$3)`, [roundId, userId, senderId, checked, now])
 }
 
-export function findOutgoing(client: Database, roundId: string, userId: string, currency: Currency) {
-  // Bank fields are selected only for the viewer's actual KRW recipients.
-  const bankFields = currency === 'KRW' ? ',u.bank_name,u.account_number,u.account_number_formatted,u.account_holder,u.bank_verified_at' : ''
-  return client.query<OutgoingRow>(`SELECT t.receiver_id,t.amount_minor,m.display_name_snapshot,
-      CASE WHEN u.deleted_at IS NULL THEN u.profile_image_url ELSE NULL END AS profile_image_url${bankFields} FROM settlement_transfers t
-      JOIN round_members m ON m.round_id=t.round_id AND m.user_id=t.receiver_id JOIN users u ON u.id=t.receiver_id
-      WHERE t.round_id=$1 AND t.sender_id=$2 AND t.received_at IS NULL ORDER BY t.receiver_id`, [roundId, userId])
-}
-
-export function findIncoming(client: Database, roundId: string, userId: string) {
-  return client.query<IncomingRow>(`SELECT t.sender_id,t.amount_minor,t.received_at,m.display_name_snapshot,
-      CASE WHEN u.deleted_at IS NULL THEN u.profile_image_url ELSE NULL END AS profile_image_url FROM settlement_transfers t
-      JOIN round_members m ON m.round_id=t.round_id AND m.user_id=t.sender_id JOIN users u ON u.id=t.sender_id
-      WHERE t.round_id=$1 AND t.receiver_id=$2 ORDER BY t.sender_id`, [roundId, userId])
+export function findSettlement(client: Database, roundId: string, userId: string) {
+  return client.query<SettlementRow>(`SELECT r.*,g.name AS group_name,(r.creator_id=$2) AS is_creator,b.balance_minor,
+    COALESCE(checks.items,'[]'::jsonb) AS confirmations,
+    COALESCE(outgoing.items,'[]'::jsonb) AS outgoing,COALESCE(incoming.items,'[]'::jsonb) AS incoming
+    FROM rounds r JOIN groups g ON g.id=r.group_id JOIN round_members viewer ON viewer.round_id=r.id AND viewer.user_id=$2
+    LEFT JOIN settlement_balances b ON b.round_id=r.id AND b.user_id=$2 AND r.finalized_at IS NOT NULL
+    LEFT JOIN LATERAL (
+      SELECT jsonb_agg(to_jsonb(c) ORDER BY c.user_id) AS items FROM (
+        SELECT rm.user_id,rm.display_name_snapshot,
+          (CASE WHEN bool_and(t.received_at IS NOT NULL) THEN max(t.received_at) ELSE NULL END)::text AS checked_at,
+          CASE WHEN u.deleted_at IS NULL THEN u.profile_image_url ELSE NULL END AS profile_image_url
+        FROM settlement_transfers t JOIN round_members rm ON rm.round_id=t.round_id AND rm.user_id=t.receiver_id
+        JOIN users u ON u.id=rm.user_id WHERE t.round_id=r.id
+        GROUP BY rm.user_id,rm.display_name_snapshot,u.deleted_at,u.profile_image_url
+      ) c
+    ) checks ON true
+    LEFT JOIN LATERAL (
+      SELECT jsonb_agg(jsonb_build_object('receiver_id',t.receiver_id,'amount_minor',t.amount_minor::text,
+        'display_name_snapshot',m.display_name_snapshot,
+        'profile_image_url',CASE WHEN u.deleted_at IS NULL THEN u.profile_image_url ELSE NULL END) ||
+        CASE WHEN r.currency='KRW' THEN jsonb_build_object('bank_name',u.bank_name,'account_number',u.account_number,
+          'account_number_formatted',u.account_number_formatted,'account_holder',u.account_holder,'bank_verified_at',u.bank_verified_at::text)
+          ELSE '{}'::jsonb END ORDER BY t.receiver_id) AS items
+      FROM settlement_transfers t JOIN round_members m ON m.round_id=t.round_id AND m.user_id=t.receiver_id
+      JOIN users u ON u.id=t.receiver_id
+      WHERE t.round_id=r.id AND t.sender_id=$2 AND t.received_at IS NULL AND r.finalized_at IS NOT NULL
+    ) outgoing ON true
+    LEFT JOIN LATERAL (
+      SELECT jsonb_agg(jsonb_build_object('sender_id',t.sender_id,'amount_minor',t.amount_minor::text,'received_at',t.received_at::text,
+        'display_name_snapshot',m.display_name_snapshot,
+        'profile_image_url',CASE WHEN u.deleted_at IS NULL THEN u.profile_image_url ELSE NULL END) ORDER BY t.sender_id) AS items
+      FROM settlement_transfers t JOIN round_members m ON m.round_id=t.round_id AND m.user_id=t.sender_id
+      JOIN users u ON u.id=t.sender_id WHERE t.round_id=r.id AND t.receiver_id=$2 AND r.finalized_at IS NOT NULL
+    ) incoming ON true WHERE r.id=$1`, [roundId, userId])
 }
 
 export function insertReceipt(client: Database, id: string, expenseId: string, userId: string, mimeType: string, byteSize: number, sha256: string, objectKey: string, now: number) {
