@@ -283,7 +283,7 @@ export const openApiDocument = {
       post: {
         tags: ['인증'],
         summary: '회원 탈퇴',
-        description: '참여 이력이 있는 미종료 회차가 있으면 409 unfinished_rounds로 차단합니다. 허용되면 deletedAt 설정·모든 세션 폐기·모임 이탈을 함께 저장합니다. 동일 카카오 재가입 시 같은 ID·과거 기록을 유지하고 이전 모임·관리 권한은 복원하지 않습니다.',
+        description: 'AUTH → 미종료 참여 회차 조회 → 세션 advisory lock 획득 → 조건부 소프트 삭제·모임 이탈 단일 SQL → 락 해제의 5회이며 명시적 트랜잭션은 없습니다. 참여 이력이 있는 미종료 회차가 있으면 제외 여부와 무관하게 409 unfinished_rounds로 차단하며, 락 대기 중 생성된 회차도 저장 SQL에서 다시 확인합니다. deletedAt과 활성 멤버십 종료를 원자적으로 저장하고 클라이언트 토큰·쿠키를 삭제합니다. 동일 카카오 재가입 시 같은 ID·과거 기록을 유지하고 이전 모임·관리 권한은 복원하지 않습니다.',
         parameters: [
           {
             name: 'Origin',

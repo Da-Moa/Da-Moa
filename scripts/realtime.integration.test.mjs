@@ -188,6 +188,18 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     const newRefreshCookie = newCookie.split('; ').find(value => value.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`))
     assert.equal((await fetch(`${origin}/api/auth/logout`, { method: 'POST', headers: { origin, cookie: newRefreshCookie } })).status, 200)
     assert.equal((await fetch(`${origin}/api/me`, { headers: { authorization: `Bearer ${newAccessToken}` } })).status, 200, 'Logout deletes client tokens without revoking Access JWTs')
+    const departure = once(mine.socket, 'message', { signal: AbortSignal.timeout(10000) })
+    const withdrawn = await fetch(`${origin}/api/auth/withdraw`, { method: 'POST', headers: { origin, authorization: `Bearer ${other.accessToken}` } })
+    assert.equal(withdrawn.status, 200)
+    assert.deepEqual(await withdrawn.json(), { ok: true })
+    assert.equal(withdrawn.headers.get('Cache-Control'), 'private, no-store')
+    assert.ok(withdrawn.headers.getSetCookie().some(value => value.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`) && value.includes('Max-Age=0')))
+    const [departureBytes] = await departure
+    const departureEvent = JSON.parse(departureBytes.toString())
+    assert.deepEqual(departureEvent, { type: 'invalidate', keys: departureEvent.keys })
+    assert.ok(departureEvent.keys.includes('groups') && departureEvent.keys.includes(`group:${groupId}`))
+    assert.ok(departureEvent.keys.every(value => value === 'groups' || /^group:[0-9a-f-]{36}$/.test(value)))
+    assert.equal((await fetch(`${origin}/api/me`, { headers: { authorization: `Bearer ${other.accessToken}` } })).status, 401, 'soft deletion rejects the withdrawn member\'s existing JWT')
   } finally {
     for (const socket of connections) socket.terminate()
     app.kill('SIGTERM')

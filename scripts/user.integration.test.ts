@@ -4,7 +4,7 @@ import test from 'node:test'
 import { NextRequest } from 'next/server'
 import { createAccessToken, currentTimestamp, readAccessToken } from '../src/lib/auth.ts'
 import { signInKakao } from '../src/Global/Auth/Backend/index.ts'
-import { completeOnboarding, updateBankAccount } from '../src/Domain/User/Backend/index.ts'
+import { completeOnboarding, updateBankAccount, withdrawAccount } from '../src/Domain/User/Backend/index.ts'
 import { findUser, saveBankAccount, saveOnboarding } from '../src/Domain/User/Backend/Repository/UserRepository.ts'
 import { normalizeBankAccountInput } from '../src/Domain/User/Shared/index.ts'
 import { createDatabaseClient, withDatabaseConnection } from '../src/lib/db.ts'
@@ -13,11 +13,103 @@ import { GET } from '../src/app/api/me/route.ts'
 import { PUT } from '../src/app/api/me/bank-account/route.ts'
 import { applyMigrations } from './migrations.mjs'
 import { completeTestOnboarding } from './bank-test-support.ts'
+import { uuidV7 } from '../src/lib/uuid.ts'
+import { createGroup } from '../src/Domain/Group/Backend/index.ts'
+import { createRound } from '../src/lib/round-store.ts'
 
 const database = process.env.TEST_DATABASE_URL
 if (!database || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(database).hostname) || !new URL(database).pathname.toLowerCase().includes('test')) throw new Error('TEST_DATABASE_URL must name an isolated local test database')
 process.env.DATABASE_URL = database
 process.env.AUTH_JWT_SECRET ||= 'isolated-user-test-secret-at-least-32-bytes'
+
+test('withdrawal uses AUTH, unfinished check, lock, atomic soft delete/membership exit, unlock', async t => {
+  const client = createDatabaseClient(database)
+  await client.connect()
+  const previousLog = process.env.DB_QUERY_LOG
+  const code = (expected: string) => (error: unknown) => (error as { code?: string }).code === expected
+  const member = async () => {
+    const signup = await signInKakao(`user-withdraw:${randomUUID()}`, { displayName: '탈퇴 검증', email: null, profileImageUrl: null })
+    const session = await completeTestOnboarding(readAccessToken(signup.accessToken), { bankName: '검증은행', accountNumber: '001234', accountHolder: '탈퇴 검증' })
+    return readAccessToken(session.accessToken)!
+  }
+  try {
+    await applyMigrations(client)
+    const owner = await member(), participant = await member(), alone = await member()
+    const group = await createGroup(owner, uuidV7(), { name: '탈퇴 검증 모임' })
+    const second = await createGroup(owner, uuidV7(), { name: '탈퇴 검증 두 번째 모임' })
+    await client.query('INSERT INTO group_members(group_id,user_id,joined_at) VALUES($1,$2,1)', [group.id, participant.userId])
+    const round = await createRound(owner, randomUUID(), group.id, { name: '탈퇴 차단', currency: 'KRW', participantIds: [owner.userId, participant.userId] })
+    await client.query('UPDATE round_members SET excluded_at=1 WHERE round_id=$1 AND user_id=$2', [round.id, participant.userId])
+
+    process.env.DB_QUERY_LOG = 'true'
+    let statements: string[] = []
+    t.mock.method(console, 'info', (message: string) => { statements.push(message.replace(/^SQL:\s*/, '').replace(/\s+/g, ' ').trim()) })
+    const trace = async <T>(count: number, work: () => Promise<T>) => {
+      statements = []
+      const result = await work()
+      assert.equal(statements.length, count, statements.join('\n'))
+      assert.doesNotMatch(statements.join('\n'), /^(?:BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory_xact_lock|FOR UPDATE|FOR SHARE|mutation_requests/m)
+      if (count) assert.match(statements[0], /^SELECT .* FROM users u WHERE u\.id = \$1$/)
+      if (count >= 2) assert.match(statements[1], /^SELECT .* FROM round_members rm JOIN rounds/)
+      if (count === 5) {
+        assert.equal(statements[2], 'SELECT pg_advisory_lock(1684106607)')
+        assert.match(statements[3], /^WITH unfinished AS MATERIALIZED/)
+        assert.equal(statements[4], 'SELECT pg_advisory_unlock(1684106607) AS unlocked')
+      }
+      return result
+    }
+    await trace(0, () => assert.rejects(withdrawAccount(null), code('unauthorized')))
+    await trace(2, () => assert.rejects(withdrawAccount(participant), error => {
+      assert.equal((error as { code: string }).code, 'unfinished_rounds')
+      assert.equal((error as { details: { rounds: { id: string }[] } }).details.rounds[0].id, round.id)
+      return true
+    }))
+    await client.query('DELETE FROM rounds WHERE id=$1', [round.id])
+
+    // A failure in membership exit must also cancel the user soft delete.
+    const pool = getDatabasePool(database)
+    const connect = pool.connect.bind(pool)
+    const connectionMock = t.mock.method(pool, 'connect', async () => {
+      const borrowed = await connect()
+      const queryMock = t.mock.method(borrowed, 'query', new Proxy(borrowed.query, {
+        apply(target, receiver, args) {
+          if (String(args[0]).includes('WITH unfinished AS MATERIALIZED')) {
+            queryMock.mock.restore()
+            args[0] = String(args[0]).replace('RETURNING group_id', 'RETURNING (length(group_id) / (length(group_id) - length(group_id)))::text AS group_id')
+          }
+          return Reflect.apply(target, receiver, args)
+        },
+      }))
+      return borrowed
+    })
+    await trace(5, () => assert.rejects(withdrawAccount(owner), error => (error as { code: string }).code === '22012'))
+    connectionMock.mock.restore()
+    const preserved = (await client.query(`SELECT u.deleted_at, COUNT(*) FILTER (WHERE m.left_at IS NULL)::int AS memberships
+      FROM users u JOIN group_members m ON m.user_id=u.id WHERE u.id=$1 GROUP BY u.id`, [owner.userId])).rows[0]
+    assert.deepEqual(preserved, { deleted_at: null, memberships: 2 })
+
+    const departed = await trace(5, () => withdrawAccount(owner))
+    assert.deepEqual(new Set(departed.groupIds), new Set([group.id, second.id]))
+    const saved = (await client.query(`SELECT u.deleted_at, u.account_number,
+      bool_and(m.left_at=u.deleted_at) AS same_exit_time FROM users u JOIN group_members m ON m.user_id=u.id
+      WHERE u.id=$1 GROUP BY u.id`, [owner.userId])).rows[0]
+    assert.notEqual(saved.deleted_at, null)
+    assert.equal(saved.account_number, '001234')
+    assert.equal(saved.same_exit_time, true)
+    await trace(1, () => assert.rejects(withdrawAccount(owner), code('unauthorized')))
+    assert.deepEqual((await trace(5, () => withdrawAccount(alone))).groupIds, [])
+    statements = []
+    const withdrawals = await Promise.allSettled([withdrawAccount(participant), withdrawAccount(participant)])
+    assert.equal(withdrawals.filter(result => result.status === 'fulfilled').length, 1)
+    const rejected = withdrawals.find(result => result.status === 'rejected') as PromiseRejectedResult
+    assert.equal(rejected.reason.code, 'unauthorized')
+    assert.equal(pool.idleCount, pool.totalCount)
+  } finally {
+    if (previousLog === undefined) delete process.env.DB_QUERY_LOG
+    else process.env.DB_QUERY_LOG = previousLog
+    await client.end()
+  }
+})
 
 test('GET /api/me uses one AUTH SELECT without transaction SQL for app, onboarding and rejected user states', async t => {
   const client = createDatabaseClient(database)

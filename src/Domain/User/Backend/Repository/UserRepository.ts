@@ -4,6 +4,9 @@ import type { Database } from '../../../../Global/Util/Backend'
 import type { KakaoProfile } from '../../../../Global/Auth/Backend'
 import type { BankAccountInput } from '../../Shared'
 import type { SignInUserRow, UserRow } from '../DAO/UserDAO'
+import { endUserMembershipsSql } from '../../../Group/Backend'
+import { unfinishedUserRoundsSql } from '../../../Settle/Backend'
+import type { UnfinishedUserRound } from '../../../Settle/Shared'
 
 export async function findUser(client: Database, userId: string): Promise<UserRow | undefined> {
   const { rows } = await client.query<UserRow>(`
@@ -71,5 +74,16 @@ export async function saveBankAccount(client: Database, userId: string, bank: Ba
 }
 
 export async function softDeleteUser(client: Database, userId: string, now: number) {
-  await client.query('UPDATE users SET deleted_at = $2, updated_at = $2 WHERE id = $1', [userId, now])
+  const { rows } = await client.query<{ deleted: boolean; unfinishedRounds: UnfinishedUserRound[]; groupIds: string[] }>(`
+    WITH unfinished AS MATERIALIZED (${unfinishedUserRoundsSql}), withdrawn AS (
+      UPDATE users SET deleted_at = $2, updated_at = $2
+      WHERE id = $1 AND deleted_at IS NULL AND onboarding_completed_at IS NOT NULL
+        AND NOT EXISTS(SELECT 1 FROM unfinished)
+      RETURNING id
+    ), departed AS (${endUserMembershipsSql})
+    SELECT EXISTS(SELECT 1 FROM withdrawn) AS deleted,
+      COALESCE((SELECT jsonb_agg(unfinished) FROM unfinished), '[]'::jsonb) AS "unfinishedRounds",
+      ARRAY(SELECT group_id FROM departed) AS "groupIds"
+  `, [userId, now])
+  return rows[0]
 }

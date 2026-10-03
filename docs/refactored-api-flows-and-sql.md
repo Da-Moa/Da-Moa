@@ -833,20 +833,21 @@ AccountPanel.save() → PUT → Node Proxy → JWT Guard(Access JWT 검사) → 
 
 ### U4. POST /api/auth/withdraw — 회원탈퇴
 
-AccountPanel.withdraw()의 확인 대화상자 → POST → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 User 위임 → UserController.getWithdrawalResponse() → withdrawAccount() → 공용 풀 연결·쓰기 트랜잭션 → `{ ok: true }`·쿠키 삭제 → 클라이언트 Access 토큰·미완료 계좌 입력 정리·홈 이동.
+AccountPanel.withdraw()의 확인 대화상자 → POST → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 User 위임 → UserController.getWithdrawalResponse() → withdrawAccount() → 공용 풀 연결·세션 락 → `{ ok: true }`·쿠키 삭제 → 클라이언트 Access 토큰·미완료 계좌 입력 정리·홈 이동.
 
-1. Controller가 sameOrigin() 검사. Service가 W-START(2)로 BEGIN·기존 전역 advisory transaction lock 획득.
-2. AUTH로 본인의 가입 완료·미탈퇴 상태 확인.
-3. S-UNFINISHED-USER: 같은 Client로 Settle 공개 getUnfinishedUserRounds() 호출. round_members → rounds → groups JOIN으로 본인의 모든 미종료 참여 이력과 모임 이름 조회. excluded_at 조건을 두지 않아 회차에서 제외된 참여 이력도 포함한다. 행이 있으면 unfinished_rounds와 해당 회차 목록 반환·TX-ROLLBACK.
-4. Group 공개 endUserMemberships()를 같은 Client로 호출. G-USER-GROUPS가 본인의 활성 group_members에서 모임 ID 조회 → G-USER-LEAVE가 활성 멤버십의 left_at UPDATE. 별도 트랜잭션은 열지 않는다.
-5. U-WITHDRAW: UserRepository.softDeleteUser()가 users의 deleted_at·updated_at UPDATE. 계좌·회원 행·과거 회차/정산 기록은 삭제하지 않는다.
-6. TX-COMMIT 후 Controller가 `{ ok: true }` 반환. Access/Refresh·복귀·OIDC 쿠키 삭제 및 after()의 publishDepartureInvalidation(groupIds) 예약. 공통 API 클라이언트와 AccountPanel이 클라이언트 토큰·미완료 계좌 입력을 정리한다.
+1. Controller가 sameOrigin() 검사. AUTH로 본인의 가입 완료·미탈퇴 상태 확인.
+2. S-UNFINISHED-USER: 같은 Client로 Settle 공개 getUnfinishedUserRounds() 호출. round_members → rounds → groups JOIN으로 본인의 모든 미종료 참여 이력과 모임 이름 조회. excluded_at 조건을 두지 않아 회차에서 제외된 참여 이력도 포함한다. 행이 있으면 unfinished_rounds와 해당 회차 목록을 반환하며 락을 획득하지 않는다.
+3. withWriteLock()으로 회차 생성 등 기존 쓰기와 동일한 키 1684106607의 세션 advisory lock 획득.
+4. U-WITHDRAW: UserRepository.softDeleteUser()의 단일 SQL에 Settle 공개 unfinishedUserRoundsSql·Group 공개 endUserMembershipsSql을 조합한다. 락 대기 중 생성된 미종료 회차를 다시 조회하고, 미종료 참여가 없고 회원이 가입 완료·미탈퇴일 때만 users의 deleted_at·updated_at을 갱신한다. withdrawn CTE가 성공한 경우에만 활성 멤버십의 left_at을 같은 시각으로 갱신하며 RETURNING으로 알림 대상 모임 ID를 얻는다. 미종료 회차면 변경 없이 unfinished_rounds와 목록을 반환하고, 이미 탈퇴했거나 가입 미완료이면 unauthorized로 거절한다. 계좌·회원 행·과거 회차/정산 기록은 삭제하지 않는다.
+5. 같은 Client에서 finally로 락 해제. 획득·해제 결과가 불확실하면 연결을 폐기한다. 단일 SQL 자동 커밋 후 Controller가 `{ ok: true }` 반환. Access/Refresh·복귀·OIDC 쿠키 삭제 및 after()의 publishDepartureInvalidation(groupIds) 예약. 공통 API 클라이언트와 AccountPanel이 클라이언트 토큰·미완료 계좌 입력을 정리한다.
 
-정상 SQL: W-START(2) → AUTH → S-UNFINISHED-USER → G-USER-GROUPS → G-USER-LEAVE → U-WITHDRAW → TX-COMMIT = 8회. 미종료 회차 거절은 W-START(2) → AUTH → S-UNFINISHED-USER → TX-ROLLBACK = 5회다. 동일 Client의 멤버십 종료·회원 소프트 삭제는 함께 성공·롤백하며, 성공·실패 모두 연결을 반환한다. 멱등 기록·DB 세션 삭제·외부 계좌 해제는 없다.
+정상 SQL: AUTH → S-UNFINISHED-USER → 세션 락 획득 → U-WITHDRAW → 락 해제 = 5회. 최초 미종료 회차 거절은 AUTH → S-UNFINISHED-USER = 2회이며, 락 대기 후 미종료 회차가 생겨 거절되면 5회다. 명시적 BEGIN/COMMIT/ROLLBACK 없이 PostgreSQL 문장 원자성으로 멤버십 종료·회원 소프트 삭제가 함께 성공하거나 취소된다. 멱등 기록·DB 세션 삭제·외부 계좌 해제는 없다.
 
-User SQL의 실제 원문과 바인딩 순서는 [UserRepository](../src/Domain/User/Backend/Repository/UserRepository.ts)에 있다. `findUser()`는 회원 ID 한 개로 프로필·계좌·가입/탈퇴 상태를 조회하고 UserService가 숫자 시각/버전과 공개 DTO로 변환한다. `saveOnboarding()`은 기존 계좌 저장과 확인 초기화, `saveBankAccount()`는 동일 계좌 확인 보존과 버전 증가, `softDeleteUser()`는 deleted_at·updated_at만 갱신한다. 과거 정산과 계좌는 삭제하지 않는다.
+탈퇴 개선 검증(2026-10-03): `npm test` 91개, 격리된 로컬 DB·MinIO 통합 43개, 실제 Node/WebSocket 통합 1개와 `npm run build` 통과. 5회/2회 SQL 순서, 제외된 미종료 참여 거절, 멤버십 저장 실패 시 문장 전체 취소, 동시 탈퇴의 단일 성공, 락 대기 중 회차 생성 후 거절, 실제 POST 응답·쿠키 삭제·기존 JWT 차단·남은 모임 멤버 알림을 확인했다. 빌드·실시간 검사는 기존 개발 서버와 분리한 소스/의존성 복사본에서 실행했다.
 
-UserService·Controller에는 SQL이 없다. 탈퇴 협력 함수는 호출자가 연 **동일 DB Client**를 사용하고 별도 트랜잭션을 열지 않으므로 멤버십 종료와 회원 탈퇴는 함께 성공·롤백한다. 미종료 회차 조회는 [Settle ParticipationRepository](../src/Domain/Settle/Backend/Repository/ParticipationRepository.ts), 모임 ID 조회와 멤버십 변경은 [GroupRepository](../src/Domain/Group/Backend/Repository/GroupRepository.ts)에 있다. 기존 미종료 회차의 모임 이름 JOIN은 유지한다.
+User SQL의 실제 원문과 바인딩 순서는 [UserRepository](../src/Domain/User/Backend/Repository/UserRepository.ts)에 있다. `findUser()`는 회원 ID 한 개로 프로필·계좌·가입/탈퇴 상태를 조회하고 UserService가 숫자 시각/버전과 공개 DTO로 변환한다. `saveOnboarding()`은 기존 계좌 저장과 확인 초기화, `saveBankAccount()`는 동일 계좌 확인 보존과 버전 증가, `softDeleteUser()`는 조건부 소프트 삭제와 멤버십 종료를 단일 SQL로 저장한다. 과거 정산과 계좌는 삭제하지 않는다.
+
+UserService·Controller에는 SQL이 없다. 미종료 회차 SQL은 [Settle ParticipationRepository](../src/Domain/Settle/Backend/Repository/ParticipationRepository.ts), 멤버십 변경 SQL은 [GroupRepository](../src/Domain/Group/Backend/Repository/GroupRepository.ts)가 소유한다. UserRepository는 공개 SQL을 고정 CTE로 조합하며 기존 미종료 회차의 모임 이름 JOIN을 유지한다.
 
 가입/계좌 저장 성공 후 `publishBankInvalidation()`은 본인의 `me`와 해당 회원에게 지급할 송금자의 `settlements` 키를 발행한다. 탈퇴 성공 후 `publishDepartureInvalidation()`은 남은 모임 멤버의 목록·상세 키를 발행한다. 쿠키 처리·알림 예약은 Controller, 계좌 버전·멱등·재가입·탈퇴 판단은 Service, DB 행 타입은 내부 DAO, 오류 생성은 내부 Exception에 있다. 실시간 메시지에는 계좌·금액·토큰을 넣지 않는다.
 

@@ -164,6 +164,49 @@ test('round creation racing participant withdrawal never creates unfinished part
   }
 })
 
+test('withdrawal rechecks unfinished participation after waiting for a round creation lock', async () => {
+  const fixture = await group()
+  const gate = createDatabaseClient(testUrl!)
+  const roundId = key()
+  let withdrawal: Promise<{ error?: unknown }> | undefined
+  let gateHeld = false
+  try {
+    await gate.connect()
+    await gate.query('BEGIN')
+    gateHeld = true
+    await gate.query('SELECT pg_advisory_xact_lock(1684106607)')
+    withdrawal = withdrawAccount(fixture.participant).then(() => ({}), error => ({ error }))
+    const deadline = Date.now() + 4000
+    while (true) {
+      const waiting = await gate.query(`SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid
+        WHERE l.locktype='advisory' AND NOT l.granted AND a.application_name=$1`, [applicationName])
+      if (waiting.rowCount) break
+      assert.ok(Date.now() < deadline, 'withdrawal did not finish its precheck and wait for the write lock')
+      await sleep(20)
+    }
+    // Commit a new round after withdrawal's first unfinished check, while it still waits for our lock.
+    const now = currentTimestamp()
+    await gate.query(`INSERT INTO rounds(id,group_id,creator_id,name,currency,status,version,created_at)
+      VALUES($1,$2,$3,'락 대기 중 생성','KRW','RECORDING',1,$4)`, [roundId, fixture.groupId, fixture.owner.userId, now])
+    for (const actor of [fixture.owner, fixture.participant]) await gate.query(`
+      INSERT INTO round_members(round_id,user_id,display_name_snapshot,joined_at) VALUES($1,$2,'경합 검증',$3)`, [roundId, actor.userId, now])
+    await gate.query('COMMIT')
+    gateHeld = false
+    const outcome = await withdrawal
+    assert.ok(outcome.error instanceof AppError)
+    assert.equal(outcome.error.code, 'unfinished_rounds')
+    assert.equal((outcome.error.details as { rounds: { id: string }[] }).rounds[0].id, roundId)
+    const state = (await gate.query(`SELECT u.deleted_at,m.left_at FROM users u
+      JOIN group_members m ON m.user_id=u.id WHERE u.id=$1 AND m.group_id=$2`, [fixture.participant.userId, fixture.groupId])).rows[0]
+    assert.deepEqual(state, { deleted_at: null, left_at: null })
+    await roundCommand(fixture.owner, key(), roundId, 'cancel', { expectedVersion: 1 })
+  } finally {
+    if (gateHeld) await gate.query('ROLLBACK')
+    await withdrawal
+    await gate.end()
+  }
+})
+
 test('invite acceptance racing withdrawal leaves no active membership on a deleted user', async () => {
   const fixture = await group(false)
   const outcomes = await Promise.allSettled([
