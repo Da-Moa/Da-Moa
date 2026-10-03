@@ -345,16 +345,27 @@ export async function confirmRound(client: Database, roundId: string, userId: st
   [roundId, userId, key, digest, expectedVersion, now])).rows[0]
 }
 
-export function clearBaseShares(client: Database, roundId: string) {
-  return client.query('UPDATE expenses SET base_share_minor=NULL,remainder_units=NULL WHERE round_id=$1', [roundId])
+export function findRoundReopening(client: Database, roundId: string, userId: string) {
+  return client.query<RoundRow & { user_ids: string[] }>(`SELECT r.*,g.name AS group_name,g.creator_id AS group_creator_id,
+    (r.creator_id=$2) AS is_creator,ARRAY(SELECT user_id FROM round_members WHERE round_id=r.id) AS user_ids
+    FROM rounds r JOIN groups g ON g.id=r.group_id JOIN round_members m ON m.round_id=r.id AND m.user_id=$2
+    WHERE r.id=$1`, [roundId, userId])
 }
 
-export function reopenRound(client: Database, roundId: string) {
-  return client.query("UPDATE rounds SET status='RECORDING',confirmed_at=NULL WHERE id=$1", [roundId])
+export async function reopenRound(client: Database, roundId: string, userId: string, expectedVersion: number) {
+  return (await client.query<MutationResult>(`WITH changed AS (
+    UPDATE rounds SET status='RECORDING',confirmed_at=NULL,version=version+1
+    WHERE id=$1 AND creator_id=$2 AND status='CONFIRMED' AND completed_at IS NULL AND version=$3
+      AND EXISTS(SELECT 1 FROM users WHERE id=$2 AND deleted_at IS NULL AND onboarding_completed_at IS NOT NULL)
+    RETURNING id,status,version
+  ), cleared AS (
+    UPDATE expenses SET base_share_minor=NULL,remainder_units=NULL
+    WHERE round_id=$1 AND EXISTS(SELECT 1 FROM changed)
+  ) SELECT id,id AS "roundId",status,version FROM changed`, [roundId, userId, expectedVersion])).rows[0]
 }
 
-export function lockRound(client: Database, roundId: string, now: number) {
-  return client.query("UPDATE rounds SET status='LOCKED',locked_at=$2 WHERE id=$1", [roundId, now])
+export function lockRound(client: Database, roundId: string, now: number, expectedVersion: number) {
+  return client.query("UPDATE rounds SET status='LOCKED',locked_at=$2 WHERE id=$1 AND status='CONFIRMED' AND completed_at IS NULL AND version=$3", [roundId, now, expectedVersion])
 }
 
 export function findRemainder(client: Database, roundId: string) {

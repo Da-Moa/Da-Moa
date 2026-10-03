@@ -188,6 +188,21 @@ test('Route Handler contracts enforce Bearer JWTs, origin, idempotency, normaliz
       assert.equal(repeated.status, 404)
       assert.equal((await repeated.json()).error, 'not_found')
     }
+    const reopeningExpense = (await (await request(`rounds/${exclusionRound.id}/expenses`, b.accessToken, 'POST', { description: '재오픈 검증', amount: '3', payerId: b.userId, splitMode: 'ALL', expectedVersion: 2 })).json()).data
+    const reopeningConfirmed = (await (await request(`rounds/${exclusionRound.id}/confirm`, b.accessToken, 'POST', { expectedVersion: reopeningExpense.version })).json()).data
+    const reopeningPath = `rounds/${exclusionRound.id}/reopen`, reopeningBody = { expectedVersion: reopeningConfirmed.version }, reopeningKey = randomUUID()
+    assert.equal((await request(reopeningPath, a.accessToken, 'POST', reopeningBody)).status, 403, 'group creator cannot reopen another member’s round')
+    const reopened = await request(reopeningPath, b.accessToken, 'POST', reopeningBody, { 'Idempotency-Key': reopeningKey })
+    assert.equal(reopened.status, 200)
+    assert.deepEqual((await reopened.json()).data, { id: exclusionRound.id, roundId: exclusionRound.id, status: 'RECORDING', version: reopeningConfirmed.version + 1 })
+    for (const ticket of [reopeningKey, randomUUID()]) {
+      const repeated = await request(reopeningPath, b.accessToken, 'POST', reopeningBody, { 'Idempotency-Key': ticket })
+      assert.equal(repeated.status, 409)
+      assert.equal((await repeated.json()).error, 'invalid_round_state')
+    }
+    const completedReopen = await request(`rounds/${roundId}/reopen`, a.accessToken, 'POST', { expectedVersion: locked.version + 1 })
+    assert.equal(completedReopen.status, 409)
+    assert.equal((await completedReopen.json()).error, 'invalid_round_state')
     assert.equal((await request('unknown/endpoint', a.accessToken)).status, 404)
   } finally { await client.end() }
 })

@@ -1046,14 +1046,17 @@ SQL 순서: **AUTH → BEGIN → 회차/지출/멱등 통합 조회 → 생성�
 
 ### S12. POST /api/rounds/{roundId}/reopen — 기록 단계 재오픈
 
-RoundClient.command('reopen') → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.roundCommand('reopen',VersionRequestDTO) → W → MutationResult → 상세 재조회.
+RoundClient.command('reopen') → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.roundCommand('reopen',VersionRequestDTO) → MutationResult → WebSocket invalidation 시 상세 GET 1회·화면 위로 이동.
 
-1. expectedVersion만 허용. W → S-ROUND → 생성자·버전·CONFIRMED 검사. LOCKED/COMPLETED 재오픈은 거절한다.
-2. S-BASE-CLEAR로 균등 기본 몫·나머지 컬럼 초기화 → S-REOPEN으로 RECORDING·confirmed_at=NULL 저장한다. 입력한 CUSTOM 부담금은 지우지 않는다.
-3. S-BUMP → IDEM-SAVE → COMMIT → 응답·알림 예약.
-4. 지출 원본과 참여자·통화는 유지하며 다시 편집/확정할 수 있다.
+1. AUTH 내 정보 조회(+1)로 활성·가입 완료 회원을 확인하고 expectedVersion 외 필드·Idempotency-Key 형식을 검사한다.
+2. findRoundReopening() 회차 조회(+1)에서 본인의 회차 참여 이력·회차 생성자·상태·버전·알림 대상을 얻는다. 회차 생성자만 허용하며 모임 생성자 권한으로 대신할 수 없다. CONFIRMED·미종료·expectedVersion을 검사하고 이미 RECORDING 또는 LOCKED/COMPLETED이면 409 invalid_round_state다.
+3. reopenRound() 단일 CTE SQL(+1)에서 현재 회원·회차 생성자·CONFIRMED·미종료·버전을 재검사한다. 조건부 rounds UPDATE로 RECORDING·confirmed_at=NULL·버전 증가를 저장한 요청만 지출의 기본 몫·나머지 컬럼을 초기화한다. SQL 문장 하나의 자동 트랜잭션으로 처리하며 BEGIN/COMMIT·명시적 락은 없다. 지출 원본·CUSTOM 지정 부담금·참여자·통화는 유지하고 저장 실패는 전체 취소된다.
+4. 성공 기록 조회/저장·재생은 사용하지 않는다. 성공 후 같은 키/새 키로 다시 요청하면 이미 기록 중인 상태를 확인해 409로 거절한다. 조회 이후 동시 재오픈/전송이 먼저 저장되면 조건부 UPDATE가 실패해 409 stale_round다. 전송의 lockRound()에도 CONFIRMED·미종료·버전 조건을 적용해 먼저 성공한 재오픈을 덮어쓰지 않는다.
+5. 저장 성공 후 조회에서 확보한 참여자에게 invalidation 키만 발행한다. 알림 대상 추가 SQL과 성공 직후 직접 GET은 없으며 실패·중복 요청에는 알림을 발행하지 않는다.
 
-SQL: W 6회 + S-ROUND → S-BASE-CLEAR → S-REOPEN → S-BUMP = **10회**.
+SQL 순서: **AUTH → 회차 조회 → 생성자·상태·버전 검사(SQL 0회) → 재오픈 단일 저장 = 3회**. 권한·회차 없음·상태·버전 거절은 **2회**, 회원/입력/키 거절은 **1회**, JWT Guard 거절은 **0회**다. `scripts/settle-sql.integration.test.ts`에서 실제 SQL 순서·횟수·명시적 트랜잭션/락 부재·같은 키/새 키 재요청 409·저장 실패 원자성·CUSTOM 보존·알림 대상을 확인한다. `scripts/concurrency.integration.test.ts`는 조회 후 다른 재오픈/전송이 먼저 저장되는 양방향 경합을, `scripts/routes.integration.test.ts`는 회차 생성자 권한·성공·중복·종료 상태의 HTTP 응답을 검증한다.
+
+검증(2026-10-04): `npm test` **96개**, 전용 로컬 테스트 PostgreSQL·MinIO와 격리 복사본의 `npm run test:integration` **56개**, `npm run build` 통과. `scripts/browser-check.mjs --expenses-only`에서 재오픈 POST의 직접 GET **0회**·WebSocket invalidation 후 상세 GET **1회**와 실제 서버 로그의 재오픈 SQL **3회**·명시적 트랜잭션/락 부재를 확인했다.
 
 ### S13. POST /api/rounds/{roundId}/send — 전송·기록 잠금
 

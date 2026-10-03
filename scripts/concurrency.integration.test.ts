@@ -83,7 +83,7 @@ test('reopen racing send commits exactly one state transition', async () => {
   assert.equal(outcomes.filter(outcome => outcome.status === 'fulfilled').length, 1)
   const failure = outcomes.find(outcome => outcome.status === 'rejected') as PromiseRejectedResult
   assert.ok(failure.reason instanceof AppError)
-  assert.equal(failure.reason.code, 'stale_round')
+  assert.ok(['stale_round', 'invalid_round_state'].includes(failure.reason.code))
   const current = await getRound(fixture.owner, fixture.roundId, new URLSearchParams())
   assert.equal(current.version, confirmed.version! + 1)
   if (outcomes[0].status === 'fulfilled') {
@@ -95,6 +95,45 @@ test('reopen racing send commits exactly one state transition', async () => {
     assert.equal(current.status, 'LOCKED')
     const drawn = await roundCommand(fixture.owner, key(), fixture.roundId, 'draw', { expectedVersion: current.version })
     await roundCommand(fixture.owner, key(), fixture.roundId, 'force-complete', { expectedVersion: drawn.version })
+  }
+})
+
+test('reopen and send recheck a competing transition after the round read', { timeout: 15000 }, async t => {
+  for (const [olderAction, newerAction] of [['reopen', 'reopen'], ['reopen', 'send'], ['send', 'reopen']]) {
+    const fixture = await recordingRound()
+    const confirmed = await roundCommand(fixture.owner, key(), fixture.roundId, 'confirm', { expectedVersion: fixture.version })
+    const body = { expectedVersion: confirmed.version }
+    const pool = getDatabasePool(process.env.DATABASE_URL!), connect = pool.connect.bind(pool)
+    let resume!: () => void, reached!: () => void
+    const paused = new Promise<void>(resolve => { reached = resolve }), gate = new Promise<void>(resolve => { resume = resolve })
+    const connectionMock = t.mock.method(pool, 'connect', async () => {
+      connectionMock.mock.restore()
+      const borrowed = await connect()
+      const queryMock = t.mock.method(borrowed, 'query', new Proxy(borrowed.query, {
+        apply(target, receiver, args) {
+          const pending = Reflect.apply(target, receiver, args)
+          if (String(args[0]).includes('FROM rounds r JOIN groups g')) {
+            queryMock.mock.restore()
+            return pending.then(async (result: unknown) => { reached(); await gate; return result })
+          }
+          return pending
+        },
+      }))
+      return borrowed
+    })
+    const older = roundCommand(fixture.owner, key(), fixture.roundId, olderAction, body, () => assert.fail('losing transition must not publish'))
+      .then(result => ({ result, error: undefined }), error => ({ result: undefined, error }))
+    try {
+      await paused
+      const winner = await roundCommand(fixture.owner, key(), fixture.roundId, newerAction, body)
+      resume()
+      assert.equal((await older).error?.code, 'stale_round')
+      const current = await getRound(fixture.owner, fixture.roundId, new URLSearchParams())
+      assert.equal(current.status, newerAction === 'reopen' ? 'RECORDING' : 'LOCKED')
+      assert.equal(current.version, winner.version)
+      const bases = await inspect(client => client.query('SELECT base_share_minor,remainder_units FROM expenses WHERE id=$1', [fixture.expenseId]))
+      assert.deepEqual(bases.rows[0], newerAction === 'reopen' ? { base_share_minor: null, remainder_units: null } : { base_share_minor: '1', remainder_units: 1 })
+    } finally { resume(); connectionMock.mock.restore(); await older }
   }
 })
 

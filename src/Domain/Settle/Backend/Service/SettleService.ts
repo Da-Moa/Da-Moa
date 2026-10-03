@@ -458,6 +458,20 @@ async function confirmRound(access: Identity, key: string, roundId: string, body
 
 export async function roundCommand(access: Identity, key: string, roundId: string, action: string, body: VersionRequestDTO | Record<string, unknown>, captureAudience?: (audience: { groupId: string; userIds: string[] }) => void): Promise<MutationResult> {
   if (action === 'confirm') return confirmRound(access, key, roundId, body, captureAudience)
+  if (action === 'reopen') return withDatabaseConnection(async client => {
+    const account = await requireAccount(client, access)
+    onlyKeys(body, ['expectedVersion'])
+    mutationDigest(key, { roundId, ...body })
+    const { rows: [round] } = await repository.findRoundReopening(client, roundId, account.id)
+    if (!round) throw missing()
+    creator(round)
+    state(round, 'CONFIRMED')
+    version(round, body.expectedVersion)
+    const result = await repository.reopenRound(client, roundId, account.id, round.version)
+    if (!result) throw new AppError(409, 'stale_round', '다른 변경이 먼저 저장됐어요. 최신 내역을 확인해 주세요')
+    captureAudience?.({ groupId: round.group_id, userIds: round.user_ids })
+    return result
+  })
   if (action === 'cancel') {
     let userId: string
     return withWriteTransaction(async client => {
@@ -478,21 +492,18 @@ export async function roundCommand(access: Identity, key: string, roundId: strin
     }, async client => { userId = (await requireAccount(client, access)).id })
   }
   onlyKeys(body, ['expectedVersion'])
-  if (!['reopen', 'send', 'draw', 'complete', 'force-complete'].includes(action)) throw missing()
+  if (!['send', 'draw', 'complete', 'force-complete'].includes(action)) throw missing()
   return domainMutation(access, key, `round.${action}`, { roundId, ...body }, async (client, userId) => {
     const round = await roundFor(client, roundId, userId)
     creator(round)
     if (action === 'draw' && round.finalized_at !== null) return { id: roundId, roundId, status: round.status, version: round.version }
     version(round, body.expectedVersion)
     const now = nowSeconds()
-    if (action === 'reopen') {
-      state(round, 'CONFIRMED')
-      await repository.clearBaseShares(client, roundId)
-      await repository.reopenRound(client, roundId)
-    } else if (action === 'send') {
+    if (action === 'send') {
       state(round, 'CONFIRMED')
       await validatedExpenses(client, roundId, round.currency as Currency)
-      await repository.lockRound(client, roundId, now)
+      const { rowCount } = await repository.lockRound(client, roundId, now, round.version)
+      if (!rowCount) throw new AppError(409, 'stale_round', '다른 변경이 먼저 저장됐어요. 최신 내역을 확인해 주세요')
       const { rows } = await repository.findRemainder(client, roundId)
       if (!rows.length) await finalize(client, roundId, round.currency as Currency, false)
     } else if (action === 'draw') {
