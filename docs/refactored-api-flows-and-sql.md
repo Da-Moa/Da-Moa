@@ -1005,26 +1005,26 @@ SQL 순서: **BEGIN → AUTH → 지출·권한 통합 조회 → transaction lo
 
 ### S9. GET /api/rounds/{roundId}/members/{userId}/exclusion-check — 제외 가능 여부
 
-RoundClient.checkExclusion() → GET → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController → SettleService.checkExclusion() → R → ExclusionCheck → 제외 안내 대화상자.
+RoundClient.checkExclusion() → GET → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController → SettleService.checkExclusion() → 공용 풀 연결 → ExclusionCheck → 제외 안내 대화상자.
 
-1. BEGIN → AUTH → S-ROUND → 회차 생성자 권한 확인. S-MEMBERS로 대상 참여 이력과 제외 여부를 읽는다.
-2. S-EXCLUSION-EXPENSES가 결제자 겸 부담자·SELECTED 부담자·CUSTOM 부담자인 관련 지출과 작성자 스냅샷을 조회한다.
+1. AUTH 회원 조회(+1) → S-ROUND 회차·본인 참여 이력 조회(+1) → 회차 생성자 권한 확인. 생성자가 아닌 참여자는 403으로 거절하며 대상/지출 조회를 실행하지 않는다. 회차가 없거나 조회자가 참여 이력이 없으면 404다.
+2. S-EXCLUSION-EXPENSES(+1)가 대상 참여 이력·제외 여부·현재 참여 인원과 결제자 겸 부담자·SELECTED 부담자·CUSTOM 부담자인 관련 지출/작성자 스냅샷을 한 SQL로 조회한다. 대상 참여 이력이 없으면 404다. 금액은 문자열로 반환하고 관련 지출 전체를 생성 시각·ID 순서로 유지한다.
 3. 생성자 제외 불가·이미 제외·RECORDING/CONFIRMED 외 상태·관련 지출·제외 후 최소 2명 조건을 allowed/reason/expenses로 반환한다.
-4. COMMIT → 연결 반환. 가능 여부 조회는 참여자나 부담금을 변경하지 않는다. CONFIRMED에서는 검토만 가능하고 실제 제외는 재오픈 후 실행한다.
+4. 성공·거절·오류 모두 연결을 반환한다. 명시적 트랜잭션·락은 없으며 참여자나 부담금을 변경하지 않는다. CONFIRMED에서는 검토만 가능하고 실제 제외는 재오픈 후 실행한다. 실제 제외 요청은 기존 쓰기 트랜잭션·락 안에서 조건을 다시 검사한다.
 
-SQL 순서: BEGIN → AUTH → S-ROUND → S-MEMBERS → S-EXCLUSION-EXPENSES → COMMIT = **6회**.
+SQL 순서: **AUTH → S-ROUND → 생성자 권한 확인 → S-EXCLUSION-EXPENSES = 3회**. 비생성자·조회 불가 회차는 **2회**, 회원 상태 거절은 **1회**, JWT Guard 거절은 **0회**. `scripts/settle-sql.integration.test.ts`에서 실제 SQL 순서·횟수·트랜잭션/락 부재와 기존 제외 조건을 검증한다.
 
 ### S10. POST /api/rounds/{roundId}/members/{userId}/exclude — 회차 참여자 제외
 
 RoundClient.exclude()의 확인 → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.excludeMember(VersionRequestDTO) → W → MutationResult → 대화상자 종료·상세 재조회.
 
 1. expectedVersion만 허용. W → S-ROUND → 생성자·RECORDING·버전 확인.
-2. S-MEMBERS → S-EXCLUSION-EXPENSES로 S9 조건을 락 안에서 다시 검사한다. 최소 인원은 minimum_participants, 다른 차단은 member_exclusion_blocked와 관련 지출을 반환한다.
+2. S-EXCLUSION-EXPENSES 통합 조회로 S9 조건을 락 안에서 다시 검사한다. 최소 인원은 minimum_participants, 다른 차단은 member_exclusion_blocked와 관련 지출을 반환한다.
 3. S-BUMP로 버전 확보 → S-MEMBER-EXCLUDE로 excluded_at 저장 → S-ALL-SHARE-REMOVE로 ALL 지출에서 해당 부담자만 삭제.
 4. IDEM-SAVE → COMMIT. 모임의 group_members·다른 회차·과거 이름 스냅샷은 변경하지 않는다. 제외한 사람도 이 회차의 과거 조회 이력을 유지한다.
 5. 커밋 후 회차 참여자와 현재 모임 참여자에게 관련 invalidation을 예약한다.
 
-SQL: W 6회 + S-ROUND → S-MEMBERS → S-EXCLUSION-EXPENSES → S-BUMP → S-MEMBER-EXCLUDE → S-ALL-SHARE-REMOVE = **12회**. 후행 알림 수신자 조회는 별도 5회다.
+SQL: W 6회 + S-ROUND → S-EXCLUSION-EXPENSES → S-BUMP → S-MEMBER-EXCLUDE → S-ALL-SHARE-REMOVE = **11회**. 공통 제외 검사 통합으로 조회 1회가 줄며 쓰기 트랜잭션·락은 유지한다. 후행 알림 수신자 조회는 별도 5회다.
 
 ### S11. POST /api/rounds/{roundId}/confirm — 정산 확정
 

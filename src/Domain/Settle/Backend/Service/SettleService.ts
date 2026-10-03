@@ -345,16 +345,15 @@ async function cleanupReceiptObjects(keys: string[]) {
 }
 
 async function exclusions(client: Database, round: RoundRow, targetId: string): Promise<ExclusionCheck> {
-  const members = await membersFor(client, round.id)
-  const member = members.find(m => m.userId === targetId)
+  const { rows: [member] } = await repository.findExclusionExpenses(client, round.id, targetId)
   if (!member) throw missing()
-  const { rows } = await repository.findExclusionExpenses(client, round.id, targetId)
-  const reason = round.creator_id === targetId ? 'round_creator_cannot_leave' : member.excludedAt !== null ? 'already_excluded' : !['RECORDING', 'CONFIRMED'].includes(round.status) ? 'invalid_round_state' : rows.length ? 'member_exclusion_blocked' : members.filter(m => m.excludedAt === null).length <= 2 ? 'minimum_participants' : null
+  const rows = member.expenses
+  const reason = round.creator_id === targetId ? 'round_creator_cannot_leave' : member.excluded_at !== null ? 'already_excluded' : !['RECORDING', 'CONFIRMED'].includes(round.status) ? 'invalid_round_state' : rows.length ? 'member_exclusion_blocked' : Number(member.member_count) <= 2 ? 'minimum_participants' : null
   return { allowed: reason === null, reason, expenses: rows.map(e => ({ id: e.id, description: e.description, amountMinor: e.amount_minor, authorId: e.author_id, authorName: e.author_name, reason: e.reason })) }
 }
 
 export async function checkExclusion(access: Identity, roundId: string, userId: string) {
-  return withReadTransaction(async client => {
+  return withDatabaseConnection(async client => {
     const account = await requireAccount(client, access), round = await roundFor(client, roundId, account.id)
     creator(round)
     return exclusions(client, round, userId)

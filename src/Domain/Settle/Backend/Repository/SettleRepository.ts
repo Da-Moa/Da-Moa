@@ -242,11 +242,16 @@ export async function deleteExpense(client: Database, roundId: string, expenseId
 }
 
 export function findExclusionExpenses(client: Database, roundId: string, targetId: string) {
-  return client.query<ExclusionExpenseRow>(`SELECT e.id,e.description,e.amount_minor,e.author_id,a.display_name_snapshot AS author_name,
-    CASE WHEN e.payer_id=$2 THEN 'payer_and_participant' WHEN e.split_mode='CUSTOM' THEN 'custom_participant' ELSE 'selected_participant' END AS reason
-    FROM expenses e JOIN expense_shares s ON s.expense_id=e.id AND s.user_id=$2
-    JOIN round_members a ON a.round_id=e.round_id AND a.user_id=e.author_id
-    WHERE e.round_id=$1 AND (e.payer_id=$2 OR e.split_mode IN ('SELECTED','CUSTOM')) ORDER BY e.created_at,e.id`, [roundId, targetId])
+  return client.query<Pick<MemberRow, 'excluded_at'> & { member_count: string; expenses: ExclusionExpenseRow[] }>(`SELECT m.excluded_at,
+    (SELECT count(*) FROM round_members WHERE round_id=$1 AND excluded_at IS NULL) AS member_count,
+    COALESCE((SELECT jsonb_agg(jsonb_build_object('id',e.id,'description',e.description,'amount_minor',e.amount_minor::text,
+      'author_id',e.author_id,'author_name',a.display_name_snapshot,'reason',
+      CASE WHEN e.payer_id=$2 THEN 'payer_and_participant' WHEN e.split_mode='CUSTOM' THEN 'custom_participant' ELSE 'selected_participant' END)
+      ORDER BY e.created_at,e.id)
+      FROM expenses e JOIN expense_shares s ON s.expense_id=e.id AND s.user_id=$2
+      JOIN round_members a ON a.round_id=e.round_id AND a.user_id=e.author_id
+      WHERE e.round_id=$1 AND (e.payer_id=$2 OR e.split_mode IN ('SELECTED','CUSTOM'))),'[]'::jsonb) AS expenses
+    FROM round_members m WHERE m.round_id=$1 AND m.user_id=$2`, [roundId, targetId])
 }
 
 export function excludeMember(client: Database, roundId: string, targetId: string, now: number) {

@@ -72,7 +72,8 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       } else if (write === 'connection') {
         assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
         if (count) assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
-        if (count === 2) assert.match(statements[1], /FROM rounds r JOIN groups g/)
+        if (count >= 2) assert.match(statements[1], /FROM rounds r JOIN groups g/)
+        if (count === 3) assert.match(statements[2], /SELECT m.excluded_at.*jsonb_agg.*JOIN expense_shares.*FROM round_members m/)
       } else if (write === 'session') {
         assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b/.test(sql) && !/pg_advisory_xact_lock|FOR UPDATE|FOR SHARE|mutation_requests/.test(sql)))
         assert.equal(statements[0], 'SELECT pg_advisory_lock(1684106607)')
@@ -154,6 +155,36 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       const nonParticipant = await member('비참여 모임 멤버')
       await acceptInvite(nonParticipant, key(), invite.sharePath!.split('/').at(-1)!)
       await trace(2, 'connection', () => assert.rejects(getRound(nonParticipant, round.id, new URLSearchParams()), (error: { code: string }) => error.code === 'not_found'))
+      await t.test('exclusion check runs AUTH, round authorization and one member/expense query without a transaction', async () => {
+        for (const [actor, id, target, expected, count] of [
+          [null, round.id, c.userId, 'unauthorized', 0],
+          [{ ...a, userId: randomUUID() }, round.id, c.userId, 'unauthorized', 1],
+          [b, round.id, c.userId, 'forbidden', 2],
+          [nonParticipant, round.id, c.userId, 'not_found', 2],
+          [a, randomUUID(), c.userId, 'not_found', 2],
+          [a, round.id, randomUUID(), 'not_found', 3],
+        ] as const) await trace(count, 'connection', () => assert.rejects(checkExclusion(actor, id, target), (error: { code: string }) => error.code === expected))
+        assert.deepEqual(await trace(3, 'connection', () => checkExclusion(a, round.id, c.userId)), { allowed: true, reason: null, expenses: [] })
+        assert.equal((await trace(3, 'connection', () => checkExclusion(a, round.id, a.userId))).reason, 'round_creator_cannot_leave')
+        const minimum = await createRound(b, uuidV7(), group.id, { ...body, participantIds: [a.userId, b.userId] })
+        await trace(2, 'connection', () => assert.rejects(checkExclusion(a, minimum.id, a.userId), (error: { code: string }) => error.code === 'forbidden'))
+        assert.equal((await trace(3, 'connection', () => checkExclusion(b, minimum.id, a.userId))).reason, 'minimum_participants')
+        for (const [splitMode, reason] of [['ALL', 'payer_and_participant'], ['SELECTED', 'selected_participant'], ['CUSTOM', 'custom_participant']] as const) {
+          const inspection = await createRound(a, uuidV7(), group.id, body)
+          const saved = await saveExpense(a, key(), inspection.id, { description: splitMode, amount: '101', payerId: b.userId, splitMode, expectedVersion: 1,
+            ...(splitMode === 'SELECTED' ? { participantIds: [c.userId] } : splitMode === 'CUSTOM' ? { customShares: [{ userId: c.userId, amount: '101' }] } : {}) })
+          const target = splitMode === 'ALL' ? b.userId : c.userId
+          assert.deepEqual(await trace(3, 'connection', () => checkExclusion(a, inspection.id, target)), {
+            allowed: false, reason: 'member_exclusion_blocked', expenses: [{ id: saved.id, description: splitMode, amountMinor: '101', authorId: a.userId, authorName: '회차 생성자', reason }],
+          })
+          const allowed = splitMode === 'ALL' ? c.userId : b.userId
+          assert.deepEqual(await trace(3, 'connection', () => checkExclusion(a, inspection.id, allowed)), { allowed: true, reason: null, expenses: [] })
+          const confirmed = await roundCommand(a, key(), inspection.id, 'confirm', { expectedVersion: saved.version })
+          assert.equal((await trace(3, 'connection', () => checkExclusion(a, inspection.id, allowed))).allowed, true)
+          await roundCommand(a, key(), inspection.id, 'send', { expectedVersion: confirmed.version })
+          assert.equal((await trace(3, 'connection', () => checkExclusion(a, inspection.id, allowed))).reason, 'invalid_round_state')
+        }
+      })
       let version = 1
       const expenseKey = key(), expenseBody = { description: '지출', amount: '100', payerId: b.userId, splitMode: 'ALL', expectedVersion: version }
       let expenseAudience: { groupId: string; userIds: string[] } | undefined
@@ -353,9 +384,10 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       assert.equal(stored.mimeType, 'image/avif')
       const removed = await trace(10, true, () => removeReceipt(a, key(), round.id, expense.id, receipt.id, { expectedVersion: version }))
       version = removed.version!
-      assert.equal((await trace(6, false, () => checkExclusion(a, round.id, c.userId))).allowed, true)
-      const excluded = await trace(12, true, () => excludeMember(a, key(), round.id, c.userId, { expectedVersion: version }))
+      assert.equal((await trace(3, 'connection', () => checkExclusion(a, round.id, c.userId))).allowed, true)
+      const excluded = await trace(11, true, () => excludeMember(a, key(), round.id, c.userId, { expectedVersion: version }))
       version = excluded.version!
+      assert.equal((await trace(3, 'connection', () => checkExclusion(a, round.id, c.userId))).reason, 'already_excluded')
       await trace(5, false, () => getSettlement(a, round.id))
       const command = async (action: string, count: number) => {
         const result = await trace(count, true, () => roundCommand(a, key(), round.id, action, { expectedVersion: version }))
