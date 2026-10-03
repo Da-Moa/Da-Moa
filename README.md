@@ -128,7 +128,7 @@ npm run dev -- --port 3087
 node --import ./scripts/test-server-only.mjs --import tsx scripts/browser-check.mjs
 # 초대 수락 후 GET 미실행·WebSocket 목록 갱신만 검증
 node --import ./scripts/test-server-only.mjs --import tsx scripts/browser-check.mjs --invites-only
-# 지출 생성/수정/삭제·확정/재오픈·추첨 후 GET 미실행·WebSocket 갱신 검증
+# 지출 생성/수정/삭제·확정/재오픈·추첨·수취 확인/해제 후 GET 미실행·WebSocket 갱신 검증
 node --import ./scripts/test-server-only.mjs --import tsx scripts/browser-check.mjs --expenses-only
 # 계좌 저장 후 GET 미실행·WebSocket 내 정보 갱신만 검증
 node --import ./scripts/test-server-only.mjs --import tsx scripts/browser-check.mjs --account-only

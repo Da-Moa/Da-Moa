@@ -1,5 +1,5 @@
 import { uuidV7 } from '../src/lib/uuid.ts'
-// UI regression in an isolated local DB; --expenses-only checks expense/round/draw mutation invalidation.
+// UI regression in an isolated local DB; --expenses-only checks expense/round/draw/receipt-check mutation invalidation.
 // Run with a dev server using that same test DB and Chrome --remote-debugging-port=9223.
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
@@ -204,6 +204,15 @@ try {
     await new Promise(resolve => setTimeout(resolve, 700))
     await evaluate('window.__roundInvalidations.splice(0)')
     await websocketOnly('draw POST', () => click('랜덤 돌리기'), "Boolean(document.querySelector('.copy-link input')?.value)", `/api/rounds/${round.id}/settlement`)
+    const settlementResource = `/api/rounds/${round.id}/settlement`
+    for (const checked of [true, false]) {
+      await websocketOnly(`settlement-check POST ${checked ? 'confirm' : 'uncheck'}`, () => evaluate("document.querySelector('.settlement-receipt-toggle').click()"),
+        `document.querySelector('.settlement-receipt-toggle')?.getAttribute('aria-pressed') === '${checked}'`, settlementResource)
+    }
+    for (const checked of [true, false]) {
+      await websocketOnly(`settlement-check POST ${checked ? 'confirm all' : 'uncheck all'}`, () => evaluate("document.querySelector('.settlement-check-all input').click()"),
+        `document.querySelector('.settlement-check-all input')?.checked === ${checked} && Array.from(document.querySelectorAll('.settlement-receipt-toggle')).every(button => button.getAttribute('aria-pressed') === '${checked}')`, settlementResource)
+    }
     assert.deepEqual(exceptions, [])
     await cdp('Page.removeScriptToEvaluateOnNewDocument', { identifier: hold.identifier })
     ws.close()

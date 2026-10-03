@@ -1102,7 +1102,7 @@ SQL: AUTH **1회** → S-SETTLEMENT **1회** = **2회**. 최종 저장 전·후�
 
 ### S16. POST /api/rounds/{roundId}/settlement-check — 수취 수동 확인·해제
 
-SettlementClient.setChecked(checked,senderId?) → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.setSettlementCheck(SettlementCheckRequestDTO) → 공용 연결 → MutationResult → 정산 안내 재조회.
+SettlementClient.setChecked(checked,senderId?) → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.setSettlementCheck(SettlementCheckRequestDTO) → 공용 연결 → MutationResult → WebSocket invalidation → useResource 정산 안내 GET 1회. POST 성공 콜백에서는 GET/reload를 호출하지 않는다.
 
 1. AUTH 회원 조회(+1)로 활성 가입 회원을 확인한 뒤 onlyKeys(['expectedVersion','checked','senderId'])·checked boolean·공백 없는 1~128자 senderId·요청 키 형식을 검사한다. 입력 오류는 AUTH 1회로 끝난다.
 2. findSettlementCheck() 통합 조회(+1)로 회차 참여 권한·상태·버전·최종 저장 여부·본인이 받는 송금자/확인 시각·알림 대상을 읽는다. 버전·LOCKED·최종 저장 완료를 검사하고 요청 senderId가 본인의 수취 목록에 있는지 비교한다. senderId 생략은 본인의 전체 수취 목록이다.

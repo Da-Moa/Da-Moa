@@ -40,8 +40,7 @@ export default function SettlementClient({ roundId }: { roundId: string }) {
   }
   async function setChecked(checked: boolean, senderId?: string) {
     if (!data) return
-    const result = await action.run(() => apiRequest(`/api/rounds/${roundId}/settlement-check`, { method: 'POST', body: { checked, expectedVersion: data.version, ...(senderId ? { senderId } : {}) } }))
-    if (result) await reload()
+    await action.run(() => apiRequest(`/api/rounds/${roundId}/settlement-check`, { method: 'POST', body: { checked, expectedVersion: data.version, ...(senderId ? { senderId } : {}) } }))
   }
   return <>
     <Link aria-label="지출 내역으로 돌아가기" className="icon-button back-button back-link" href={`/home/rounds/${roundId}`}><ChevronLeft aria-hidden="true" size={38} strokeWidth={2.5} /></Link>
