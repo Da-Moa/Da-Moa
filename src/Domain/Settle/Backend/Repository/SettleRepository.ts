@@ -214,12 +214,22 @@ export function completeRound(client: Database, roundId: string, now: number) {
   return client.query("UPDATE rounds SET status='COMPLETED',completed_at=$2 WHERE id=$1", [roundId, now])
 }
 
-export function findRoundObjects(client: Database, roundId: string) {
-  return client.query<{ object_key: string }>('SELECT object_key FROM expense_receipts WHERE expense_id IN (SELECT id FROM expenses WHERE round_id=$1) AND object_key IS NOT NULL', [roundId])
+export function findRoundCancellation(client: Database, roundId: string, userId: string, key: string) {
+  return client.query<RoundRow & { has_expenses: boolean; user_ids: string[]; request_digest: string | null; response_metadata: unknown }>(`SELECT r.*,g.name AS group_name,g.creator_id AS group_creator_id,
+    (r.creator_id=$2) AS is_creator,
+    EXISTS(SELECT 1 FROM expenses WHERE round_id=r.id) AS has_expenses,
+    ARRAY(SELECT user_id FROM round_members WHERE round_id=r.id) AS user_ids,
+    saved.request_digest,saved.response_metadata
+    FROM (SELECT 1) anchor
+    LEFT JOIN rounds r ON r.id=$1 AND EXISTS(SELECT 1 FROM round_members WHERE round_id=r.id AND user_id=$2)
+    LEFT JOIN groups g ON g.id=r.group_id
+    LEFT JOIN mutation_requests saved ON saved.actor_id=$2 AND saved.operation='round.cancel' AND saved.request_key=$3`, [roundId, userId, key])
 }
 
-export function deleteRound(client: Database, roundId: string) {
-  return client.query('DELETE FROM rounds WHERE id=$1', [roundId])
+export function deleteRound(client: Database, roundId: string, userId: string, key: string, digest: string, result: unknown, now: number) {
+  return client.query(`WITH deleted AS (DELETE FROM rounds WHERE id=$1 RETURNING id)
+    INSERT INTO mutation_requests(actor_id,operation,request_key,request_digest,resource_id,response_metadata,created_at)
+    SELECT $2,'round.cancel',$3,$4,id,$5,$6 FROM deleted`, [roundId, userId, key, digest, JSON.stringify(result), now])
 }
 
 export function setReceived(client: Database, roundId: string, userId: string, senderId: string | null, checked: boolean, now: number) {

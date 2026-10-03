@@ -47,6 +47,9 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       description: '검증 지출', amount, payerId, splitMode: participantIds ? 'SELECTED' : 'ALL',
       ...(participantIds ? { participantIds } : {}), expectedVersion: (await get(id, actor)).version,
     })
+    const clearExpenses = async (id: string, actor = a) => {
+      for (const item of (await get(id, actor)).expenses) await deleteExpense(actor, key(), id, item.id, { expectedVersion: (await get(id, actor)).version })
+    }
     const round = async (members = [a, b, c]) => createRound(a, uuidV7(), g.id, { name: '검증 회차', currency: 'KRW', participantIds: members.map(m => m.userId) })
 
     await t.test('explicit invites and membership do not auto-add new rounds; response loss has a recoverable invite flow', async () => {
@@ -148,6 +151,8 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       assert.equal(related.reason, 'member_exclusion_blocked')
       assert.equal(related.expenses[0].id, saved.id)
       assert.equal((await checkExclusion(b, r.id, b.userId)).reason, 'round_creator_cannot_leave')
+      await assert.rejects(command(r.id, 'cancel', b), code('round_has_expenses'))
+      await clearExpenses(r.id, b)
       await command(r.id, 'cancel', b)
     })
 
@@ -337,7 +342,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       await command(two.id, 'cancel')
     })
 
-    await t.test('receipt storage, authorization, failed upload preservation and hard-cancel cascade', async () => {
+    await t.test('receipt storage, authorization, failed upload preservation and nonempty cancel rejection', async () => {
       const r = await round()
       const e = await expense(r.id, b, b.userId, '10')
       const sources = [
@@ -373,7 +378,10 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       await removeReceipt(a, key(), r.id, e.id, receipt.id, { expectedVersion: (await get(r.id)).version })
       await assert.rejects(getReceipt(a, receipt.id), code('not_found'))
       const keep = await addReceipt(b, key(), r.id, e.id, (await get(r.id)).version, sources[1].content, sources[1].mimeType)
-      const cancelKey = key(), payload = { expectedVersion: keep.version }
+      await assert.rejects(command(r.id, 'cancel'), code('round_has_expenses'))
+      assert.equal((await getReceipt(a, keep.id)).mimeType, 'image/avif')
+      await clearExpenses(r.id)
+      const cancelKey = key(), payload = { expectedVersion: (await get(r.id)).version }
       await roundCommand(a, cancelKey, r.id, 'cancel', payload)
       assert.equal((await roundCommand(a, cancelKey, r.id, 'cancel', payload)).id, r.id)
       await assert.rejects(get(r.id), code('not_found'))
@@ -535,7 +543,11 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
         roundCommand(a, key(), r.id, 'confirm', { expectedVersion: v }),
       ])
       assert.equal(cancelled.filter(x => x.status === 'fulfilled').length, 1)
-      if (cancelled[0].status === 'rejected') { await command(r.id, 'reopen'); await command(r.id, 'cancel') }
+      assert.equal(cancelled[0].status, 'rejected')
+      if (cancelled[0].status === 'rejected') assert.ok(['round_has_expenses', 'stale_round'].includes(cancelled[0].reason.code))
+      await command(r.id, 'reopen')
+      await clearExpenses(r.id)
+      await command(r.id, 'cancel')
       const many = await round()
       for (let i = 0; i < 3; i++) await expense(many.id, a, a.userId, '10')
       const first = await getRound(a, many.id, new URLSearchParams('limit=2'))
@@ -546,6 +558,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       assert.deepEqual(first.transfers.map(row => row.amountMinor), ['9', '9'])
       assert.equal(new Set([...first.expenses, ...second.expenses].map(x => x.id)).size, 3)
       assert.equal((await getGroup(a, g.id)).members.length, 4)
+      await clearExpenses(many.id)
       await command(many.id, 'cancel')
     })
 
@@ -575,6 +588,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
         const unchanged = await get(r.id)
         assert.equal(unchanged.totalMinor, atLimit.totalMinor)
         assert.equal(unchanged.expenses.find(item => item.id === saved[0].id)?.amountMinor, (99_999_999n * scale + (currency === 'USD' ? 99n : 0n)).toString())
+        await clearExpenses(r.id)
         await command(r.id, 'cancel')
       }
     })

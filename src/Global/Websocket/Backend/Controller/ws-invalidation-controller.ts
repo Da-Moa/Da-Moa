@@ -1,7 +1,5 @@
 import 'server-only'
 import { publishInvalidations } from '../websocket-util.mjs'
-import type { AccessToken } from '../../../../lib/auth'
-import { requireAccount } from '../../../../lib/authorization'
 import { withReadTransaction } from '../../../../lib/db'
 import type { ResourceKey } from '../../Shared/realtime'
 
@@ -18,17 +16,6 @@ async function roundAudience(roundId: string, includeGroupMembers: boolean): Pro
     const groupMembers = includeGroupMembers ? (await client.query(`SELECT m.user_id FROM group_members m JOIN users u ON u.id=m.user_id
       WHERE m.group_id=$1 AND m.left_at IS NULL AND u.deleted_at IS NULL`, [rounds[0].group_id])).rows : []
     return { groupId: rounds[0].group_id, userIds: members.map(row => String(row.user_id)), groupUserIds: groupMembers.map(row => String(row.user_id)) }
-  })
-}
-
-export async function captureRoundAudience(access: AccessToken | null, roundId: string): Promise<RoundAudience | null> {
-  if (!realtimeEnabled()) return null
-  return withReadTransaction(async client => {
-    const account = await requireAccount(client, access)
-    const { rows: rounds } = await client.query(`SELECT r.group_id FROM rounds r JOIN round_members viewer ON viewer.round_id=r.id AND viewer.user_id=$2 WHERE r.id=$1`, [roundId, account.id])
-    if (!rounds[0]) return null
-    const { rows } = await client.query('SELECT user_id FROM round_members WHERE round_id=$1', [roundId])
-    return { groupId: rounds[0].group_id, userIds: rows.map(row => String(row.user_id)) }
   })
 }
 

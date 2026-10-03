@@ -82,6 +82,8 @@ test('legacy receipt migration preserves images and restores expense deletion an
     assert.equal(image.mimeType, 'image/avif')
     assert.equal((await sharp(image.content).metadata()).compression, 'av1')
     await seed(uploadedExpense.id!)
+    await assert.rejects(roundCommand(a, key(), round.id, 'cancel', await version()), (error: { code: string }) => error.code === 'round_has_expenses')
+    await deleteExpense(a, key(), round.id, uploadedExpense.id!, await version())
     await roundCommand(a, key(), round.id, 'cancel', await version())
     assert.equal((await client.query('SELECT id FROM expense_receipts')).rowCount, 0)
   } finally {

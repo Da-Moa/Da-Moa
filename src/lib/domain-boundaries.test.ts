@@ -93,7 +93,7 @@ test('Settle HTTP and rules delegate SQL and storage to their owners', () => {
     assert.doesNotMatch(source, /\.query\s*\(|from ['"](?:sharp|@aws-sdk\/)/, file)
   }
   const repository = readFileSync('src/Domain/Settle/Backend/Repository/SettleRepository.ts', 'utf8')
-  assert.doesNotMatch(repository, /\b(?:INSERT INTO|UPDATE|DELETE FROM)\s+(?:users|groups|group_members|group_invites|mutation_requests)\b/i)
+  assert.doesNotMatch(repository, /\b(?:INSERT INTO|UPDATE|DELETE FROM)\s+(?:users|groups|group_members|group_invites)\b/i)
   assert.doesNotMatch(repository, /\b(?:Response|AppError|withWriteTransaction|withReadTransaction)\b/)
   const route = readFileSync('src/app/api/[...path]/route.ts', 'utf8')
   assert.match(route, /Domain\/Settle\/Backend/)

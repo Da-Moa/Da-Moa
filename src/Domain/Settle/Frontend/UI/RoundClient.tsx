@@ -207,7 +207,7 @@ export default function RoundClient({ roundId }: { roundId: string }) {
     }
   }
   async function cancel() {
-    if (!data || !window.confirm('회차와 모든 지출·증빙을 영구 삭제할까요? 이 작업은 되돌릴 수 없어요.')) return
+    if (!data || !window.confirm('지출 기록이 없는 회차만 취소할 수 있어요. 회차를 영구 삭제할까요? 이 작업은 되돌릴 수 없어요.')) return
     const result = await action.run(() => apiRequest(`/api/rounds/${roundId}`, { method: 'DELETE', body: { expectedVersion: data.version } }))
     if (result) router.push(`/home/groups/${data.groupId}`)
   }

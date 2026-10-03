@@ -952,17 +952,17 @@ RoundClient.useResource()·refresh()·loadMore() → GET → Node Proxy → JWT 
 
 SQL 순서: AUTH → 회차 상세 통합 JOIN = **2회**. 빈 지출·추가 페이지·최종 저장 후에도 2회이며 BEGIN·COMMIT·ROLLBACK·명시적 락은 없다. 입력 오류는 AUTH 1회 뒤 중단한다. 기존 findRound()·findMembers()·findSettlementExpenses()·findTotal()·findBalance()는 다른 정산 API에서 유지한다.
 
-### S5. DELETE /api/rounds/{roundId} — 회차 전체 취소
+### S5. DELETE /api/rounds/{roundId} — 빈 회차 취소
 
-RoundClient.cancel()의 영구 삭제 확인 → DELETE → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController의 JSON·취소 전 수신자 확보 → SettleService.roundCommand('cancel',VersionRequestDTO) → W → MutationResult → 모임 상세 이동.
+RoundClient.cancel()의 영구 삭제 확인 → DELETE → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.roundCommand('cancel',VersionRequestDTO) → MutationResult → 모임 상세 이동.
 
-1. 본문은 expectedVersion만 허용한다. 알림 활성화 시 Controller가 삭제 전에 captureRoundAudience()로 허가된 참여자의 알림 대상 목록을 확보한다.
-2. W → S-ROUND → 회차 생성자·RECORDING·expectedVersion 검사. 일반 참여자 취소와 확정/잠금/종료 회차 취소는 거절한다.
-3. S-ROUND-OBJECTS로 삭제할 영수증 객체 키 조회 → S-ROUND-DELETE. FK CASCADE로 회차의 지출·부담금·영수증 메타데이터·정산 행을 함께 삭제한다.
-4. IDEM-SAVE → COMMIT 후 MinIO 객체 정리 → 응답. DB 실패는 전체 ROLLBACK, 객체 삭제 실패는 로그를 남기고 이미 커밋한 취소를 되돌리지 않는다.
-5. 삭제 전 확보한 대상에게 round/group-rounds/settlement invalidation을 예약한다. 같은 키 취소 재시도는 회차가 없어도 성공 기록을 재생한다.
+1. withWriteTransaction()이 BEGIN(+1) → AUTH 내 정보 조회(+1) → 기존 공용 pg_advisory_xact_lock(1684106607) 획득(+1)을 같은 연결에서 실행한다. AUTH 거절은 락 획득 전에 ROLLBACK한다.
+2. 허용 필드 expectedVersion·요청 키를 검증한 뒤 findRoundCancellation() 한 SQL(+1)에서 회차 참여 이력·생성자·상태·버전·지출 EXISTS·멱등 성공 기록·삭제 전 알림 대상 ID를 함께 읽는다. 성공 기록은 회차가 없어도 조회하며, 같은 키·같은 본문은 성공 재생, 다른 본문은 409 idempotency_conflict다.
+3. 성공 재생이 아니면 회차 존재·생성자·expectedVersion·RECORDING 상태를 검사한다. 지출이 하나라도 있으면 409 round_has_expenses로 거절하고 ROLLBACK(+1)하여 락을 자동 해제한다. 지출·증빙은 유지하며 지출을 먼저 삭제해야 취소할 수 있다.
+4. 빈 회차는 deleteRound()의 DELETE CTE → mutation_requests INSERT 단일 SQL(+1)로 삭제와 성공 기록을 함께 저장한다. FK CASCADE로 회차 참여 이력을 삭제한다. 저장 실패는 전체 ROLLBACK이며 롤백 실패 연결은 폐기한다.
+5. COMMIT(+1)에서 락을 자동 해제한 뒤 응답·after() invalidation을 처리한다. 알림 대상은 2번에서 확보하여 실시간 활성화 여부와 무관하게 추가 DB 조회가 없다. 성공 재생 시 재발행하지 않는다.
 
-Service SQL: BEGIN → 락 → AUTH → IDEM-READ → S-ROUND → S-ROUND-OBJECTS → S-ROUND-DELETE → IDEM-SAVE → COMMIT = **9회**, 성공 재생 5회. 알림 활성화 시 Controller의 사전 읽기는 별도 **5회**이며, 저장 후 발행은 확보한 대상 사용으로 DB 조회 0회다. 프론트 확인 대화상자가 있어도 실제 은행 기록을 삭제하는 기능은 아니다.
+SQL 순서: BEGIN → AUTH → 락 → 통합 조회 → 삭제·성공 기록 → COMMIT = **6회**. 지출 존재·권한·상태·버전 거절과 성공 재생은 **5회**이며 거절 시 마지막 SQL은 ROLLBACK, 재생은 COMMIT이다. 별도 pg_advisory_unlock 호출은 없다. 입력/요청 키 오류는 BEGIN → AUTH → 락 → ROLLBACK의 4회다.
 
 ### S6. POST /api/rounds/{roundId}/expenses — 지출 기록
 
@@ -1153,7 +1153,7 @@ SQL: W 6회 + S-ROUND → S-EXPENSE → [S-ACTIVE-MEMBER] → S-RECEIPT-DELETE �
 
 ### Settle 실시간·검증 경계
 
-회차 생성 알림은 저장한 참여자 ID를 전달받아 수신자 SQL 0회다. 나머지 일반 변경 후 알림 수신자 조회는 BEGIN → 회차 group_id → round_members → COMMIT = **별도 4회**다. 참여자 제외는 활성 모임 멤버 조회까지 **5회**다. 취소는 삭제 전의 허가된 수신자를 읽는 **5회**를 별도 사용하고 삭제 후 DB 조회를 생략한다. 실시간 비활성화 시 모두 SQL 0회다. after() 알림 실패는 이미 저장한 변경을 롤백하지 않는다. 메시지에는 rounds·group-rounds·round·settlement와 필요한 groups/group 키만 넣고 금액·계좌·영수증·초대 토큰은 넣지 않는다.
+회차 생성 알림은 저장한 참여자 ID를 전달받아 수신자 SQL 0회다. 나머지 일반 변경 후 알림 수신자 조회는 BEGIN → 회차 group_id → round_members → COMMIT = **별도 4회**다. 참여자 제외는 활성 모임 멤버 조회까지 **5회**다. 취소는 S5의 기록 확인 SQL에서 삭제 전 허가된 수신자를 함께 읽으므로 삭제 전후 추가 조회 **0회**이며 성공 재생 시 재발행하지 않는다. 실시간 비활성화 시 모두 SQL 0회다. after() 알림 실패는 이미 저장한 변경을 롤백하지 않는다. 메시지에는 rounds·group-rounds·round·settlement와 필요한 groups/group 키만 넣고 금액·계좌·영수증·초대 토큰은 넣지 않는다.
 
 [scripts/settle-sql.integration.test.ts](../scripts/settle-sql.integration.test.ts)는 실제 PostgreSQL SQL 로그로 생성 4회·UUIDv7 PK·중복 409·동시 중복 단일 성공·세션 락 획득/해제·참여자 저장 실패 원자성·목록 4회·상세 10/11회·지출 작성자별 13/14회·수정 14회·삭제 12회·제외 검토 6회·제외 12회·확정 12회·재오픈 10회·나머지 있는 전송 12회·없는 전송 20회·추첨 17회/재추첨 방지 7회·최종 전/후 안내 5/8회·수취 확인 8회·일반/강제 종료 10/9회·취소 9회·영수증 생성/조회/삭제 16/4/10회·일반 성공 재생 5회·영수증 재생 4회·종료 후 편집 거절 ROLLBACK을 검증한다. 숫자는 해당 테스트의 참여자·분담금·송금 행 수 기준이며 위 계산식이 일반 규칙이다.
 

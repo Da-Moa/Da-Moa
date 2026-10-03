@@ -1,7 +1,7 @@
 import 'server-only'
 import { createHash, randomInt, randomUUID } from 'node:crypto'
 import { requireAccount } from '../../../../Global/Auth/Backend'
-import { AppError, badInput, withDatabaseConnection, withWriteLock, withReadTransaction, replayMutation, deleteReceiptObject, putReceipt, readReceipt, convertReceipt, type Database, domainMutation, idsInput, nowSeconds, onlyKeys, pageOf, pagination, textInput, type Identity } from '../../../../Global/Util/Backend'
+import { AppError, badInput, withDatabaseConnection, withWriteLock, withWriteTransaction, withReadTransaction, mutationDigest, mutationResult, replayMutation, deleteReceiptObject, putReceipt, readReceipt, convertReceipt, type Database, domainMutation, idsInput, nowSeconds, onlyKeys, pageOf, pagination, textInput, type Identity } from '../../../../Global/Util/Backend'
 import { formatMoney, MAX_EXPENSE_MAJOR, MAX_ROUND_TOTAL_MAJOR, minorLimit, parseAmount, requireCurrency, type Currency, type CreateRoundRequestDTO, type ExpenseRequestDTO, type VersionRequestDTO, type SettlementCheckRequestDTO } from '../../Shared'
 import { calculateBase, finalizeSettlement, previewSettlement, validateCustomShares } from '../../Shared'
 import type { ExclusionCheck, Expense, MutationResult, RoundDetail, RoundMember, RoundStatus, RoundSummary, SettlementDTO, SettlementTransfer } from '../../Shared'
@@ -314,11 +314,29 @@ async function finalize(client: Database, roundId: string, currency: Currency, d
   await repository.finalizeRound(client, roundId, nowSeconds())
 }
 
-export async function roundCommand(access: Identity, key: string, roundId: string, action: string, body: VersionRequestDTO | Record<string, unknown>) {
+export async function roundCommand(access: Identity, key: string, roundId: string, action: string, body: VersionRequestDTO | Record<string, unknown>, onCancelled?: (audience: { groupId: string; userIds: string[] }) => void): Promise<MutationResult> {
+  if (action === 'cancel') {
+    let userId: string
+    return withWriteTransaction(async client => {
+      onlyKeys(body, ['expectedVersion'])
+      const digest = mutationDigest(key, { roundId, ...body })
+      const { rows: [round] } = await repository.findRoundCancellation(client, roundId, userId, key)
+      const replay = mutationResult<MutationResult>(round, digest)
+      if (replay) return replay
+      if (!round.id) throw missing()
+      creator(round)
+      version(round, body.expectedVersion)
+      state(round, 'RECORDING')
+      if (round.has_expenses) throw new AppError(409, 'round_has_expenses', '지출 기록이 있는 회차는 취소할 수 없어요. 지출을 먼저 삭제해 주세요')
+      const result = { id: roundId, roundId }
+      await repository.deleteRound(client, roundId, userId, key, digest, result, nowSeconds())
+      onCancelled?.({ groupId: round.group_id, userIds: round.user_ids })
+      return result
+    }, async client => { userId = (await requireAccount(client, access)).id })
+  }
   onlyKeys(body, ['expectedVersion'])
-  if (!['confirm', 'reopen', 'send', 'draw', 'complete', 'force-complete', 'cancel'].includes(action)) throw missing()
-  let objectKeys: string[] = []
-  const result = await domainMutation(access, key, `round.${action}`, { roundId, ...body }, async (client, userId) => {
+  if (!['confirm', 'reopen', 'send', 'draw', 'complete', 'force-complete'].includes(action)) throw missing()
+  return domainMutation(access, key, `round.${action}`, { roundId, ...body }, async (client, userId) => {
     const round = await roundFor(client, roundId, userId)
     creator(round)
     if (action === 'draw' && round.finalized_at !== null) return { id: roundId, roundId, status: round.status, version: round.version }
@@ -354,16 +372,9 @@ export async function roundCommand(access: Identity, key: string, roundId: strin
         if (rows[0].count) throw new AppError(409, 'pending_settlement_checks', '모든 수취인이 입금을 확인한 뒤 종료할 수 있어요', { pendingCount: rows[0].count })
       }
       await repository.completeRound(client, roundId, now)
-    } else {
-      state(round, 'RECORDING')
-      objectKeys = (await repository.findRoundObjects(client, roundId)).rows.map(row => row.object_key)
-      await repository.deleteRound(client, roundId)
-      return { id: roundId, roundId }
     }
     return bump(client, roundId)
   })
-  await cleanupReceiptObjects(objectKeys)
-  return result
 }
 
 export async function setSettlementCheck(access: Identity, key: string, roundId: string, body: SettlementCheckRequestDTO | Record<string, unknown>) {

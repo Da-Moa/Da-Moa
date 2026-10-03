@@ -3,7 +3,7 @@ import { after, NextRequest } from 'next/server'
 import { readRequestAccessToken } from '../../../../Global/Auth/Backend'
 import { AppError, errorResponse } from '../../../../Global/Util/Backend'
 import { readJsonBody as jsonBody, sameOrigin } from '../../../../Global/Util/Backend'
-import { captureRoundAudience, publishRoundInvalidation, realtimeEnabled, type RoundAudience } from '../../../../Global/Websocket/Backend'
+import { publishRoundInvalidation, realtimeEnabled, type RoundAudience } from '../../../../Global/Websocket/Backend'
 import { addReceipt, checkExclusion, createRound, deleteExpense, excludeMember, getReceipt, getRound, getSettlement, listRounds, removeReceipt, roundCommand, saveExpense, setSettlementCheck } from '../Service/SettleService'
 
 export function isSettlePath(path: string[]) {
@@ -19,12 +19,14 @@ export async function getSettleResponse(request: NextRequest, path: string[]): P
     const query = request.nextUrl.searchParams
     let data: unknown
     let affectedAudience: RoundAudience | null | undefined
-    if (path[0] === 'rounds' && path.length === 2 && method === 'DELETE') affectedAudience = await captureRoundAudience(access, path[1])
     if (path[0] === 'groups' && path.length === 3 && path[2] === 'rounds' && method === 'GET') data = await listRounds(access, query, path[1])
     else if (path[0] === 'groups' && path.length === 3 && path[2] === 'rounds' && method === 'POST') data = await createRound(access, key, path[1], await jsonBody(request), userIds => { affectedAudience = { groupId: path[1], userIds } })
     else if (path[0] === 'rounds' && path.length === 1 && method === 'GET') data = await listRounds(access, query)
     else if (path[0] === 'rounds' && path.length === 2 && method === 'GET') data = await getRound(access, path[1], query)
-    else if (path[0] === 'rounds' && path.length === 2 && method === 'DELETE') data = await roundCommand(access, key, path[1], 'cancel', await jsonBody(request))
+    else if (path[0] === 'rounds' && path.length === 2 && method === 'DELETE') {
+      affectedAudience = null
+      data = await roundCommand(access, key, path[1], 'cancel', await jsonBody(request), audience => { affectedAudience = audience })
+    }
     else if (path[0] === 'rounds' && path.length === 3 && path[2] === 'settlement' && method === 'GET') data = await getSettlement(access, path[1])
     else if (path[0] === 'rounds' && path.length === 3 && path[2] === 'settlement-check' && method === 'POST') data = await setSettlementCheck(access, key, path[1], await jsonBody(request))
     else if (path[0] === 'rounds' && path.length === 3 && path[2] === 'expenses' && method === 'POST') data = await saveExpense(access, key, path[1], await jsonBody(request))

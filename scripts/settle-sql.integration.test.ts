@@ -34,11 +34,18 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
     process.env.DB_QUERY_LOG = 'true'
     let statements: string[] = []
     const logger = t.mock.method(console, 'info', (message: string) => { statements.push(message.replace(/^SQL:\s*/, '').replace(/\s+/g, ' ').trim()) })
-    const trace = async <T>(count: number, write: boolean | 'receipt' | 'session' | 'connection', work: () => Promise<T>) => {
+    const trace = async <T>(count: number, write: boolean | 'receipt' | 'session' | 'connection' | 'cancel', work: () => Promise<T>) => {
       statements = []
       const result = await work()
       assert.equal(statements.length, count, statements.join('\n'))
-      if (write === 'connection') {
+      if (write === 'cancel') {
+        assert.equal(statements[0], 'BEGIN')
+        assert.match(statements[1], /FROM users u WHERE u.id = \$1/)
+        assert.equal(statements[2], 'SELECT pg_advisory_xact_lock(1684106607)')
+        assert.match(statements[3], /EXISTS.*FROM expenses/)
+        assert.ok(['COMMIT', 'ROLLBACK'].includes(statements.at(-1)!))
+        assert.ok(statements.every(sql => !sql.includes('pg_advisory_unlock')))
+      } else if (write === 'connection') {
         assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
         if (count) assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
         if (count === 2) assert.match(statements[1], /FROM rounds r JOIN groups g/)
@@ -180,12 +187,62 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       await trace(5, true, () => setSettlementCheck(b, checkKey, round.id, checkBody))
       await command('complete', 10)
       const cancelled = await trace(4, 'session', () => createRound(a, uuidV7(), group.id, { ...body, participantIds: [a.userId, b.userId] }))
+      for (const [actor, count] of [[null, 2], [{ ...a, userId: randomUUID() }, 3]] as const) {
+        statements = []
+        await assert.rejects(roundCommand(actor, '', cancelled.id, 'cancel', {}), (error: { code: string }) => error.code === 'unauthorized')
+        assert.equal(statements.length, count)
+        assert.equal(statements[0], 'BEGIN')
+        assert.equal(statements.at(-1), 'ROLLBACK')
+        assert.ok(statements.every(sql => !sql.includes('pg_advisory')))
+      }
       const historical = await trace(2, 'connection', () => listRounds(c, new URLSearchParams(), group.id))
       assert.ok(historical.items.some(item => item.id === round.id), 'excluded participants retain round history')
       assert.ok(historical.items.every(item => item.id !== cancelled.id), 'group membership alone does not expose a round')
-      await trace(9, true, () => roundCommand(a, key(), cancelled.id, 'cancel', { expectedVersion: 1 }))
+      for (const [actor, id, input, expected] of [
+        [b, cancelled.id, { expectedVersion: 1 }, 'forbidden'],
+        [c, cancelled.id, { expectedVersion: 1 }, 'not_found'],
+        [a, randomUUID(), { expectedVersion: 1 }, 'not_found'],
+        [a, cancelled.id, { expectedVersion: 2 }, 'stale_round'],
+        [a, cancelled.id, { expectedVersion: '1' }, 'invalid_version'],
+        [a, round.id, { expectedVersion: version }, 'invalid_round_state'],
+      ] as const) await trace(5, 'cancel', () => assert.rejects(roundCommand(actor, key(), id, 'cancel', input), (error: { code: string }) => error.code === expected))
+      const failedCancelKey = key(), cancelConstraint = `round_cancel_test_${key().replaceAll('-', '')}`
+      await db.query(`ALTER TABLE mutation_requests ADD CONSTRAINT ${cancelConstraint} CHECK (request_key <> '${failedCancelKey}') NOT VALID`)
+      try {
+        await trace(6, 'cancel', () => assert.rejects(roundCommand(a, failedCancelKey, cancelled.id, 'cancel', { expectedVersion: 1 }), (error: { code: string; constraint: string }) => error.code === '23514' && error.constraint === cancelConstraint))
+        assert.equal((await db.query('SELECT 1 FROM rounds WHERE id=$1', [cancelled.id])).rowCount, 1)
+        assert.equal((await db.query('SELECT 1 FROM round_members WHERE round_id=$1', [cancelled.id])).rowCount, 2)
+        assert.equal((await db.query('SELECT 1 FROM mutation_requests WHERE request_key=$1', [failedCancelKey])).rowCount, 0)
+      } finally { await db.query(`ALTER TABLE mutation_requests DROP CONSTRAINT ${cancelConstraint}`) }
+      let audience: { groupId: string; userIds: string[] } | undefined
+      const cancelKey = key(), cancelBody = { expectedVersion: 1 }
+      const cancellation = await trace(6, 'cancel', () => roundCommand(a, cancelKey, cancelled.id, 'cancel', cancelBody, captured => { audience = captured }))
+      assert.equal(audience?.groupId, group.id)
+      assert.deepEqual(new Set(audience?.userIds), new Set([a.userId, b.userId]))
+      assert.equal((await db.query('SELECT 1 FROM round_members WHERE round_id=$1', [cancelled.id])).rowCount, 0)
+      assert.deepEqual(await trace(5, 'cancel', () => roundCommand(a, cancelKey, cancelled.id, 'cancel', cancelBody, () => assert.fail('replay must not publish again'))), cancellation)
+      await trace(5, 'cancel', () => assert.rejects(roundCommand(a, cancelKey, cancelled.id, 'cancel', { expectedVersion: 2 }), (error: { code: string }) => error.code === 'idempotency_conflict'))
+      await trace(5, 'cancel', () => assert.rejects(roundCommand(a, key(), cancelled.id, 'cancel', cancelBody), (error: { code: string }) => error.code === 'not_found'))
+      const racing = await createRound(a, uuidV7(), group.id, body)
+      const race = await Promise.allSettled([
+        roundCommand(a, key(), racing.id, 'cancel', cancelBody),
+        saveExpense(a, key(), racing.id, { ...expenseBody, expectedVersion: 1 }),
+      ])
+      assert.equal(race.filter(result => result.status === 'fulfilled').length, 1)
+      if (race[0].status === 'fulfilled') assert.equal((await db.query('SELECT 1 FROM expenses WHERE round_id=$1', [racing.id])).rowCount, 0)
+      else assert.equal((await getRound(a, racing.id, new URLSearchParams())).expenses.length, 1)
       const even = await trace(4, 'session', () => createRound(a, uuidV7(), group.id, { ...body, participantIds: [a.userId, b.userId] }))
       let evenVersion = (await trace(13, true, () => saveExpense(a, key(), even.id, { ...expenseBody, amount: '100', expectedVersion: 1 }))).version!
+      const nonemptyKey = key()
+      await trace(5, 'cancel', () => assert.rejects(roundCommand(a, nonemptyKey, even.id, 'cancel', { expectedVersion: evenVersion }), (error: { code: string }) => error.code === 'round_has_expenses'))
+      assert.equal((await db.query('SELECT 1 FROM mutation_requests WHERE request_key=$1', [nonemptyKey])).rowCount, 0)
+      assert.equal((await getRound(a, even.id, new URLSearchParams())).expenses.length, 1)
+      const probe = createDatabaseClient(database)
+      await probe.connect()
+      try {
+        assert.equal((await probe.query('SELECT pg_try_advisory_lock(1684106607) AS acquired')).rows[0].acquired, true)
+        await probe.query('SELECT pg_advisory_unlock(1684106607)')
+      } finally { await probe.end() }
       evenVersion = (await trace(12, true, () => roundCommand(a, key(), even.id, 'confirm', { expectedVersion: evenVersion }))).version!
       // Two shares + two balances + one transfer, finalized directly by send.
       evenVersion = (await trace(20, true, () => roundCommand(a, key(), even.id, 'send', { expectedVersion: evenVersion }))).version!

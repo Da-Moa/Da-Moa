@@ -10,7 +10,7 @@ import { signInKakao } from '../src/Global/Auth/Backend/index.ts'
 import { createDatabaseClient } from '../src/lib/db.ts'
 import { AppError } from '../src/lib/errors.ts'
 import { acceptInvite, createGroup, createInvite, leaveGroup } from '../src/Domain/Group/Backend/index.ts'
-import { addReceipt, createRound, getRound, getSettlement, roundCommand, saveExpense, setSettlementCheck } from '../src/Domain/Settle/Backend/index.ts'
+import { addReceipt, createRound, deleteExpense, getRound, getSettlement, roundCommand, saveExpense, setSettlementCheck } from '../src/Domain/Settle/Backend/index.ts'
 import { applyMigrations } from './migrations.mjs'
 import { completeTestOnboarding as completeOnboarding } from './bank-test-support.ts'
 
@@ -88,7 +88,8 @@ test('reopen racing send commits exactly one state transition', async () => {
   if (outcomes[0].status === 'fulfilled') {
     assert.equal(current.status, 'RECORDING')
     assert.equal(current.finalizedAt, null)
-    await roundCommand(fixture.owner, key(), fixture.roundId, 'cancel', { expectedVersion: current.version })
+    const deleted = await deleteExpense(fixture.owner, key(), fixture.roundId, fixture.expenseId, { expectedVersion: current.version })
+    await roundCommand(fixture.owner, key(), fixture.roundId, 'cancel', { expectedVersion: deleted.version })
   } else {
     assert.equal(current.status, 'LOCKED')
     const drawn = await roundCommand(fixture.owner, key(), fixture.roundId, 'draw', { expectedVersion: current.version })
