@@ -34,8 +34,14 @@ export async function getSettleResponse(request: NextRequest, path: string[]): P
       data = await saveExpense(access, key, path[1], await jsonBody(request), undefined, audience => { affectedAudience = audience })
     }
     else if (path[0] === 'rounds' && path.length === 3 && ['confirm', 'reopen', 'send', 'draw', 'complete', 'force-complete'].includes(path[2]) && method === 'POST') data = await roundCommand(access, key, path[1], path[2], await jsonBody(request))
-    else if (path[0] === 'rounds' && path.length === 4 && path[2] === 'expenses' && method === 'PATCH') data = await saveExpense(access, key, path[1], await jsonBody(request), path[3])
-    else if (path[0] === 'rounds' && path.length === 4 && path[2] === 'expenses' && method === 'DELETE') data = await deleteExpense(access, key, path[1], path[3], await jsonBody(request))
+    else if (path[0] === 'rounds' && path.length === 4 && path[2] === 'expenses' && method === 'PATCH') {
+      affectedAudience = null
+      data = await saveExpense(access, key, path[1], await jsonBody(request), path[3], audience => { affectedAudience = audience })
+    }
+    else if (path[0] === 'rounds' && path.length === 4 && path[2] === 'expenses' && method === 'DELETE') {
+      affectedAudience = null
+      data = await deleteExpense(access, key, path[1], path[3], await jsonBody(request), audience => { affectedAudience = audience })
+    }
     else if (path[0] === 'rounds' && path.length === 5 && path[2] === 'members' && path[4] === 'exclusion-check' && method === 'GET') data = await checkExclusion(access, path[1], path[3])
     else if (path[0] === 'rounds' && path.length === 5 && path[2] === 'members' && path[4] === 'exclude' && method === 'POST') data = await excludeMember(access, key, path[1], path[3], await jsonBody(request))
     else if (path[0] === 'rounds' && path.length === 5 && path[2] === 'expenses' && path[4] === 'receipts' && method === 'POST') {

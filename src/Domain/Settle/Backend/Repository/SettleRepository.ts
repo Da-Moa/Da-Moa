@@ -2,7 +2,7 @@ import 'server-only'
 import type { Database } from '../../../../Global/Util/Backend'
 import { roundCreationCandidatesSql } from '../../../Group/Backend'
 import type { Currency, Expense, MutationResult } from '../../Shared'
-import type { RoundRow, RoundDetailRow, MemberRow, ExpenseRow, ShareRow, ReceiptRow, SettlementExpenseRow, ExclusionExpenseRow, OutgoingRow, IncomingRow } from '../DAO/SettleDAO'
+import type { RoundRow, RoundDetailRow, ExpenseUpdateRow, ExpenseDeletionRow, MemberRow, ExpenseRow, ShareRow, ReceiptRow, SettlementExpenseRow, ExclusionExpenseRow, OutgoingRow, IncomingRow } from '../DAO/SettleDAO'
 
 export function findRound(client: Database, id: string, userId: string) {
   return client.query<RoundRow>(`SELECT r.*,g.name AS group_name,g.creator_id AS group_creator_id,
@@ -49,8 +49,8 @@ export function findRoundDetail(client: Database, id: string, userId: string, cr
     ) transfers ON true WHERE r.id=$1`, [id, userId, createdAt, cursorId, limit])
 }
 
-export function bumpRound(client: Database, id: string) {
-  return client.query<Pick<RoundRow, 'id' | 'status' | 'version'>>('UPDATE rounds SET version=version+1 WHERE id=$1 RETURNING id,status,version', [id])
+export function bumpRound(client: Database, id: string, expectedVersion: number) {
+  return client.query<Pick<RoundRow, 'id' | 'status' | 'version'>>('UPDATE rounds SET version=version+1 WHERE id=$1 AND version=$2 RETURNING id,status,version', [id, expectedVersion])
 }
 
 export function findMembers(client: Database, roundId: string) {
@@ -87,10 +87,6 @@ export function findRounds(client: Database, userId: string, groupId: string | n
       AND ($5::bigint IS NULL OR (r.created_at,r.id)<($5::bigint,$6::text)) ORDER BY r.created_at DESC,r.id DESC LIMIT $7`, [userId, groupId, status, search, createdAt, cursorId, limit])
 }
 
-export function findTotal(client: Database, roundId: string) {
-  return client.query<{ total_minor: string }>('SELECT COALESCE(sum(amount_minor),0)::text AS total_minor FROM expenses WHERE round_id=$1', [roundId])
-}
-
 export function findBalance(client: Database, roundId: string, userId: string) {
   return client.query<{ balance_minor: string }>('SELECT balance_minor FROM settlement_balances WHERE round_id=$1 AND user_id=$2', [roundId, userId])
 }
@@ -118,24 +114,55 @@ export function findActiveMember(client: Database, roundId: string, userId: stri
   return client.query('SELECT 1 FROM round_members WHERE round_id=$1 AND user_id=$2 AND excluded_at IS NULL', [roundId, userId])
 }
 
-export function findAssignedShares(client: Database, expenseId: string) {
-  return client.query<Pick<ShareRow, 'user_id' | 'assigned_amount_minor'>>('SELECT user_id,assigned_amount_minor FROM expense_shares WHERE expense_id=$1 ORDER BY user_id', [expenseId])
+export function findExpenseUpdate(client: Database, roundId: string, expenseId: string, userId: string, key: string) {
+  return client.query<ExpenseUpdateRow>(`WITH context AS (
+    SELECT r.*,(r.creator_id=$3) AS is_creator,
+      to_jsonb(e) || jsonb_build_object('amount_minor',e.amount_minor::text) AS expense,
+      ARRAY(SELECT user_id FROM round_members WHERE round_id=r.id AND excluded_at IS NULL ORDER BY user_id) AS active_ids,
+      ARRAY(SELECT user_id FROM round_members WHERE round_id=r.id ORDER BY user_id) AS user_ids,
+      (SELECT COALESCE(sum(amount_minor),0)::text FROM expenses WHERE round_id=r.id) AS total_minor,
+      COALESCE((SELECT jsonb_agg(jsonb_build_object('user_id',s.user_id,'assigned_amount_minor',s.assigned_amount_minor::text) ORDER BY s.user_id)
+        FROM expense_shares s WHERE s.expense_id=e.id),'[]'::jsonb) AS shares
+    FROM rounds r JOIN round_members viewer ON viewer.round_id=r.id AND viewer.user_id=$3
+    LEFT JOIN expenses e ON e.round_id=r.id AND e.id=$2 WHERE r.id=$1
+  ), saved AS (
+    SELECT request_digest,response_metadata FROM mutation_requests WHERE actor_id=$3 AND operation='expense.update' AND request_key=$4
+  ) SELECT context.*,saved.request_digest,saved.response_metadata FROM (SELECT 1) anchor
+    LEFT JOIN context ON true LEFT JOIN saved ON true`, [roundId, expenseId, userId, key])
 }
 
-export function findShareMembers(client: Database, expenseId: string) {
-  return client.query<{ user_id: string }>('SELECT user_id FROM expense_shares WHERE expense_id=$1 ORDER BY user_id', [expenseId])
-}
-
-export function deleteShares(client: Database, expenseId: string) {
-  return client.query('DELETE FROM expense_shares WHERE expense_id=$1', [expenseId])
-}
-
-export function insertShares(client: Database, expenseId: string, roundId: string, ids: string[], amounts: (string | null)[]) {
-  return client.query('INSERT INTO expense_shares(expense_id,round_id,user_id,assigned_amount_minor) SELECT $1,$2,unnest($3::text[]),unnest($4::numeric[])', [expenseId, roundId, ids, amounts])
-}
-
-export function updateExpense(client: Database, id: string, description: string, amount: string, payerId: string, splitMode: Expense['splitMode'], now: number, userId: string) {
-  return client.query('UPDATE expenses SET description=$2,amount_minor=$3,payer_id=$4,split_mode=$5,base_share_minor=NULL,remainder_units=NULL,updated_at=$6,updated_by=$7 WHERE id=$1', [id, description, amount, payerId, splitMode, now, userId])
+export async function updateExpense(client: Database, id: string, roundId: string, userId: string, key: string, digest: string,
+  input: { description: string; amount: string; payerId: string; splitMode: Expense['splitMode']; participantIds: string[] },
+  amounts: (string | null)[], expectedVersion: number, maximumTotal: string, now: number) {
+  const { rows } = await client.query<{ response_metadata: MutationResult }>(`WITH eligible AS MATERIALIZED (
+    SELECT e.id FROM expenses e JOIN rounds r ON r.id=e.round_id
+    JOIN round_members viewer ON viewer.round_id=r.id AND viewer.user_id=$3
+    JOIN users actor ON actor.id=$3 AND actor.deleted_at IS NULL AND actor.onboarding_completed_at IS NOT NULL
+    WHERE e.id=$1 AND r.id=$2 AND (r.creator_id=$3 OR (viewer.excluded_at IS NULL AND e.author_id=$3))
+      AND EXISTS(SELECT 1 FROM round_members WHERE round_id=r.id AND user_id=$9 AND (excluded_at IS NULL OR user_id=e.payer_id))
+      AND cardinality($11::text[])>0 AND NOT EXISTS(SELECT 1 FROM unnest($11::text[]) AS selected(user_id)
+        WHERE NOT EXISTS(SELECT 1 FROM round_members WHERE round_id=r.id AND user_id=selected.user_id AND excluded_at IS NULL))
+      AND (SELECT COALESCE(sum(amount_minor),0) FROM expenses WHERE round_id=r.id AND id<>e.id)+$8::numeric<=$14::numeric
+      AND NOT EXISTS(SELECT 1 FROM mutation_requests WHERE actor_id=$3 AND operation='expense.update' AND request_key=$4)
+  ), bumped AS (
+    UPDATE rounds SET version=version+1 WHERE id=$2 AND version=$13 AND status='RECORDING' AND completed_at IS NULL
+      AND EXISTS(SELECT 1 FROM eligible) RETURNING status,version
+  ), updated AS (
+    UPDATE expenses SET description=$7,amount_minor=$8,payer_id=$9,split_mode=$10,
+      base_share_minor=NULL,remainder_units=NULL,updated_at=$6,updated_by=$3
+    WHERE id=$1 AND round_id=$2 AND EXISTS(SELECT 1 FROM bumped) RETURNING id
+  ), removed AS (
+    DELETE FROM expense_shares WHERE expense_id IN (SELECT id FROM updated) AND NOT (user_id=ANY($11::text[])) RETURNING user_id
+  ), shares AS (
+    INSERT INTO expense_shares(expense_id,round_id,user_id,assigned_amount_minor)
+    SELECT updated.id,$2,selected.user_id,selected.amount FROM updated CROSS JOIN unnest($11::text[],$12::numeric[]) AS selected(user_id,amount)
+    ON CONFLICT (expense_id,user_id) DO UPDATE SET assigned_amount_minor=EXCLUDED.assigned_amount_minor,
+      final_amount_minor=NULL,received_remainder=NULL RETURNING user_id
+  ) INSERT INTO mutation_requests(actor_id,operation,request_key,request_digest,resource_id,response_metadata,created_at)
+    SELECT $3,'expense.update',$4,$5,$1,jsonb_build_object('id',$1::text,'roundId',$2::text,'status',bumped.status,'version',bumped.version),$6
+    FROM bumped WHERE EXISTS(SELECT 1 FROM shares) RETURNING response_metadata`,
+  [id, roundId, userId, key, digest, now, input.description, input.amount, input.payerId, input.splitMode, input.participantIds, amounts, expectedVersion, maximumTotal])
+  return rows[0]?.response_metadata ?? null
 }
 
 export async function insertExpenseCreation(client: Database, id: string, roundId: string, userId: string, key: string,
@@ -167,23 +194,51 @@ export async function insertExpenseCreation(client: Database, id: string, roundI
   [id, roundId, userId, key, input.payerId, input.description, input.amount, input.splitMode, expectedVersion, input.participantIds, JSON.stringify(scales), hasDecimal, maximumExpense, maximumTotal, now])).rows[0]
 }
 
-export async function finishExpenseCreation(client: Database, id: string, roundId: string, userId: string, key: string, digest: string, ids: string[], amounts: (string | null)[], now: number) {
+export async function finishExpenseCreation(client: Database, id: string, roundId: string, userId: string, key: string, digest: string, ids: string[], amounts: (string | null)[], now: number, expectedVersion: number) {
   return (await client.query<{ response_metadata: MutationResult }>(`WITH shares AS (
     INSERT INTO expense_shares(expense_id,round_id,user_id,assigned_amount_minor)
     SELECT $1,$2,unnest($7::text[]),unnest($8::numeric[]) RETURNING user_id
   ), bumped AS (
-    UPDATE rounds SET version=version+1 WHERE id=$2 AND EXISTS(SELECT 1 FROM shares) RETURNING status,version
+    UPDATE rounds SET version=version+1 WHERE id=$2 AND version=$9 AND EXISTS(SELECT 1 FROM shares) RETURNING status,version
   ) INSERT INTO mutation_requests(actor_id,operation,request_key,request_digest,resource_id,response_metadata,created_at)
     SELECT $3,'expense.create',$4,$5,$1,jsonb_build_object('id',$1::text,'roundId',$2::text,'status',status,'version',version),$6 FROM bumped
-    RETURNING response_metadata`, [id, roundId, userId, key, digest, now, ids, amounts])).rows[0].response_metadata
+    RETURNING response_metadata`, [id, roundId, userId, key, digest, now, ids, amounts, expectedVersion])).rows[0]?.response_metadata ?? null
 }
 
-export function findExpenseObjects(client: Database, expenseId: string) {
-  return client.query<{ object_key: string }>('SELECT object_key FROM expense_receipts WHERE expense_id=$1 AND object_key IS NOT NULL', [expenseId])
+const expenseDeletionContextSql = `context AS MATERIALIZED (
+  SELECT r.*,(r.creator_id=$3) AS is_creator,e.id AS expense_id,e.author_id,viewer.excluded_at AS viewer_excluded_at,
+    ARRAY(SELECT user_id FROM round_members WHERE round_id=r.id ORDER BY user_id) AS user_ids,
+    ARRAY(SELECT object_key FROM expense_receipts WHERE expense_id=e.id AND object_key IS NOT NULL) AS object_keys
+  FROM rounds r JOIN round_members viewer ON viewer.round_id=r.id AND viewer.user_id=$3
+  LEFT JOIN expenses e ON e.round_id=r.id AND e.id=$2 WHERE r.id=$1
+), saved AS MATERIALIZED (
+  SELECT request_digest,response_metadata FROM mutation_requests WHERE actor_id=$3 AND operation='expense.delete' AND request_key=$4
+), actor AS (
+  SELECT EXISTS(SELECT 1 FROM users WHERE id=$3 AND deleted_at IS NULL AND onboarding_completed_at IS NOT NULL) AS active
+)`
+
+export function findExpenseDeletion(client: Database, roundId: string, expenseId: string, userId: string, key: string) {
+  return client.query<ExpenseDeletionRow>(`WITH ${expenseDeletionContextSql}
+    SELECT context.*,actor.active AS actor_active,saved.request_digest,saved.response_metadata FROM actor
+    LEFT JOIN context ON true LEFT JOIN saved ON true`, [roundId, expenseId, userId, key])
 }
 
-export function deleteExpense(client: Database, expenseId: string) {
-  return client.query('DELETE FROM expenses WHERE id=$1', [expenseId])
+export async function deleteExpense(client: Database, roundId: string, expenseId: string, userId: string, key: string, digest: string, expectedVersion: number, now: number) {
+  return (await client.query<ExpenseDeletionRow>(`WITH ${expenseDeletionContextSql}, bumped AS (
+    UPDATE rounds SET version=version+1 WHERE id=$1 AND version=$6 AND status='RECORDING' AND completed_at IS NULL
+      AND (SELECT active FROM actor) AND NOT EXISTS(SELECT 1 FROM saved)
+      AND EXISTS(SELECT 1 FROM context WHERE expense_id IS NOT NULL AND (is_creator OR (viewer_excluded_at IS NULL AND author_id=$3)))
+    RETURNING status,version
+  ), deleted AS (
+    DELETE FROM expenses WHERE round_id=$1 AND id=$2 AND EXISTS(SELECT 1 FROM bumped) RETURNING id
+  ), recorded AS (
+    INSERT INTO mutation_requests(actor_id,operation,request_key,request_digest,resource_id,response_metadata,created_at)
+    SELECT $3,'expense.delete',$4,$5,$2,jsonb_build_object('id',$2::text,'roundId',$1::text,'status',status,'version',version),$7
+    FROM bumped WHERE EXISTS(SELECT 1 FROM deleted) RETURNING request_digest,response_metadata
+  ) SELECT context.*,actor.active AS actor_active,COALESCE(recorded.request_digest,saved.request_digest) AS request_digest,
+    COALESCE(recorded.response_metadata,saved.response_metadata) AS response_metadata,EXISTS(SELECT 1 FROM deleted) AS deleted
+    FROM actor LEFT JOIN context ON true LEFT JOIN saved ON true LEFT JOIN recorded ON true`,
+  [roundId, expenseId, userId, key, digest, expectedVersion, now])).rows[0]
 }
 
 export function findExclusionExpenses(client: Database, roundId: string, targetId: string) {

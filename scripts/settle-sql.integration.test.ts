@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import test from 'node:test'
 import sharp from 'sharp'
+import { DeleteObjectCommand, HeadObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { readAccessToken } from '../src/lib/auth.ts'
 import { signInKakao } from '../src/Global/Auth/Backend/index.ts'
 import { acceptInvite, createGroup, createInvite } from '../src/Domain/Group/Backend/index.ts'
@@ -34,11 +35,24 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
     process.env.DB_QUERY_LOG = 'true'
     let statements: string[] = []
     const logger = t.mock.method(console, 'info', (message: string) => { statements.push(message.replace(/^SQL:\s*/, '').replace(/\s+/g, ' ').trim()) })
-    const trace = async <T>(count: number, write: boolean | 'receipt' | 'session' | 'connection' | 'cancel' | 'expense', work: () => Promise<T>) => {
+    const trace = async <T>(count: number, write: boolean | 'receipt' | 'session' | 'connection' | 'cancel' | 'expense' | 'patch' | 'delete', work: () => Promise<T>) => {
       statements = []
       const result = await work()
       assert.equal(statements.length, count, statements.join('\n'))
-      if (write === 'expense') {
+      if (write === 'delete') {
+        assert.equal(statements[0], 'BEGIN')
+        if (count > 2) assert.match(statements[1], /FROM users u WHERE u.id = \$1/)
+        if (count > 3) assert.match(statements[2], /LEFT JOIN expenses.*operation = 'expense.delete'/)
+        if (count >= 5) assert.equal(statements[3], 'SELECT pg_advisory_xact_lock(1684106607)')
+        if (count === 6) assert.match(statements[4], /UPDATE rounds.*DELETE FROM expenses.*INSERT INTO mutation_requests/)
+        assert.ok(['COMMIT', 'ROLLBACK'].includes(statements.at(-1)!))
+        assert.ok(statements.every(sql => !sql.includes('pg_advisory_unlock')))
+      } else if (write === 'patch') {
+        assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
+        if (count) assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
+        if (count > 1) assert.match(statements[1], /FROM rounds r JOIN round_members viewer.*LEFT JOIN expenses/)
+        if (count === 3) assert.match(statements[2], /UPDATE rounds.*version = \$13.*UPDATE expenses.*DELETE FROM expense_shares.*INSERT INTO expense_shares.*INSERT INTO mutation_requests/)
+      } else if (write === 'expense') {
         if (count) assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
         if (count > 1) {
           assert.equal(statements[1], 'BEGIN')
@@ -183,8 +197,136 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       assert.ok(expenseRace.every(result => JSON.stringify(result) === JSON.stringify(expenseRace[0])))
       assert.equal((await db.query('SELECT 1 FROM expenses WHERE round_id=$1', [expenseRaceRound.id])).rowCount, 1)
       assert.equal((await db.query('SELECT version FROM rounds WHERE id=$1', [expenseRaceRound.id])).rows[0].version, 2)
-      const updated = await trace(14, true, () => saveExpense(a, key(), round.id, { amount: '101', expectedVersion: version }, expense.id))
+      const updated = await trace(3, 'patch', () => saveExpense(a, key(), round.id, { amount: '101', expectedVersion: version }, expense.id))
       version = updated.version!
+      await t.test('expense PATCH uses three statements for creators/authors and atomic shares, version and replay', async () => {
+        const patchRound = await createRound(a, uuidV7(), group.id, body)
+        const original = await saveExpense(b, key(), patchRound.id, { ...expenseBody, expectedVersion: 1 })
+        let patchVersion = original.version!
+        await trace(0, 'patch', () => assert.rejects(saveExpense(null, '', patchRound.id, {}, original.id), (error: { code: string }) => error.code === 'unauthorized'))
+        await trace(1, 'patch', () => assert.rejects(saveExpense({ ...a, userId: randomUUID() }, '', patchRound.id, {}, original.id), (error: { code: string }) => error.code === 'unauthorized'))
+        for (const [actor, id, input, expected] of [
+          [c, original.id, { expectedVersion: patchVersion }, 'forbidden'],
+          [nonParticipant, original.id, { expectedVersion: patchVersion }, 'not_found'],
+          [a, randomUUID(), { expectedVersion: patchVersion }, 'not_found'],
+          [a, original.id, { expectedVersion: 1 }, 'stale_round'],
+          [a, original.id, { expectedVersion: '2' }, 'invalid_version'],
+          [a, original.id, { amount: '1.00', expectedVersion: patchVersion }, 'invalid_amount'],
+          [a, original.id, { currency: 'USD', expectedVersion: patchVersion }, 'invalid_input'],
+          [a, original.id, { payerId: nonParticipant.userId, expectedVersion: patchVersion }, 'invalid_participants'],
+          [a, original.id, { splitMode: 'CUSTOM', customShares: [{ userId: a.userId, amount: '99' }], expectedVersion: patchVersion }, 'custom_share_total_mismatch'],
+        ] as const) await trace(2, 'patch', () => assert.rejects(saveExpense(actor, key(), patchRound.id, input, id), (error: { code: string }) => error.code === expected))
+        for (const [actor, input] of [
+          [b, { description: '기록자 수정' }],
+          [a, { splitMode: 'SELECTED', participantIds: [a.userId, b.userId] }],
+          [b, { description: '부담자 유지' }],
+          [a, { splitMode: 'CUSTOM', customShares: [{ userId: a.userId, amount: '40' }, { userId: b.userId, amount: '60' }] }],
+          [b, { description: '부담금 유지' }],
+          [a, { splitMode: 'SELECTED', participantIds: [c.userId] }],
+          [b, { splitMode: 'ALL' }],
+        ] as const) {
+          const requestKey = key(), request = { ...input, expectedVersion: patchVersion }
+          const result = await trace(3, 'patch', () => saveExpense(actor, requestKey, patchRound.id, request, original.id, captured => {
+            assert.equal(captured.groupId, group.id)
+            assert.deepEqual(new Set(captured.userIds), new Set(body.participantIds))
+          }))
+          patchVersion = result.version!
+          assert.deepEqual(await trace(2, 'patch', () => saveExpense(actor, requestKey, patchRound.id, request, original.id, () => assert.fail('replay must not publish'))), result)
+          await trace(2, 'patch', () => assert.rejects(saveExpense(actor, requestKey, patchRound.id, { ...request, description: '다른 본문' }, original.id), (error: { code: string }) => error.code === 'idempotency_conflict'))
+          const saved = (await getRound(a, patchRound.id, new URLSearchParams())).expenses[0]
+          if ('participantIds' in input) assert.deepEqual(new Set(saved.participantIds), new Set(input.participantIds))
+          if (saved.splitMode === 'CUSTOM') assert.deepEqual(saved.shares.map(share => share.assignedAmountMinor).sort(), ['40', '60'])
+          if (saved.splitMode === 'ALL') assert.deepEqual(new Set(saved.participantIds), new Set(body.participantIds))
+        }
+        const before = await getRound(a, patchRound.id, new URLSearchParams())
+        const failureKey = key(), constraint = `expense_patch_test_${key().replaceAll('-', '')}`
+        await db.query(`ALTER TABLE mutation_requests ADD CONSTRAINT ${constraint} CHECK (request_key <> '${failureKey}') NOT VALID`)
+        try {
+          await trace(3, 'patch', () => assert.rejects(saveExpense(a, failureKey, patchRound.id, { amount: '200', splitMode: 'SELECTED', participantIds: [a.userId], expectedVersion: patchVersion }, original.id), (error: { code: string }) => error.code === '23514'))
+          assert.deepEqual(await getRound(a, patchRound.id, new URLSearchParams()), before)
+          assert.equal((await db.query('SELECT 1 FROM mutation_requests WHERE request_key=$1', [failureKey])).rowCount, 0)
+        } finally { await db.query(`ALTER TABLE mutation_requests DROP CONSTRAINT ${constraint}`) }
+        const sameKey = key(), sameBody = { description: '동시 재전송', expectedVersion: patchVersion }
+        const repeated = await Promise.all(Array.from({ length: 5 }, () => saveExpense(b, sameKey, patchRound.id, sameBody, original.id)))
+        assert.ok(repeated.every(result => JSON.stringify(result) === JSON.stringify(repeated[0])))
+        patchVersion = repeated[0].version!
+        assert.equal(patchVersion, before.version + 1)
+        const different = await Promise.allSettled([a, b].map(actor => saveExpense(actor, key(), patchRound.id, { description: actor.userId, expectedVersion: patchVersion }, original.id)))
+        assert.equal(different.filter(result => result.status === 'fulfilled').length, 1)
+        assert.ok(different.some(result => result.status === 'rejected' && result.reason.code === 'stale_round'))
+        patchVersion++
+        const confirmed = await roundCommand(a, key(), patchRound.id, 'confirm', { expectedVersion: patchVersion })
+        await trace(2, 'patch', () => assert.rejects(saveExpense(b, key(), patchRound.id, { expectedVersion: confirmed.version }, original.id), (error: { code: string }) => error.code === 'invalid_round_state'))
+      })
+      await t.test('expense DELETE checks permissions before locking and commits one atomic deletion before receipt cleanup', async () => {
+        const storage = new S3Client({ endpoint: process.env.MINIO_ENDPOINT, region: 'us-east-1', forcePathStyle: true,
+          credentials: { accessKeyId: process.env.MINIO_ACCESS_KEY!, secretAccessKey: process.env.MINIO_SECRET_KEY! } })
+        const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#fff' } }).png().toBuffer()
+        try {
+          for (const actor of [b, a]) {
+            const deletionRound = await createRound(a, uuidV7(), group.id, body)
+            const original = await saveExpense(b, key(), deletionRound.id, { ...expenseBody, amount: '300', expectedVersion: 1 })
+            const receipt = await addReceipt(b, key(), deletionRound.id, original.id, original.version!, bytes, 'image/png')
+            const request = { expectedVersion: receipt.version! }, requestKey = key()
+            const objectKey = (await db.query('SELECT object_key FROM expense_receipts WHERE id=$1', [receipt.id])).rows[0].object_key
+            const head = { Bucket: process.env.MINIO_BUCKET!, Key: objectKey }
+            await trace(2, 'delete', () => assert.rejects(deleteExpense(null, '', deletionRound.id, original.id, {}), (error: { code: string }) => error.code === 'unauthorized'))
+            await trace(3, 'delete', () => assert.rejects(deleteExpense({ ...a, userId: randomUUID() }, '', deletionRound.id, original.id, {}), (error: { code: string }) => error.code === 'unauthorized'))
+            await trace(3, 'delete', () => assert.rejects(deleteExpense(a, key(), deletionRound.id, original.id, { ...request, amount: '1' }), (error: { code: string }) => error.code === 'invalid_input'))
+            for (const [caller, id, input, expected] of [
+              [c, original.id, request, 'forbidden'],
+              [nonParticipant, original.id, request, 'not_found'],
+              [a, randomUUID(), request, 'not_found'],
+              [a, original.id, { expectedVersion: 1 }, 'stale_round'],
+              [a, original.id, { expectedVersion: '3' }, 'invalid_version'],
+            ] as const) await trace(4, 'delete', () => assert.rejects(deleteExpense(caller, key(), deletionRound.id, id, input), (error: { code: string }) => error.code === expected))
+
+            const before = await getRound(a, deletionRound.id, new URLSearchParams())
+            assert.equal(before.totalMinor, '300')
+            assert.equal(before.transfers.length, 1)
+            const failureKey = key(), constraint = `expense_delete_test_${key().replaceAll('-', '')}`
+            await db.query(`ALTER TABLE mutation_requests ADD CONSTRAINT ${constraint} CHECK (request_key <> '${failureKey}') NOT VALID`)
+            try {
+              await trace(6, 'delete', () => assert.rejects(deleteExpense(actor, failureKey, deletionRound.id, original.id, request, () => assert.fail('rollback must not publish')), (error: { code: string }) => error.code === '23514'))
+              assert.deepEqual(await getRound(a, deletionRound.id, new URLSearchParams()), before)
+              assert.equal((await db.query('SELECT 1 FROM mutation_requests WHERE request_key=$1', [failureKey])).rowCount, 0)
+              await storage.send(new HeadObjectCommand(head))
+            } finally { await db.query(`ALTER TABLE mutation_requests DROP CONSTRAINT ${constraint}`) }
+
+            let cleanups = 0
+            const send = t.mock.method(S3Client.prototype, 'send', new Proxy(S3Client.prototype.send, {
+              apply(target, receiver, args) {
+                if (args[0] instanceof DeleteObjectCommand) {
+                  assert.equal(statements.at(-1), 'COMMIT')
+                  cleanups++
+                  if (actor === a) return Promise.reject(new Error('test receipt cleanup failure'))
+                }
+                return Reflect.apply(target, receiver, args)
+              },
+            }))
+            const errors = t.mock.method(console, 'error', () => {})
+            try {
+              const result = await trace(6, 'delete', () => deleteExpense(actor, requestKey, deletionRound.id, original.id, request, audience => {
+                assert.equal(audience.groupId, group.id)
+                assert.deepEqual(new Set(audience.userIds), new Set(body.participantIds))
+              }))
+              assert.equal(result.version, request.expectedVersion + 1)
+              assert.deepEqual(await trace(5, 'delete', () => deleteExpense(actor, requestKey, deletionRound.id, original.id, request, () => assert.fail('replay must not publish'))), result)
+              await trace(4, 'delete', () => assert.rejects(deleteExpense(actor, requestKey, deletionRound.id, original.id, { expectedVersion: result.version }), (error: { code: string }) => error.code === 'idempotency_conflict'))
+              assert.equal(cleanups, 1)
+              assert.equal(errors.mock.callCount(), actor === a ? 1 : 0)
+              const current = await getRound(a, deletionRound.id, new URLSearchParams())
+              assert.equal(current.version, result.version)
+              assert.equal(current.totalMinor, '0')
+              assert.deepEqual(current.expenses, [])
+              assert.deepEqual(current.transfers, [])
+              assert.equal((await db.query('SELECT 1 FROM expense_shares WHERE expense_id=$1', [original.id])).rowCount, 0)
+              assert.equal((await db.query('SELECT 1 FROM expense_receipts WHERE expense_id=$1', [original.id])).rowCount, 0)
+              if (actor === b) await assert.rejects(storage.send(new HeadObjectCommand(head)), (error: { $metadata?: { httpStatusCode?: number } }) => error.$metadata?.httpStatusCode === 404)
+            } finally { send.mock.restore(); errors.mock.restore(); await storage.send(new DeleteObjectCommand(head)) }
+          }
+        } finally { storage.destroy() }
+      })
       const participantExpense = await trace(6, 'expense', () => saveExpense(b, key(), round.id, { ...expenseBody, expectedVersion: version }))
       version = participantExpense.version!
       const firstPage = await trace(2, 'connection', () => getRound(a, round.id, new URLSearchParams({ limit: '1' })))
@@ -200,7 +342,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       assert.deepEqual(emptyPage.transfers, firstPage.transfers)
       assert.equal(emptyPage.totalMinor, firstPage.totalMinor)
       assert.equal(emptyPage.pendingRemainderMinor, firstPage.pendingRemainderMinor)
-      const deleted = await trace(12, true, () => deleteExpense(b, key(), round.id, participantExpense.id, { expectedVersion: version }))
+      const deleted = await trace(6, 'delete', () => deleteExpense(b, key(), round.id, participantExpense.id, { expectedVersion: version }))
       version = deleted.version!
       const receiptKey = key(), receiptVersion = version
       const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#ffffff' } }).png().toBuffer()

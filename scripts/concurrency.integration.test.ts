@@ -8,6 +8,7 @@ import { currentTimestamp, readAccessToken, type AccessToken } from '../src/lib/
 import { withdrawAccount } from '../src/Domain/User/Backend/index.ts'
 import { signInKakao } from '../src/Global/Auth/Backend/index.ts'
 import { createDatabaseClient } from '../src/lib/db.ts'
+import { getDatabasePool } from '../src/lib/db-client.mjs'
 import { AppError } from '../src/lib/errors.ts'
 import { acceptInvite, createGroup, createInvite, leaveGroup } from '../src/Domain/Group/Backend/index.ts'
 import { addReceipt, createRound, deleteExpense, getRound, getSettlement, roundCommand, saveExpense, setSettlementCheck } from '../src/Domain/Settle/Backend/index.ts'
@@ -340,5 +341,105 @@ test('an upload already validated before a concurrent round lock is rejected aft
     if (gateHeld) await gate.query('ROLLBACK').catch(() => {})
     if (upload) await upload
     await gate.end()
+  }
+})
+
+test('expense DELETE rechecks state and concurrent deletion replay after its pre-lock read', { timeout: 15000 }, async t => {
+  for (const action of ['confirm', 'same-key', 'different-key'] as const) {
+    const fixture = await recordingRound(), requestKey = key(), body = { expectedVersion: fixture.version }
+    const pool = getDatabasePool(process.env.DATABASE_URL!), connect = pool.connect.bind(pool)
+    let resume!: () => void, reached!: () => void
+    const paused = new Promise<void>(resolve => { reached = resolve }), gate = new Promise<void>(resolve => { resume = resolve })
+    const connectionMock = t.mock.method(pool, 'connect', async () => {
+      connectionMock.mock.restore()
+      const borrowed = await connect()
+      const queryMock = t.mock.method(borrowed, 'query', new Proxy(borrowed.query, {
+        apply(target, receiver, args) {
+          const pending = Reflect.apply(target, receiver, args)
+          if (String(args[0]).includes('LEFT JOIN expenses')) {
+            queryMock.mock.restore()
+            return pending.then(async (result: unknown) => { reached(); await gate; return result })
+          }
+          return pending
+        },
+      }))
+      return borrowed
+    })
+    const older = deleteExpense(fixture.participant, requestKey, fixture.roundId, fixture.expenseId, body, () => assert.fail('losing or replayed deletion must not publish'))
+      .then(result => ({ result, error: undefined }), error => ({ result: undefined, error }))
+    try {
+      await paused
+      const winner = action === 'confirm'
+        ? await roundCommand(fixture.owner, key(), fixture.roundId, 'confirm', body)
+        : await deleteExpense(fixture.participant, action === 'same-key' ? requestKey : key(), fixture.roundId, fixture.expenseId, body)
+      resume()
+      const outcome = await older
+      if (action === 'same-key') assert.deepEqual(outcome.result, winner)
+      else assert.equal(outcome.error?.code, action === 'confirm' ? 'invalid_round_state' : 'not_found')
+      const current = await getRound(fixture.owner, fixture.roundId, new URLSearchParams())
+      assert.equal(current.version, winner.version)
+      assert.equal(current.expenses.length, action === 'confirm' ? 1 : 0)
+      assert.equal((await inspect(client => client.query("SELECT 1 FROM mutation_requests WHERE actor_id=$1 AND operation='expense.delete' AND request_key=$2", [fixture.participant.userId, requestKey]))).rowCount, action === 'same-key' ? 1 : 0)
+    } finally { resume(); connectionMock.mock.restore(); await older }
+  }
+})
+
+// Pause a real transaction after its old-version read so PATCH wins deterministically.
+test('expense PATCH invalidates already-read writes and rechecks a losing conditional UPDATE', { timeout: 15000 }, async t => {
+  for (const action of ['confirm', 'delete', 'create', 'patch'] as const) {
+    const fixture = await recordingRound()
+    const pool = getDatabasePool(process.env.DATABASE_URL!)
+    const connect = pool.connect.bind(pool)
+    let resume!: () => void, reached!: () => void, restoreQuery: (() => void) | undefined
+    let held = false
+    const statements: string[] = []
+    const paused = new Promise<void>(resolve => { reached = resolve })
+    const gate = new Promise<void>(resolve => { resume = resolve })
+    const connectionMock = t.mock.method(pool, 'connect', async () => {
+      connectionMock.mock.restore()
+      const borrowed = await connect()
+      const queryMock = t.mock.method(borrowed, 'query', new Proxy(borrowed.query, {
+        apply(target, receiver, args) {
+          const pending = Reflect.apply(target, receiver, args)
+          const sql = String(args[0])
+          statements.push(sql)
+          if (!held && (action === 'create' ? sql.includes('INSERT INTO expenses') : action === 'patch' || action === 'delete' ? sql.includes('LEFT JOIN expenses') : sql.startsWith('SELECT r.*,g.name'))) {
+            held = true
+            if (action !== 'patch') queryMock.mock.restore()
+            return pending.then(async (result: unknown) => { reached(); await gate; return result })
+          }
+          return pending
+        },
+      }))
+      restoreQuery = () => queryMock.mock.restore()
+      return borrowed
+    })
+    const olderKey = key()
+    const older = (action === 'confirm' ? roundCommand(fixture.owner, olderKey, fixture.roundId, 'confirm', { expectedVersion: fixture.version })
+      : action === 'delete' ? deleteExpense(fixture.owner, olderKey, fixture.roundId, fixture.expenseId, { expectedVersion: fixture.version })
+      : action === 'patch' ? saveExpense(fixture.owner, olderKey, fixture.roundId, { description: '오래된 수정', expectedVersion: fixture.version }, fixture.expenseId)
+      : saveExpense(fixture.owner, olderKey, fixture.roundId, { description: '오래된 생성', amount: '5', payerId: fixture.owner.userId, splitMode: 'ALL', expectedVersion: fixture.version }))
+      .then(() => ({ error: undefined }), error => ({ error }))
+    try {
+      await paused
+      const edited = await saveExpense(fixture.participant, key(), fixture.roundId, { description: '먼저 저장한 수정', amount: '4', expectedVersion: fixture.version }, fixture.expenseId)
+      resume()
+      assert.equal((await older).error?.code, 'stale_round', action)
+      restoreQuery?.()
+      if (action === 'patch') {
+        assert.equal(statements.length, 4)
+        assert.match(statements[2], /UPDATE rounds.*version=\$13/s)
+        assert.match(statements[3], /LEFT JOIN expenses/)
+        assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK)|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
+      }
+      const current = await getRound(fixture.owner, fixture.roundId, new URLSearchParams())
+      assert.equal(current.status, 'RECORDING')
+      assert.equal(current.version, edited.version)
+      assert.equal(current.expenses.length, 1)
+      assert.equal(current.expenses[0].description, '먼저 저장한 수정')
+      assert.equal(current.totalMinor, '4')
+      assert.ok(current.expenses[0].shares.every(share => share.amountMinor === null))
+      assert.equal((await inspect(client => client.query('SELECT 1 FROM mutation_requests WHERE request_key=$1', [olderKey]))).rowCount, 0)
+    } finally { resume(); connectionMock.mock.restore(); await older; restoreQuery?.() }
   }
 })

@@ -17,6 +17,16 @@ export type ShareRow = {
   expense_id: string; user_id: string; assigned_amount_minor: string | null;
   final_amount_minor: string | null; received_remainder: boolean | null
 }
+export type ExpenseUpdateRow = RoundRow & {
+  expense: ExpenseRow | null; active_ids: string[]; user_ids: string[]; total_minor: string;
+  shares: Pick<ShareRow, 'user_id' | 'assigned_amount_minor'>[];
+  request_digest: string | null; response_metadata: unknown
+}
+export type ExpenseDeletionRow = RoundRow & {
+  expense_id: string | null; author_id: string | null; viewer_excluded_at: string | null;
+  actor_active: boolean; user_ids: string[]; object_keys: string[];
+  request_digest: string | null; response_metadata: unknown; deleted?: boolean
+}
 export type ReceiptRow = { id: string; expense_id: string; mime_type: string; byte_size: number; object_key: string | null }
 export type SettlementExpenseRow = Pick<ExpenseRow, 'id' | 'payer_id' | 'amount_minor' | 'split_mode'> & {
   participant_ids: string[]; shares: { userId: string; assignedAmountMinor: string | null }[] | null
