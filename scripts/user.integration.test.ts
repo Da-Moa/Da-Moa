@@ -22,7 +22,7 @@ if (!database || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(database)
 process.env.DATABASE_URL = database
 process.env.AUTH_JWT_SECRET ||= 'isolated-user-test-secret-at-least-32-bytes'
 
-test('withdrawal uses AUTH, unfinished check, lock, atomic soft delete/membership exit, unlock', async t => {
+test('withdrawal locks before checks and releases the transaction lock on commit and rollback', async t => {
   const client = createDatabaseClient(database)
   await client.connect()
   const previousLog = process.env.DB_QUERY_LOG
@@ -44,22 +44,24 @@ test('withdrawal uses AUTH, unfinished check, lock, atomic soft delete/membershi
     process.env.DB_QUERY_LOG = 'true'
     let statements: string[] = []
     t.mock.method(console, 'info', (message: string) => { statements.push(message.replace(/^SQL:\s*/, '').replace(/\s+/g, ' ').trim()) })
-    const trace = async <T>(count: number, work: () => Promise<T>) => {
+    const trace = async <T>(count: number, work: () => Promise<T>, ending = 'ROLLBACK') => {
       statements = []
       const result = await work()
       assert.equal(statements.length, count, statements.join('\n'))
-      assert.doesNotMatch(statements.join('\n'), /^(?:BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory_xact_lock|FOR UPDATE|FOR SHARE|mutation_requests/m)
-      if (count) assert.match(statements[0], /^SELECT .* FROM users u WHERE u\.id = \$1$/)
-      if (count >= 2) assert.match(statements[1], /^SELECT .* FROM round_members rm JOIN rounds/)
-      if (count === 5) {
-        assert.equal(statements[2], 'SELECT pg_advisory_lock(1684106607)')
-        assert.match(statements[3], /^WITH unfinished AS MATERIALIZED/)
-        assert.equal(statements[4], 'SELECT pg_advisory_unlock(1684106607) AS unlocked')
-      }
+      assert.equal(statements[0], 'BEGIN')
+      assert.equal(statements[1], 'SELECT pg_advisory_xact_lock(1684106607)')
+      assert.equal(statements.at(-1), ending)
+      assert.doesNotMatch(statements.join('\n'), /pg_advisory_lock\(|pg_advisory_unlock|FOR UPDATE|FOR SHARE|mutation_requests/)
+      if (count >= 4) assert.match(statements[2], /^SELECT .* FROM users u WHERE u\.id = \$1$/)
+      if (count >= 5) assert.match(statements[3], /^SELECT .* FROM round_members rm JOIN rounds/)
+      if (count === 6) assert.match(statements[4], /^WITH unfinished AS MATERIALIZED/)
+      assert.equal((await client.query('SELECT pg_try_advisory_lock(1684106607) AS acquired')).rows[0].acquired, true,
+        'another connection can acquire the same lock after commit or rollback')
+      await client.query('SELECT pg_advisory_unlock(1684106607)')
       return result
     }
-    await trace(0, () => assert.rejects(withdrawAccount(null), code('unauthorized')))
-    await trace(2, () => assert.rejects(withdrawAccount(participant), error => {
+    await trace(3, () => assert.rejects(withdrawAccount(null), code('unauthorized')))
+    await trace(5, () => assert.rejects(withdrawAccount(participant), error => {
       assert.equal((error as { code: string }).code, 'unfinished_rounds')
       assert.equal((error as { details: { rounds: { id: string }[] } }).details.rounds[0].id, round.id)
       return true
@@ -82,13 +84,13 @@ test('withdrawal uses AUTH, unfinished check, lock, atomic soft delete/membershi
       }))
       return borrowed
     })
-    await trace(5, () => assert.rejects(withdrawAccount(owner), error => (error as { code: string }).code === '22012'))
+    await trace(6, () => assert.rejects(withdrawAccount(owner), error => (error as { code: string }).code === '22012'))
     connectionMock.mock.restore()
     const preserved = (await client.query(`SELECT u.deleted_at, COUNT(*) FILTER (WHERE m.left_at IS NULL)::int AS memberships
       FROM users u JOIN group_members m ON m.user_id=u.id WHERE u.id=$1 GROUP BY u.id`, [owner.userId])).rows[0]
     assert.deepEqual(preserved, { deleted_at: null, memberships: 2 })
 
-    const departed = await trace(5, () => withdrawAccount(owner))
+    const departed = await trace(6, () => withdrawAccount(owner), 'COMMIT')
     assert.deepEqual(new Set(departed.groupIds), new Set([group.id, second.id]))
     const saved = (await client.query(`SELECT u.deleted_at, u.account_number,
       bool_and(m.left_at=u.deleted_at) AS same_exit_time FROM users u JOIN group_members m ON m.user_id=u.id
@@ -96,8 +98,8 @@ test('withdrawal uses AUTH, unfinished check, lock, atomic soft delete/membershi
     assert.notEqual(saved.deleted_at, null)
     assert.equal(saved.account_number, '001234')
     assert.equal(saved.same_exit_time, true)
-    await trace(1, () => assert.rejects(withdrawAccount(owner), code('unauthorized')))
-    assert.deepEqual((await trace(5, () => withdrawAccount(alone))).groupIds, [])
+    await trace(4, () => assert.rejects(withdrawAccount(owner), code('unauthorized')))
+    assert.deepEqual((await trace(6, () => withdrawAccount(alone), 'COMMIT')).groupIds, [])
     statements = []
     const withdrawals = await Promise.allSettled([withdrawAccount(participant), withdrawAccount(participant)])
     assert.equal(withdrawals.filter(result => result.status === 'fulfilled').length, 1)

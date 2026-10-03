@@ -1,6 +1,6 @@
 import 'server-only'
 import { currentTimestamp, issueTokens, requireAccount, type AccessToken, type KakaoProfile } from '../../../../Global/Auth/Backend'
-import { AppError, withDatabaseConnection, withWriteLock, objectBody, mutationDigest, type Database } from '../../../../Global/Util/Backend'
+import { AppError, withDatabaseConnection, withWriteTransaction, objectBody, mutationDigest, type Database } from '../../../../Global/Util/Backend'
 import { getUnfinishedUserRounds } from '../../../Settle/Backend'
 import { normalizeBankAccountInput, type Account, type BankAccountInput, type UserAccountState, type SignInUserDTO, type BankAccountResponseDTO } from '../../Shared'
 import { alreadyOnboarded, bankAccountConflict, rejoinConfirmationRequired, unfinishedRounds } from '../Exception/UserException'
@@ -41,16 +41,14 @@ export async function updateBankAccount(access: AccessToken | null, requestKey: 
 }
 
 export function withdrawAccount(access: AccessToken | null) {
-  return withDatabaseConnection(async (client, discardConnection) => {
+  return withWriteTransaction(async client => {
     const account = await requireAccount(client, access)
     const rows = await getUnfinishedUserRounds(client, account.id)
     if (rows.length) throw unfinishedRounds(rows)
-    return withWriteLock(client, discardConnection, async () => {
-      const result = await repository.softDeleteUser(client, account.id, currentTimestamp())
-      if (result.unfinishedRounds.length) throw unfinishedRounds(result.unfinishedRounds)
-      if (!result.deleted) throw new AppError(401, 'unauthorized', '로그인이 필요합니다')
-      return { ok: true, userId: account.id, groupIds: result.groupIds }
-    })
+    const result = await repository.softDeleteUser(client, account.id, currentTimestamp())
+    if (result.unfinishedRounds.length) throw unfinishedRounds(result.unfinishedRounds)
+    if (!result.deleted) throw new AppError(401, 'unauthorized', '로그인이 필요합니다')
+    return { ok: true, userId: account.id, groupIds: result.groupIds }
   })
 }
 

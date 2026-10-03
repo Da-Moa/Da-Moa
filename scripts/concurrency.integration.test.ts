@@ -164,7 +164,7 @@ test('round creation racing participant withdrawal never creates unfinished part
   }
 })
 
-test('withdrawal rechecks unfinished participation after waiting for a round creation lock', async () => {
+test('withdrawal checks unfinished participation after waiting for a round creation lock', async () => {
   const fixture = await group()
   const gate = createDatabaseClient(testUrl!)
   const roundId = key()
@@ -181,10 +181,10 @@ test('withdrawal rechecks unfinished participation after waiting for a round cre
       const waiting = await gate.query(`SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid
         WHERE l.locktype='advisory' AND NOT l.granted AND a.application_name=$1`, [applicationName])
       if (waiting.rowCount) break
-      assert.ok(Date.now() < deadline, 'withdrawal did not finish its precheck and wait for the write lock')
+      assert.ok(Date.now() < deadline, 'withdrawal did not reach its write-lock wait')
       await sleep(20)
     }
-    // Commit a new round after withdrawal's first unfinished check, while it still waits for our lock.
+    // Commit a new round while withdrawal waits: its unfinished check must run after the lock.
     const now = currentTimestamp()
     await gate.query(`INSERT INTO rounds(id,group_id,creator_id,name,currency,status,version,created_at)
       VALUES($1,$2,$3,'락 대기 중 생성','KRW','RECORDING',1,$4)`, [roundId, fixture.groupId, fixture.owner.userId, now])
