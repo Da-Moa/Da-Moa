@@ -35,7 +35,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
     process.env.DB_QUERY_LOG = 'true'
     let statements: string[] = []
     const logger = t.mock.method(console, 'info', (message: string) => { statements.push(message.replace(/^SQL:\s*/, '').replace(/\s+/g, ' ').trim()) })
-    const trace = async <T>(count: number, write: boolean | 'receipt' | 'session' | 'connection' | 'cancel' | 'expense' | 'patch' | 'delete' | 'exclude', work: () => Promise<T>) => {
+    const trace = async <T>(count: number, write: boolean | 'receipt' | 'session' | 'connection' | 'cancel' | 'expense' | 'patch' | 'delete' | 'exclude' | 'confirm', work: () => Promise<T>) => {
       statements = []
       const result = await work()
       assert.equal(statements.length, count, statements.join('\n'))
@@ -53,10 +53,24 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         assert.ok(['COMMIT', 'ROLLBACK'].includes(statements.at(-1)!))
         assert.ok(statements.every(sql => !sql.includes('pg_advisory_unlock')))
       } else if (write === 'patch') {
-        assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
+        assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory_xact_lock|FOR UPDATE|FOR SHARE/.test(sql)))
         if (count) assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
         if (count > 1) assert.match(statements[1], /FROM rounds r JOIN round_members viewer.*LEFT JOIN expenses/)
-        if (count === 3) assert.match(statements[2], /UPDATE rounds.*version = \$13.*UPDATE expenses.*DELETE FROM expense_shares.*INSERT INTO expense_shares.*INSERT INTO mutation_requests/)
+        if (count >= 5) {
+          assert.equal(statements[2], 'SELECT pg_advisory_lock(1684106607)')
+          assert.match(statements[3], /UPDATE rounds.*version = \$13.*UPDATE expenses.*DELETE FROM expense_shares.*INSERT INTO expense_shares.*INSERT INTO mutation_requests/)
+          assert.equal(statements.at(-1), 'SELECT pg_advisory_unlock(1684106607) AS unlocked')
+        }
+      } else if (write === 'confirm') {
+        if (count) assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
+        if (count > 1) {
+          assert.equal(statements[1], 'BEGIN')
+          assert.match(statements[2], /FROM rounds r JOIN round_members viewer.*operation = 'round.confirm'/)
+          if (count >= 5) assert.equal(statements[3], 'SELECT pg_advisory_xact_lock(1684106607)')
+          if (count === 6) assert.match(statements[4], /UPDATE rounds.*UPDATE expenses.*INSERT INTO mutation_requests/)
+          assert.ok(['COMMIT', 'ROLLBACK'].includes(statements.at(-1)!))
+        }
+        assert.ok(statements.every(sql => !sql.includes('pg_advisory_unlock')))
       } else if (write === 'expense') {
         if (count) assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
         if (count > 1) {
@@ -248,9 +262,9 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       assert.ok(expenseRace.every(result => JSON.stringify(result) === JSON.stringify(expenseRace[0])))
       assert.equal((await db.query('SELECT 1 FROM expenses WHERE round_id=$1', [expenseRaceRound.id])).rowCount, 1)
       assert.equal((await db.query('SELECT version FROM rounds WHERE id=$1', [expenseRaceRound.id])).rows[0].version, 2)
-      const updated = await trace(3, 'patch', () => saveExpense(a, key(), round.id, { amount: '101', expectedVersion: version }, expense.id))
+      const updated = await trace(5, 'patch', () => saveExpense(a, key(), round.id, { amount: '101', expectedVersion: version }, expense.id))
       version = updated.version!
-      await t.test('expense PATCH uses three statements for creators/authors and atomic shares, version and replay', async () => {
+      await t.test('expense PATCH shares the write lock and atomically saves shares, version and replay', async () => {
         const patchRound = await createRound(a, uuidV7(), group.id, body)
         const original = await saveExpense(b, key(), patchRound.id, { ...expenseBody, expectedVersion: 1 })
         let patchVersion = original.version!
@@ -277,7 +291,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
           [b, { splitMode: 'ALL' }],
         ] as const) {
           const requestKey = key(), request = { ...input, expectedVersion: patchVersion }
-          const result = await trace(3, 'patch', () => saveExpense(actor, requestKey, patchRound.id, request, original.id, captured => {
+          const result = await trace(5, 'patch', () => saveExpense(actor, requestKey, patchRound.id, request, original.id, captured => {
             assert.equal(captured.groupId, group.id)
             assert.deepEqual(new Set(captured.userIds), new Set(body.participantIds))
           }))
@@ -293,7 +307,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         const failureKey = key(), constraint = `expense_patch_test_${key().replaceAll('-', '')}`
         await db.query(`ALTER TABLE mutation_requests ADD CONSTRAINT ${constraint} CHECK (request_key <> '${failureKey}') NOT VALID`)
         try {
-          await trace(3, 'patch', () => assert.rejects(saveExpense(a, failureKey, patchRound.id, { amount: '200', splitMode: 'SELECTED', participantIds: [a.userId], expectedVersion: patchVersion }, original.id), (error: { code: string }) => error.code === '23514'))
+          await trace(5, 'patch', () => assert.rejects(saveExpense(a, failureKey, patchRound.id, { amount: '200', splitMode: 'SELECTED', participantIds: [a.userId], expectedVersion: patchVersion }, original.id), (error: { code: string }) => error.code === '23514'))
           assert.deepEqual(await getRound(a, patchRound.id, new URLSearchParams()), before)
           assert.equal((await db.query('SELECT 1 FROM mutation_requests WHERE request_key=$1', [failureKey])).rowCount, 0)
         } finally { await db.query(`ALTER TABLE mutation_requests DROP CONSTRAINT ${constraint}`) }
@@ -439,15 +453,58 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       assert.ok(afterExclusion.expenses.every(item => item.participantIds.length === 2 && !item.participantIds.includes(c.userId)))
       assert.equal((await db.query('SELECT 1 FROM mutation_requests WHERE request_key=$1', [exclusionKey])).rowCount, 0)
       version = excluded.version!
+      await t.test('confirm uses six statements regardless of expenses and preserves validation, rollback and replay', async () => {
+        const confirmation = await createRound(b, uuidV7(), group.id, { ...body, participantIds: [a.userId, b.userId] })
+        for (const [actor, ticket, id, input, expected, count] of [
+          [null, '', confirmation.id, {}, 'unauthorized', 0],
+          [{ ...b, userId: randomUUID() }, '', confirmation.id, {}, 'unauthorized', 1],
+          [b, '', confirmation.id, {}, 'invalid_request_key', 1],
+          [a, key(), confirmation.id, { expectedVersion: 1 }, 'forbidden', 4],
+          [nonParticipant, key(), confirmation.id, { expectedVersion: 1 }, 'not_found', 4],
+          [b, key(), randomUUID(), { expectedVersion: 1 }, 'not_found', 4],
+          [b, key(), confirmation.id, { expectedVersion: 2 }, 'stale_round', 4],
+          [b, key(), confirmation.id, { expectedVersion: 1 }, 'empty_expenses', 4],
+        ] as const) await trace(count, 'confirm', () => assert.rejects(roundCommand(actor, ticket, id, 'confirm', input), (error: { code: string }) => error.code === expected))
+        let expectedVersion = 1
+        for (const splitMode of ['ALL', 'SELECTED', 'CUSTOM'] as const) {
+          expectedVersion = (await saveExpense(b, key(), confirmation.id, { description: splitMode, amount: '101', payerId: b.userId, splitMode, expectedVersion,
+            ...(splitMode === 'SELECTED' ? { participantIds: [a.userId, b.userId] } : splitMode === 'CUSTOM' ? { customShares: [{ userId: a.userId, amount: '40' }, { userId: b.userId, amount: '61' }] } : {}) })).version!
+        }
+        const requestKey = key(), request = { expectedVersion }
+        const constraint = `confirm_test_${key().replaceAll('-', '')}`
+        await db.query(`ALTER TABLE expenses ADD CONSTRAINT ${constraint} CHECK (round_id <> '${confirmation.id}' OR base_share_minor IS NULL) NOT VALID`)
+        try {
+          await trace(6, 'confirm', () => assert.rejects(roundCommand(b, requestKey, confirmation.id, 'confirm', request), (error: { code: string }) => error.code === '23514'))
+          const unchanged = await getRound(b, confirmation.id, new URLSearchParams())
+          assert.equal(unchanged.status, 'RECORDING')
+          assert.equal(unchanged.version, expectedVersion)
+          assert.equal((await db.query('SELECT 1 FROM expenses WHERE round_id=$1 AND (base_share_minor IS NOT NULL OR remainder_units IS NOT NULL)', [confirmation.id])).rowCount, 0)
+          assert.equal((await db.query('SELECT 1 FROM mutation_requests WHERE request_key=$1', [requestKey])).rowCount, 0)
+        } finally { await db.query(`ALTER TABLE expenses DROP CONSTRAINT ${constraint}`) }
+        const result = await trace(6, 'confirm', () => roundCommand(b, requestKey, confirmation.id, 'confirm', request, audience => {
+          assert.equal(audience.groupId, group.id)
+          assert.deepEqual(new Set(audience.userIds), new Set([a.userId, b.userId]))
+        }))
+        assert.equal(result.status, 'CONFIRMED')
+        assert.equal(result.version, expectedVersion + 1)
+        const confirmed = await getRound(b, confirmation.id, new URLSearchParams())
+        for (const expense of confirmed.expenses) {
+          if (expense.splitMode === 'CUSTOM') assert.deepEqual(expense.shares.map(share => share.assignedAmountMinor).sort(), ['40', '61'])
+          else { assert.equal(expense.baseShareMinor, '50'); assert.equal(expense.remainderUnits, 1) }
+        }
+        assert.deepEqual(await trace(5, 'confirm', () => roundCommand(b, requestKey, confirmation.id, 'confirm', request, () => assert.fail('replay must not publish'))), result)
+        await trace(4, 'confirm', () => assert.rejects(roundCommand(b, requestKey, confirmation.id, 'confirm', { expectedVersion: result.version }), (error: { code: string }) => error.code === 'idempotency_conflict'))
+        await trace(4, 'confirm', () => assert.rejects(roundCommand(b, key(), confirmation.id, 'confirm', { expectedVersion: result.version }), (error: { code: string }) => error.code === 'invalid_round_state'))
+      })
       assert.equal((await trace(3, 'connection', () => checkExclusion(a, round.id, c.userId))).reason, 'already_excluded')
       await trace(5, false, () => getSettlement(a, round.id))
       const command = async (action: string, count: number) => {
-        const result = await trace(count, true, () => roundCommand(a, key(), round.id, action, { expectedVersion: version }))
+        const result = await trace(count, action === 'confirm' ? 'confirm' : true, () => roundCommand(a, key(), round.id, action, { expectedVersion: version }))
         version = result.version!
       }
-      await command('confirm', 12)
+      await command('confirm', 6)
       await command('reopen', 10)
-      await command('confirm', 12)
+      await command('confirm', 6)
       await command('send', 12)
       // One expense: two shares + three historical members' balances + one transfer.
       await command('draw', 17)
@@ -517,7 +574,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         assert.equal((await probe.query('SELECT pg_try_advisory_lock(1684106607) AS acquired')).rows[0].acquired, true)
         await probe.query('SELECT pg_advisory_unlock(1684106607)')
       } finally { await probe.end() }
-      evenVersion = (await trace(12, true, () => roundCommand(a, key(), even.id, 'confirm', { expectedVersion: evenVersion }))).version!
+      evenVersion = (await trace(6, 'confirm', () => roundCommand(a, key(), even.id, 'confirm', { expectedVersion: evenVersion }))).version!
       // Two shares + two balances + one transfer, finalized directly by send.
       evenVersion = (await trace(20, true, () => roundCommand(a, key(), even.id, 'send', { expectedVersion: evenVersion }))).version!
       await trace(9, true, () => roundCommand(a, key(), even.id, 'force-complete', { expectedVersion: evenVersion }))

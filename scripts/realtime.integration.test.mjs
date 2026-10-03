@@ -242,6 +242,40 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     await new Promise(resolve => setTimeout(resolve, 250))
     assert.equal((output.slice(expenseReplayOutput).match(/SQL:/g) ?? []).length, 5)
     let expenseVersion = savedExpense.version
+    const confirmHeaders = { ...roundHeaders, 'idempotency-key': randomUUID() }
+    const confirmBody = JSON.stringify({ expectedVersion: expenseVersion })
+    const confirmMessages = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
+    const confirmOutput = output.length
+    const confirmResponse = await fetch(`${origin}/api/rounds/${expenseRoundId}/confirm`, { method: 'POST', headers: confirmHeaders, body: confirmBody })
+    assert.equal(confirmResponse.status, 200)
+    const confirmed = (await confirmResponse.json()).data
+    for (const [bytes] of await Promise.all(confirmMessages)) assert.deepEqual(JSON.parse(bytes.toString()), {
+      type: 'invalidate', keys: ['rounds', `group-rounds:${groupId}`, `round:${expenseRoundId}`, `settlement:${expenseRoundId}`],
+    })
+    const confirmSql = output.slice(confirmOutput).split('SQL:').slice(1).map(sql => sql.trim())
+    assert.equal(confirmSql.length, 6, 'confirmation and WebSocket publication use exactly six SQL calls')
+    assert.match(confirmSql[0], /FROM\s+users/)
+    assert.match(confirmSql[1], /^BEGIN/)
+    assert.match(confirmSql[2], /operation = 'round.confirm'/)
+    assert.match(confirmSql[3], /pg_advisory_xact_lock/)
+    assert.match(confirmSql[4], /UPDATE\s+rounds[\s\S]*UPDATE\s+expenses[\s\S]*INSERT INTO\s+mutation_requests/)
+    assert.match(confirmSql[5], /^COMMIT/)
+    const confirmReplayOutput = output.length
+    let replayInvalidation = false
+    const onReplay = () => { replayInvalidation = true }
+    mine.socket.on('message', onReplay)
+    try {
+      const replay = await fetch(`${origin}/api/rounds/${expenseRoundId}/confirm`, { method: 'POST', headers: confirmHeaders, body: confirmBody })
+      assert.deepEqual((await replay.json()).data, confirmed)
+      await new Promise(resolve => setTimeout(resolve, 250))
+      assert.equal(replayInvalidation, false, 'confirmation replay must not publish again')
+      assert.equal((output.slice(confirmReplayOutput).match(/SQL:/g) ?? []).length, 5)
+    } finally { mine.socket.off('message', onReplay) }
+    const reopenMessages = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
+    const reopened = await fetch(`${origin}/api/rounds/${expenseRoundId}/reopen`, { method: 'POST', headers: { ...roundHeaders, 'idempotency-key': randomUUID() }, body: JSON.stringify({ expectedVersion: confirmed.version }) })
+    assert.equal(reopened.status, 200)
+    expenseVersion = (await reopened.json()).data.version
+    await Promise.all(reopenMessages)
     for (const path of [`rounds/${expenseRoundId}/expenses/${savedExpense.id}`, `rounds/${expenseRoundId}`]) {
       const cleanupMessages = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
       const cleanup = await fetch(`${origin}/api/${path}`, { method: 'DELETE', headers: { ...roundHeaders, 'idempotency-key': randomUUID() }, body: JSON.stringify({ expectedVersion: expenseVersion }) })

@@ -384,9 +384,9 @@ test('expense DELETE rechecks state and concurrent deletion replay after its pre
   }
 })
 
-// Pause a real transaction after its old-version read so PATCH wins deterministically.
+// Pause after the old-version read, before the shared lock, so PATCH wins deterministically.
 test('expense PATCH invalidates already-read writes and rechecks a losing conditional UPDATE', { timeout: 15000 }, async t => {
-  for (const action of ['confirm', 'delete', 'create', 'patch'] as const) {
+  for (const action of ['confirm', 'delete', 'patch'] as const) {
     const fixture = await recordingRound()
     const pool = getDatabasePool(process.env.DATABASE_URL!)
     const connect = pool.connect.bind(pool)
@@ -403,7 +403,7 @@ test('expense PATCH invalidates already-read writes and rechecks a losing condit
           const pending = Reflect.apply(target, receiver, args)
           const sql = String(args[0])
           statements.push(sql)
-          if (!held && (action === 'create' ? sql.includes('INSERT INTO expenses') : action === 'patch' || action === 'delete' ? sql.includes('LEFT JOIN expenses') : sql.startsWith('SELECT r.*,g.name'))) {
+          if (!held && (action === 'patch' || action === 'delete' ? sql.includes('LEFT JOIN expenses') : sql.includes("operation='round.confirm'"))) {
             held = true
             if (action !== 'patch') queryMock.mock.restore()
             return pending.then(async (result: unknown) => { reached(); await gate; return result })
@@ -417,8 +417,7 @@ test('expense PATCH invalidates already-read writes and rechecks a losing condit
     const olderKey = key()
     const older = (action === 'confirm' ? roundCommand(fixture.owner, olderKey, fixture.roundId, 'confirm', { expectedVersion: fixture.version })
       : action === 'delete' ? deleteExpense(fixture.owner, olderKey, fixture.roundId, fixture.expenseId, { expectedVersion: fixture.version })
-      : action === 'patch' ? saveExpense(fixture.owner, olderKey, fixture.roundId, { description: '오래된 수정', expectedVersion: fixture.version }, fixture.expenseId)
-      : saveExpense(fixture.owner, olderKey, fixture.roundId, { description: '오래된 생성', amount: '5', payerId: fixture.owner.userId, splitMode: 'ALL', expectedVersion: fixture.version }))
+      : saveExpense(fixture.owner, olderKey, fixture.roundId, { description: '오래된 수정', expectedVersion: fixture.version }, fixture.expenseId))
       .then(() => ({ error: undefined }), error => ({ error }))
     try {
       await paused
@@ -427,10 +426,11 @@ test('expense PATCH invalidates already-read writes and rechecks a losing condit
       assert.equal((await older).error?.code, 'stale_round', action)
       restoreQuery?.()
       if (action === 'patch') {
-        assert.equal(statements.length, 4)
-        assert.match(statements[2], /UPDATE rounds.*version=\$13/s)
-        assert.match(statements[3], /LEFT JOIN expenses/)
-        assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK)|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
+        assert.equal(statements.length, 6)
+        assert.equal(statements[2], 'SELECT pg_advisory_lock(1684106607)')
+        assert.match(statements[3], /UPDATE rounds.*version=\$13/s)
+        assert.match(statements[4], /LEFT JOIN expenses/)
+        assert.equal(statements[5], 'SELECT pg_advisory_unlock(1684106607) AS unlocked')
       }
       const current = await getRound(fixture.owner, fixture.roundId, new URLSearchParams())
       assert.equal(current.status, 'RECORDING')
@@ -442,4 +442,64 @@ test('expense PATCH invalidates already-read writes and rechecks a losing condit
       assert.equal((await inspect(client => client.query('SELECT 1 FROM mutation_requests WHERE request_key=$1', [olderKey]))).rowCount, 0)
     } finally { resume(); connectionMock.mock.restore(); await older; restoreQuery?.() }
   }
+})
+
+test('confirm holds the shared lock until commit and blocks expense creation/update and concurrent replay', { timeout: 15000 }, async t => {
+  const fixture = await recordingRound()
+  const pool = getDatabasePool(process.env.DATABASE_URL!)
+  const connect = pool.connect.bind(pool)
+  let resume!: () => void, reached!: () => void
+  const paused = new Promise<void>(resolve => { reached = resolve })
+  const gate = new Promise<void>(resolve => { resume = resolve })
+  const connectionMock = t.mock.method(pool, 'connect', async () => {
+    connectionMock.mock.restore()
+    const borrowed = await connect()
+    const queryMock = t.mock.method(borrowed, 'query', new Proxy(borrowed.query, {
+      apply(target, receiver, args) {
+        const pending = Reflect.apply(target, receiver, args)
+        if (String(args[0]) === 'SELECT pg_advisory_xact_lock(1684106607)') {
+          queryMock.mock.restore()
+          return pending.then(async (result: unknown) => { reached(); await gate; return result })
+        }
+        return pending
+      },
+    }))
+    return borrowed
+  })
+  const requestKey = key(), body = { expectedVersion: fixture.version }
+  const confirming = roundCommand(fixture.owner, requestKey, fixture.roundId, 'confirm', body)
+  let competing: Promise<PromiseSettledResult<unknown>[]> | undefined
+  try {
+    await paused
+    competing = Promise.allSettled([
+      saveExpense(fixture.owner, key(), fixture.roundId, { description: '대기 중 추가', amount: '5', payerId: fixture.owner.userId, splitMode: 'ALL', ...body }),
+      saveExpense(fixture.participant, key(), fixture.roundId, { description: '대기 중 수정', ...body }, fixture.expenseId),
+      roundCommand(fixture.owner, requestKey, fixture.roundId, 'confirm', body),
+    ])
+    let waiting = false
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const locks = await inspect(client => client.query(`SELECT count(*)::int AS count FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid
+        WHERE l.locktype='advisory' AND NOT l.granted AND a.application_name=$1`, [applicationName]))
+      if (locks.rows[0].count === 3) { waiting = true; break }
+      await sleep(20)
+    }
+    assert.ok(waiting, 'create, PATCH and same-key confirm must all wait for the confirmation lock')
+    const beforeCommit = await getRound(fixture.owner, fixture.roundId, new URLSearchParams())
+    assert.equal(beforeCommit.status, 'RECORDING')
+    assert.equal(beforeCommit.version, fixture.version)
+    resume()
+    const confirmed = await confirming, outcomes = await competing
+    for (const outcome of outcomes.slice(0, 2)) {
+      assert.equal(outcome.status, 'rejected')
+      assert.equal((outcome as PromiseRejectedResult).reason.code, 'invalid_round_state')
+    }
+    assert.deepEqual(outcomes[2], { status: 'fulfilled', value: confirmed })
+    const current = await getRound(fixture.owner, fixture.roundId, new URLSearchParams())
+    assert.equal(current.status, 'CONFIRMED')
+    assert.equal(current.version, fixture.version + 1)
+    assert.equal(current.expenses.length, 1)
+    assert.equal(current.expenses[0].description, '경합 지출')
+    assert.equal(current.expenses[0].baseShareMinor, '1')
+    assert.equal(current.expenses[0].remainderUnits, 1)
+  } finally { resume(); connectionMock.mock.restore(); await Promise.allSettled([confirming, competing]) }
 })

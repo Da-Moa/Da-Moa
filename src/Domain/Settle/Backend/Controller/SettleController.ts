@@ -33,7 +33,10 @@ export async function getSettleResponse(request: NextRequest, path: string[]): P
       affectedAudience = null
       data = await saveExpense(access, key, path[1], await jsonBody(request), undefined, audience => { affectedAudience = audience })
     }
-    else if (path[0] === 'rounds' && path.length === 3 && ['confirm', 'reopen', 'send', 'draw', 'complete', 'force-complete'].includes(path[2]) && method === 'POST') data = await roundCommand(access, key, path[1], path[2], await jsonBody(request))
+    else if (path[0] === 'rounds' && path.length === 3 && ['confirm', 'reopen', 'send', 'draw', 'complete', 'force-complete'].includes(path[2]) && method === 'POST') {
+      if (path[2] === 'confirm') affectedAudience = null
+      data = await roundCommand(access, key, path[1], path[2], await jsonBody(request), audience => { affectedAudience = audience })
+    }
     else if (path[0] === 'rounds' && path.length === 4 && path[2] === 'expenses' && method === 'PATCH') {
       affectedAudience = null
       data = await saveExpense(access, key, path[1], await jsonBody(request), path[3], audience => { affectedAudience = audience })

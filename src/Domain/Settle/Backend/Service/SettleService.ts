@@ -7,7 +7,7 @@ import { CURRENCIES, formatMoney, MAX_EXPENSE_MAJOR, MAX_ROUND_TOTAL_MAJOR, mino
 import { calculateBase, finalizeSettlement, previewSettlement, validateCustomShares } from '../../Shared'
 import type { ExclusionCheck, Expense, MutationResult, RoundDetail, RoundMember, RoundStatus, RoundSummary, SettlementDTO, SettlementTransfer } from '../../Shared'
 
-import type { RoundRow, MemberRow, ExpenseRow, ShareRow, ReceiptRow, ExpenseUpdateRow, ExpenseDeletionRow, MemberExclusionRow } from '../DAO/SettleDAO'
+import type { RoundRow, RoundConfirmationRow, MemberRow, ExpenseRow, ShareRow, ReceiptRow, SettlementExpenseRow, ExpenseUpdateRow, ExpenseDeletionRow, MemberExclusionRow } from '../DAO/SettleDAO'
 import { duplicateRound, missing } from '../Exception/SettleException'
 import * as repository from '../Repository/SettleRepository'
 
@@ -60,7 +60,11 @@ function expenseDetails(row: ExpenseRow, part: Omit<ShareRow, 'expense_id'>[], r
 
 async function settlementExpensesFor(client: Database, roundId: string): Promise<(Pick<Expense, 'id' | 'payerId' | 'amountMinor' | 'splitMode' | 'participantIds'> & { shares: Pick<Expense['shares'][number], 'userId' | 'assignedAmountMinor'>[] })[]> {
   const { rows } = await repository.findSettlementExpenses(client, roundId)
-  return rows.map(row => ({ id: row.id, payerId: row.payer_id, amountMinor: row.amount_minor, splitMode: row.split_mode, participantIds: row.participant_ids, shares: row.shares ?? [] }))
+  return rows.map(settlementExpenseDetails)
+}
+
+function settlementExpenseDetails(row: SettlementExpenseRow) {
+  return { id: row.id, payerId: row.payer_id, amountMinor: row.amount_minor, splitMode: row.split_mode, participantIds: row.participant_ids, shares: row.shares ?? [] }
 }
 
 async function settlementChecksFor(client: Database, roundId: string) {
@@ -101,7 +105,7 @@ export async function getRound(access: Identity, roundId: string, query: URLSear
     const expenses = pageOf(round.expenses.map(row => expenseDetails(row, row.shares, row.receipts)), limit, row => row)
     let transfers: SettlementTransfer[] = [], pendingRemainderMinor = '0'
     if (round.finalized_at === null) {
-      const allExpenses = round.settlement_expenses.map(row => ({ id: row.id, payerId: row.payer_id, amountMinor: row.amount_minor, splitMode: row.split_mode, participantIds: row.participant_ids, shares: row.shares ?? [] }))
+      const allExpenses = round.settlement_expenses.map(settlementExpenseDetails)
       if (allExpenses.length) ({ transfers, pendingRemainderMinor } = previewSettlement(allExpenses, members.map(member => member.userId)))
     } else {
       transfers = round.transfers.map(row => ({ senderId: row.sender_id, receiverId: row.receiver_id, amountMinor: row.amount_minor }))
@@ -270,7 +274,7 @@ function validateExpenseUpdate(round: ExpenseUpdateRow, userId: string, expected
 
 export async function saveExpense(access: Identity, key: string, roundId: string, body: ExpenseRequestDTO | Record<string, unknown>, expenseId?: string, captureAudience?: (audience: { groupId: string; userIds: string[] }) => void) {
   if (!expenseId) return createExpense(access, key, roundId, body, captureAudience)
-  return withDatabaseConnection(async client => {
+  return withDatabaseConnection(async (client, discardConnection) => {
     const userId = (await requireAccount(client, access)).id
     const digest = mutationDigest(key, { roundId, expenseId, ...body })
     const round = (await repository.findExpenseUpdate(client, roundId, expenseId, userId, key)).rows[0]
@@ -283,17 +287,19 @@ export async function saveExpense(access: Identity, key: string, roundId: string
     const maximum = minorLimit(MAX_ROUND_TOTAL_MAJOR, round.currency)
     if (nextTotal > maximum) badInput('round_total_limit_exceeded', `회차 전체 지출은 ${formatMoney(maximum.toString(), round.currency)} 이하여야 해요`)
     const amounts = input.participantIds.map(id => input.assignedShares.find(share => share.userId === id)?.assignedAmountMinor ?? null)
-    const result = await repository.updateExpense(client, expenseId, roundId, userId, key, digest, input, amounts, round.version, maximum.toString(), nowSeconds())
-    if (!result) {
-      // A concurrent winner may have committed this same key after our SELECT.
-      const current = (await repository.findExpenseUpdate(client, roundId, expenseId, userId, key)).rows[0]
-      const replay = mutationResult<MutationResult>(current, digest)
-      if (replay) return replay
-      validateExpenseUpdate(current, userId, body.expectedVersion)
-      throw new AppError(409, 'stale_round', '다른 변경이 먼저 저장됐어요. 최신 내역을 확인해 주세요')
-    }
-    captureAudience?.({ groupId: round.group_id, userIds: round.user_ids })
-    return result
+    return withWriteLock(client, discardConnection, async () => {
+      const result = await repository.updateExpense(client, expenseId, roundId, userId, key, digest, input, amounts, round.version, maximum.toString(), nowSeconds())
+      if (!result) {
+        // A concurrent winner may have committed this same key after our SELECT.
+        const current = (await repository.findExpenseUpdate(client, roundId, expenseId, userId, key)).rows[0]
+        const replay = mutationResult<MutationResult>(current, digest)
+        if (replay) return replay
+        validateExpenseUpdate(current, userId, body.expectedVersion)
+        throw new AppError(409, 'stale_round', '다른 변경이 먼저 저장됐어요. 최신 내역을 확인해 주세요')
+      }
+      captureAudience?.({ groupId: round.group_id, userIds: round.user_ids })
+      return result
+    })
   })
 }
 
@@ -385,9 +391,13 @@ export async function excludeMember(access: Identity, key: string, roundId: stri
 }
 
 async function validatedExpenses(client: Database, roundId: string, currency: Currency) {
-  const members = await membersFor(client, roundId), active = members.filter(m => m.excludedAt === null).map(m => m.userId).sort()
+  const members = await membersFor(client, roundId), items = await settlementExpensesFor(client, roundId)
+  return validateExpenses(items, members, currency)
+}
+
+function validateExpenses(items: Awaited<ReturnType<typeof settlementExpensesFor>>, members: RoundMember[], currency: Currency) {
+  const active = members.filter(m => m.excludedAt === null).map(m => m.userId).sort()
   if (active.length < 2) throw new AppError(409, 'minimum_participants', '회차는 최소 2명이어야 합니다')
-  const items = await settlementExpensesFor(client, roundId)
   if (!items.length) throw new AppError(409, 'empty_expenses', '지출 내역이 없습니다')
   let total = 0n
   for (const expense of items) {
@@ -413,7 +423,41 @@ async function finalize(client: Database, roundId: string, currency: Currency, d
   await repository.finalizeRound(client, roundId, nowSeconds())
 }
 
-export async function roundCommand(access: Identity, key: string, roundId: string, action: string, body: VersionRequestDTO | Record<string, unknown>, onCancelled?: (audience: { groupId: string; userIds: string[] }) => void): Promise<MutationResult> {
+function validateRoundConfirmation(round: RoundConfirmationRow, expectedVersion: unknown) {
+  if (!round.id) throw missing()
+  creator(round)
+  version(round, expectedVersion)
+  state(round, 'RECORDING')
+  validateExpenses(round.expenses.map(settlementExpenseDetails), round.members.map(memberDetails), round.currency)
+}
+
+async function confirmRound(access: Identity, key: string, roundId: string, body: VersionRequestDTO | Record<string, unknown>, captureAudience?: (audience: { groupId: string; userIds: string[] }) => void): Promise<MutationResult> {
+  let userId: string, digest: string, round: RoundConfirmationRow, replay: MutationResult | null
+  return withWriteTransaction(async client => {
+    if (replay) return replay
+    const current = await repository.confirmRound(client, roundId, userId, key, digest, round.version, nowSeconds())
+    if (!current.actor_active) throw new AppError(401, 'unauthorized', '로그인이 필요합니다')
+    const result = mutationResult<MutationResult>(current, digest)
+    if (!result) {
+      validateRoundConfirmation(current, body.expectedVersion)
+      throw new AppError(409, 'stale_round', '다른 변경이 먼저 저장됐어요. 최신 내역을 확인해 주세요')
+    }
+    if (current.confirmed) captureAudience?.({ groupId: current.group_id, userIds: current.user_ids })
+    return result
+  }, async client => {
+    const { rows: [current] } = await repository.findRoundConfirmation(client, roundId, userId, key)
+    round = current
+    replay = mutationResult<MutationResult>(round, digest)
+    if (!replay) validateRoundConfirmation(round, body.expectedVersion)
+  }, async client => {
+    userId = (await requireAccount(client, access)).id
+    onlyKeys(body, ['expectedVersion'])
+    digest = mutationDigest(key, { roundId, ...body })
+  })
+}
+
+export async function roundCommand(access: Identity, key: string, roundId: string, action: string, body: VersionRequestDTO | Record<string, unknown>, captureAudience?: (audience: { groupId: string; userIds: string[] }) => void): Promise<MutationResult> {
+  if (action === 'confirm') return confirmRound(access, key, roundId, body, captureAudience)
   if (action === 'cancel') {
     let userId: string
     return withWriteTransaction(async client => {
@@ -429,30 +473,19 @@ export async function roundCommand(access: Identity, key: string, roundId: strin
       if (round.has_expenses) throw new AppError(409, 'round_has_expenses', '지출 기록이 있는 회차는 취소할 수 없어요. 지출을 먼저 삭제해 주세요')
       const result = { id: roundId, roundId }
       await repository.deleteRound(client, roundId, userId, key, digest, result, nowSeconds())
-      onCancelled?.({ groupId: round.group_id, userIds: round.user_ids })
+      captureAudience?.({ groupId: round.group_id, userIds: round.user_ids })
       return result
     }, async client => { userId = (await requireAccount(client, access)).id })
   }
   onlyKeys(body, ['expectedVersion'])
-  if (!['confirm', 'reopen', 'send', 'draw', 'complete', 'force-complete'].includes(action)) throw missing()
+  if (!['reopen', 'send', 'draw', 'complete', 'force-complete'].includes(action)) throw missing()
   return domainMutation(access, key, `round.${action}`, { roundId, ...body }, async (client, userId) => {
     const round = await roundFor(client, roundId, userId)
     creator(round)
     if (action === 'draw' && round.finalized_at !== null) return { id: roundId, roundId, status: round.status, version: round.version }
     version(round, body.expectedVersion)
-    let confirmed: MutationResult | undefined
     const now = nowSeconds()
-    if (action === 'confirm') {
-      state(round, 'RECORDING')
-      const { items } = await validatedExpenses(client, roundId, round.currency as Currency)
-      confirmed = await bump(client, roundId, round.version)
-      for (const expense of items) {
-        if (expense.splitMode === 'CUSTOM') continue
-        const base = calculateBase(BigInt(expense.amountMinor), expense.participantIds.length)
-        await repository.saveBaseShare(client, expense.id, base.base.toString(), base.remainder)
-      }
-      await repository.confirmRound(client, roundId, now)
-    } else if (action === 'reopen') {
+    if (action === 'reopen') {
       state(round, 'CONFIRMED')
       await repository.clearBaseShares(client, roundId)
       await repository.reopenRound(client, roundId)
@@ -474,7 +507,7 @@ export async function roundCommand(access: Identity, key: string, roundId: strin
       }
       await repository.completeRound(client, roundId, now)
     }
-    return confirmed ? { ...confirmed, status: 'CONFIRMED' } : bump(client, roundId, round.version)
+    return bump(client, roundId, round.version)
   })
 }
 

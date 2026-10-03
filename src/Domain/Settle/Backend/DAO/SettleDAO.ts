@@ -31,6 +31,10 @@ export type ReceiptRow = { id: string; expense_id: string; mime_type: string; by
 export type SettlementExpenseRow = Pick<ExpenseRow, 'id' | 'payer_id' | 'amount_minor' | 'split_mode'> & {
   participant_ids: string[]; shares: { userId: string; assignedAmountMinor: string | null }[] | null
 }
+export type RoundConfirmationRow = RoundRow & {
+  members: MemberRow[]; expenses: SettlementExpenseRow[]; user_ids: string[]; actor_active: boolean;
+  request_digest: string | null; response_metadata: unknown; confirmed?: boolean
+}
 export type RoundDetailRow = RoundRow & {
   members: MemberRow[];
   expenses: (ExpenseRow & { shares: Omit<ShareRow, 'expense_id'>[]; receipts: Pick<ReceiptRow, 'id' | 'mime_type' | 'byte_size'>[] })[];

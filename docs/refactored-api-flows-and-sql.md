@@ -981,15 +981,15 @@ SQL 순서: **AUTH → 요청 검증(SQL 0회) → BEGIN → transaction lock �
 
 ExpenseForm.save() → PATCH → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.saveExpense(ExpenseRequestDTO,expenseId) → MutationResult → WebSocket invalidation 시 상세 GET 1회.
 
-1. withDatabaseConnection에서 AUTH 내 정보 조회(+1). JWT·활성 회원·가입 완료를 확인하고 요청 키·본문 digest를 검증한다. BEGIN/COMMIT/ROLLBACK·advisory lock·FOR UPDATE/SHARE·SET을 사용하지 않는다.
+1. withDatabaseConnection에서 AUTH 내 정보 조회(+1). JWT·활성 회원·가입 완료를 확인하고 요청 키·본문 digest를 검증한다. BEGIN/COMMIT/ROLLBACK·FOR UPDATE/SHARE·SET을 사용하지 않는다.
 2. Repository.findExpenseUpdate() 한 SQL(+1)에서 본인의 회차 참여 이력·생성자·상태·버전·통화·대상 지출·활성 부담자·기존 부담금·회차 합계·멱등 성공 기록·알림 대상 ID를 함께 읽는다. 같은 키/본문 성공은 재생하고 다른 본문은 409 idempotency_conflict다. 성공 재생은 지출이 나중에 삭제되어도 가능하다.
 3. RECORDING 상태에서 지출 작성자(제외되지 않은 참여자) 또는 회차 생성자만 허용한다. 결제자/모임 생성자라는 이유만으로 수정할 수 없다. expectedVersion·통화별 금액·결제자·부담자·CUSTOM 합계·기존 금액을 대체한 회차 한도를 검사한다. 생략 필드는 기존 값·SELECTED 부담자·CUSTOM 부담금으로 유지한다. 권한/입력 거절은 추가 SQL 없이 끝난다.
-4. Repository.updateExpense() 단일 CTE SQL(+1). 현재 권한·참여자·회차 한도를 재검사하고 rounds의 RECORDING·미종료·expectedVersion 조건부 UPDATE로 버전을 증가시킨 요청만 지출을 수정한다. 기존 기본 몫·나머지를 초기화하고, 빠진 부담자는 DELETE, 유지/추가된 부담자는 UPSERT하며 최종 부담금을 초기화한다. 성공 응답을 mutation_requests에 함께 저장한다. 어느 쓰기든 실패하면 SQL 전체가 취소되어 지출·부담금·버전·성공 기록이 부분 저장되지 않는다.
-5. 성공 시 2번에서 확보한 대상에게 재조회 키만 발행한다. 수신자 조회 SQL·성공 직후 프론트의 직접 GET은 없다. 조건부 UPDATE가 경합으로 실패하면 통합 조회 1회를 추가해 같은 키 성공을 재생하거나 최신 상태/버전 오류를 반환한다. 버전 충돌 복구는 S6과 같다.
+4. withWriteLock()으로 지출 생성·확정과 같은 pg_advisory_lock(1684106607)을 획득(+1)한 뒤 Repository.updateExpense() 단일 CTE SQL(+1)을 실행한다. 현재 권한·참여자·회차 한도를 재검사하고 rounds의 RECORDING·미종료·expectedVersion 조건부 UPDATE로 버전을 증가시킨 요청만 지출을 수정한다. 기존 기본 몫·나머지를 초기화하고, 빠진 부담자는 DELETE, 유지/추가된 부담자는 UPSERT하며 최종 부담금을 초기화한다. 성공 응답을 mutation_requests에 함께 저장한다. 어느 쓰기든 실패하면 SQL 전체가 취소되어 지출·부담금·버전·성공 기록이 부분 저장되지 않는다.
+5. 같은 연결에서 pg_advisory_unlock(+1)을 finally로 실행한다. 실패해도 락을 해제하며 해제 실패 연결은 폐기한다. 성공 시 2번에서 확보한 대상에게 재조회 키만 발행한다. 수신자 조회 SQL·성공 직후 프론트의 직접 GET은 없다. 조건부 UPDATE가 경합으로 실패하면 통합 조회 1회를 추가해 같은 키 성공을 재생하거나 최신 상태/버전 오류를 반환한다. 버전 충돌 복구는 S6과 같다.
 
-SQL 순서: **AUTH → 지출/권한/멱등 통합 조회 → 조건부 UPDATE = 3회**. 생성자·작성자·ALL/SELECTED/CUSTOM·부분 수정 모두 같다. 조회 후 권한/입력/상태/버전 거절과 순차 성공 재생은 **2회**, 키 오류는 AUTH **1회**, JWT 거절은 **0회**다. UPDATE 경합으로 마지막 통합 조회가 필요하면 **4회**다. 명시적 트랜잭션·락은 없으며 UPDATE 자체의 PostgreSQL 행 잠금은 유지된다([동시 UPDATE의 WHERE 재검사](https://www.postgresql.org/docs/17/transaction-iso.html)).
+SQL 순서: **AUTH → 지출/권한/멱등 통합 조회 → 세션 lock → 조건부 UPDATE → unlock = 5회**. 생성자·작성자·ALL/SELECTED/CUSTOM·부분 수정 모두 같다. 조회 후 권한/입력/상태/버전 거절과 순차 성공 재생은 **2회**, 키 오류는 AUTH **1회**, JWT 거절은 **0회**다. UPDATE 경합으로 마지막 통합 조회가 필요하면 **6회**다. 명시적 트랜잭션은 없으며 UPDATE 자체의 PostgreSQL 행 잠금은 유지된다([동시 UPDATE의 WHERE 재검사](https://www.postgresql.org/docs/17/transaction-iso.html)).
 
-PATCH와 경합하는 기존 트랜잭션 쓰기도 같은 회차 버전을 조건부로 증가시킨다. 확정·삭제·영수증 변경은 원본을 쓰기 전에 S-BUMP로 버전을 확보하고, 제외는 단일 저장 SQL에서 버전을 확보하며, 지출 생성은 마지막 저장 SQL의 버전 조건이 실패하면 전체 ROLLBACK한다. PATCH가 먼저 저장된 뒤 오래된 요청이 확정/삭제되거나 회차 합계를 넘기는 것을 막으며 기존 쓰기의 트랜잭션·advisory lock은 유지한다.
+PATCH와 경합하는 기존 트랜잭션 쓰기도 같은 회차 버전을 조건부로 증가시킨다. 확정·삭제는 단일 저장 SQL에서, 영수증 변경은 원본을 쓰기 전에 S-BUMP로 버전을 확보하고, 제외는 단일 저장 SQL에서 버전을 확보하며, 지출 생성은 마지막 저장 SQL의 버전 조건이 실패하면 전체 ROLLBACK한다. PATCH가 먼저 저장된 뒤 오래된 요청이 확정/삭제되거나 회차 합계를 넘기는 것을 막으며 기존 쓰기의 트랜잭션·advisory lock은 유지한다.
 
 ### S8. DELETE /api/rounds/{roundId}/expenses/{expenseId} — 지출 삭제
 
@@ -1030,15 +1030,19 @@ SQL 순서: **AUTH → 회차/대상/제외 조건 통합 조회 → 생성자·
 
 ### S11. POST /api/rounds/{roundId}/confirm — 정산 확정
 
-RoundClient.command('confirm') → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.roundCommand('confirm',VersionRequestDTO) → W → MutationResult → 상세 재조회·화면 위로 이동.
+RoundClient.command('confirm') → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.roundCommand('confirm',VersionRequestDTO) → MutationResult → WebSocket invalidation 시 상세 GET 1회·화면 위로 이동.
 
-1. expectedVersion만 허용. W → S-ROUND → 생성자·버전·RECORDING 검사.
-2. S-MEMBERS → S-SETTLEMENT-EXPENSES. 활성 참여자 최소 2명·지출 존재·결제자/부담자·CUSTOM 합계·1건/회차 금액 한도를 다시 확인한다.
-3. S-BUMP로 버전 확보 → ALL/SELECTED의 각 지출에 calculateBase()를 적용하고 S-BASE-SAVE를 E회 호출한다. CUSTOM의 지정 부담금은 그대로 유지한다.
-4. S-CONFIRM으로 CONFIRMED·confirmed_at 저장 → IDEM-SAVE → COMMIT.
-5. 응답·알림 후 프론트 최신 상세 반영. 확정은 최종 송금 저장·나머지 추첨·메시지 발송을 실행하지 않는다.
+1. AUTH 내 정보 조회(+1)로 활성·가입 완료 회원을 확인하고 expectedVersion 외 필드·요청 키·본문 digest를 검사한다.
+2. BEGIN(+1) 후 findRoundConfirmation() 통합 조회(+1)에서 회차·본인 참여 이력·생성자·상태·버전·통화·전체 참여자/지출/부담금·멱등 성공 기록·알림 대상을 얻는다. 같은 키/본문 성공은 재생하고 다른 본문은 409 idempotency_conflict다.
+3. 회차 생성자·expectedVersion·RECORDING·활성 참여자 최소 2명·지출 존재·결제자/부담자·CUSTOM 합계·1건/회차 금액 한도를 검사한다. 지출이 없으면 409 empty_expenses와 `지출 내역이 없습니다`로 거절한다.
+4. 허용된 요청만 pg_advisory_xact_lock(1684106607)(+1)을 획득한다. 지출 추가의 transaction lock·지출 수정의 session lock과 같은 키다. 락 획득부터 COMMIT/ROLLBACK까지 추가·수정의 저장은 대기한다.
+5. confirmRound() 단일 CTE SQL(+1)에서 현재 회원·생성자·RECORDING·버전·지출 존재·성공 재시도를 다시 검사한다. 조건부 rounds UPDATE로 CONFIRMED·confirmed_at·버전을 저장한 요청만 ALL/SELECTED 기본 몫·나머지를 일괄 저장하고 멱등 성공 응답을 함께 기록한다. CUSTOM 지정 부담금은 유지한다. 조회 이후 다른 변경이 먼저 커밋되면 최신 상태/버전 오류를 반환하며, 같은 키의 선행 성공은 재생한다.
+6. COMMIT(+1)이 transaction lock을 자동 해제한다. 실패는 ROLLBACK으로 확정·기본 몫·버전·성공 기록을 모두 취소하고 락을 해제한다. 롤백 실패 연결은 폐기한다.
+7. 커밋 후 통합 조회에서 확보한 참여자에게 invalidation 키만 발행한다. 알림 대상 조회 SQL과 성공 직후 직접 GET은 없으며 재생 시 알림을 반복하지 않는다. 최종 송금 저장·나머지 추첨은 기존 전송/추첨 단계에서 수행한다.
 
-SQL: W 6회 + S-ROUND → S-MEMBERS → S-SETTLEMENT-EXPENSES → S-BUMP → S-BASE-SAVE × E → S-CONFIRM = **11 + E회**. 균등 지출 1건이면 12회다.
+SQL 순서: **AUTH → BEGIN → 회차/지출/멱등 통합 조회 → 생성자·지출·상태·버전 검사(SQL 0회) → transaction lock → 확정 단일 저장 → COMMIT = 6회**. 지출 개수·ALL/SELECTED/CUSTOM과 관계없이 알림 발행까지 포함한다. 조회 단계 거절은 ROLLBACK까지 **4회**, 순차 성공 재생은 **5회**, 락 대기 이후 경합 거절·성공 재생은 **6회**, 회원/입력/키 거절은 **1회**, JWT Guard 거절은 **0회**다.
+
+`scripts/settle-sql.integration.test.ts`에서 실제 SQL 순서·횟수·다건/혼합 분배·회차 생성자 권한·빈 지출·성공 재생·저장 실패 롤백을 검사한다. `scripts/concurrency.integration.test.ts`는 조회 이후 수정이 먼저 저장되는 경우의 버전 거절과, 확정 락을 가진 동안 지출 추가·수정·같은 키 확정이 실제 advisory lock 대기 상태에 있는지 검사한다.
 
 ### S12. POST /api/rounds/{roundId}/reopen — 기록 단계 재오픈
 
@@ -1159,9 +1163,9 @@ SQL: W 6회 + S-ROUND → S-EXPENSE → [S-ACTIVE-MEMBER] → S-BUMP → S-RECEI
 
 ### Settle 실시간·검증 경계
 
-회차 생성·지출 생성·지출 수정·지출 삭제·참여자 제외 알림은 저장/통합 조회에서 확보한 참여자 ID를 전달받아 수신자 SQL 0회다. 나머지 일반 변경 후 알림 수신자 조회는 BEGIN → 회차 group_id → round_members → COMMIT = **별도 4회**다. 취소는 S5의 기록 확인 SQL에서 삭제 전 허가된 수신자를 함께 읽으므로 삭제 전후 추가 조회 **0회**이며 성공 재생 시 재발행하지 않는다. 실시간 비활성화 시 모두 SQL 0회다. after() 알림 실패는 이미 저장한 변경을 롤백하지 않는다. 메시지에는 rounds·group-rounds·round·settlement와 필요한 groups/group 키만 넣고 금액·계좌·영수증·초대 토큰은 넣지 않는다.
+회차 생성·지출 생성·지출 수정·지출 삭제·참여자 제외·정산 확정 알림은 저장/통합 조회에서 확보한 참여자 ID를 전달받아 수신자 SQL 0회다. 나머지 일반 변경 후 알림 수신자 조회는 BEGIN → 회차 group_id → round_members → COMMIT = **별도 4회**다. 취소는 S5의 기록 확인 SQL에서 삭제 전 허가된 수신자를 함께 읽으므로 삭제 전후 추가 조회 **0회**이며 성공 재생 시 재발행하지 않는다. 실시간 비활성화 시 모두 SQL 0회다. after() 알림 실패는 이미 저장한 변경을 롤백하지 않는다. 메시지에는 rounds·group-rounds·round·settlement와 필요한 groups/group 키만 넣고 금액·계좌·영수증·초대 토큰은 넣지 않는다.
 
-[scripts/settle-sql.integration.test.ts](../scripts/settle-sql.integration.test.ts)는 실제 PostgreSQL SQL 로그로 생성 4회·UUIDv7 PK·중복 409·동시 중복 단일 성공·세션 락 획득/해제·참여자 저장 실패 원자성·목록 4회·상세 10/11회·지출 생성 6회·생성 입력 오류 AUTH 1회·생성 성공 재생 5회·생성 실패 전체 롤백·같은 키 동시 생성 단일 저장·수정 3회/거절 및 재생 2회/경합 후 재조회 4회·삭제 12회·제외 검토 3회·제외 3회/거절 2회/중복 404·확정 12회·재오픈 10회·나머지 있는 전송 12회·없는 전송 20회·추첨 17회/재추첨 방지 7회·최종 전/후 안내 5/8회·수취 확인 8회·일반/강제 종료 10/9회·취소 9회·영수증 생성/조회/삭제 16/4/10회·일반 성공 재생 5회·영수증 재생 4회·종료 후 편집 거절 ROLLBACK을 검증한다. 숫자는 해당 테스트의 참여자·분담금·송금 행 수 기준이며 위 계산식이 일반 규칙이다.
+[scripts/settle-sql.integration.test.ts](../scripts/settle-sql.integration.test.ts)는 실제 PostgreSQL SQL 로그로 생성 4회·UUIDv7 PK·중복 409·동시 중복 단일 성공·세션 락 획득/해제·참여자 저장 실패 원자성·목록 4회·상세 10/11회·지출 생성 6회·생성 입력 오류 AUTH 1회·생성 성공 재생 5회·생성 실패 전체 롤백·같은 키 동시 생성 단일 저장·수정 5회/거절 및 재생 2회/경합 후 재조회 6회·삭제 12회·제외 검토 3회·제외 3회/거절 2회/중복 404·확정 6회/조회 거절 4회/성공 재생 5회·재오픈 10회·나머지 있는 전송 12회·없는 전송 20회·추첨 17회/재추첨 방지 7회·최종 전/후 안내 5/8회·수취 확인 8회·일반/강제 종료 10/9회·취소 9회·영수증 생성/조회/삭제 16/4/10회·일반 성공 재생 5회·영수증 재생 4회·종료 후 편집 거절 ROLLBACK을 검증한다. 숫자는 해당 테스트의 참여자·분담금·송금 행 수 기준이며 위 계산식이 일반 규칙이다.
 
 기존 [settlement.integration.test.ts](../scripts/settlement.integration.test.ts)·[concurrency.integration.test.ts](../scripts/concurrency.integration.test.ts)·[receipt-migration.integration.test.ts](../scripts/receipt-migration.integration.test.ts)·[routes.integration.test.ts](../scripts/routes.integration.test.ts)는 Settle 공개 진입점을 통해 권한·과거 조회·정확한 통화/금액·CUSTOM 합계·멱등성·버전 충돌·추첨 중간 실패 취소·상태 전이 경합·사전 검사 후 업로드 경합·최신 수취 계좌 제한·기존 BYTEA 영수증을 검증한다. [domain-boundaries.test.ts](../src/lib/domain-boundaries.test.ts)는 Frontend/Shared→Backend 금지, 서버 전용 표시, 다른 도메인 내부 import 금지와 Controller/Service의 SQL 미포함을 검사한다. [settle.test.ts](../src/lib/settle.test.ts)는 경로 분배·출처·JSON/multipart 오류를 검사한다.
 
@@ -1185,3 +1189,5 @@ Settle 분리 검증 결과(2026-10-03): `npm test` **93개**, 격리된 로컬 
 지출 PATCH 개선 검증(2026-10-03): `npm test` 96개·격리된 PostgreSQL/MinIO의 `npm run test:integration` 48개·`npm run build` 통과. 실제 Chrome `--expenses-only`에서 지출 생성/수정/삭제·확정/재오픈 직후 GET 0회, WebSocket invalidation 전달 뒤 상세 GET 1회를 확인했다. PATCH의 권한·부분 필드·ALL/SELECTED/CUSTOM·멱등 재생·동시 버전 충돌·단일 SQL 실패 원자성 및 이미 이전 버전을 읽은 확정/삭제/생성의 롤백을 검증했다.
 
 지출 DELETE 개선 검증(2026-10-03): `npm test` 96개·격리된 PostgreSQL/MinIO의 `npm run test:integration` 50개·`npm run build` 통과. 실제 SQL 로그에서 BEGIN → AUTH → 통합 조회 → 락 → 단일 삭제 SQL → COMMIT의 6회, 권한/상태/버전 거절의 락 없는 4회, 성공 재생의 5회를 확인했다. 작성자/회차 생성자 권한·부담금/영수증 CASCADE·총금액/예상 송금 갱신·멱등 저장 실패 전체 롤백·락 전 조회 이후 PATCH/확정/동일 키 삭제 경합·커밋 후 MinIO 삭제·객체 삭제 실패 시 DB 성공 유지·알림 재발행 방지를 검증했다. 실제 Chrome `--expenses-only`에서 DELETE 직후 GET 0회, WebSocket invalidation 전달 뒤 상세 GET 1회를 확인했다. 기존 개발 서버의 Next 잠금 충돌은 임시 소스/의존성 복사본에서 전체 통합 테스트를 재실행하여 해소했다.
+
+정산 확정 개선 검증(2026-10-04): `npm test` 96개·격리된 PostgreSQL/MinIO와 개발 서버 복사본의 `npm run test:integration` 54개·`npm run build` 통과. 확정은 AUTH → BEGIN → 회차/지출 통합 조회 → 공통 transaction lock → 확정 일괄 저장 → COMMIT의 6회이며, 지출 수정도 같은 advisory lock을 사용한다. 지출 다건·혼합 분배·권한·빈 지출·멱등 재생·실패 롤백·확정 중 추가/수정의 실제 잠금 대기를 검증했다.
