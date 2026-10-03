@@ -4,12 +4,12 @@ import { useEffect } from 'react'
 import { ChevronLeft } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { AnimatedMoney } from '../animated-money'
-import { ApiError, apiRequest } from '../../lib/api-client'
-import { formatAccountNumber } from '../../Domain/User/Shared/index'
-import type { SettlementDTO } from '../../lib/domain-types'
-import { formatMoney } from '../../lib/money'
-import { CopyLink, ErrorNotice, Loading, ParticipantAvatar, StatusBadge, useAction, useResource } from '../home/ui'
+import { AnimatedMoney } from '../../../../Global/Util/Frontend'
+import { ApiError, apiRequest } from '../../../../Global/Util/Frontend'
+import { formatAccountNumber } from '../../../User/Shared'
+import type { SettlementDTO } from '../../Shared'
+import { formatMoney } from '../../Shared'
+import { CopyLink, ErrorNotice, Loading, ParticipantAvatar, StatusBadge, useAction, useResource } from '../../../../Global/Util/Frontend'
 
 export default function SettlementClient({ roundId }: { roundId: string }) {
   const router = useRouter()

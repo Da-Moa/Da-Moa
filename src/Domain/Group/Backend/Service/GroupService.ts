@@ -174,3 +174,7 @@ export async function acceptInvite(access: Identity, key: string, token: string,
     })
   })
 }
+
+export async function getActiveRoundCandidates(client: Database, groupId: string, ids: string[]): Promise<{ id: string; name: string }[]> {
+  return (await repository.findRoundCandidates(client, groupId, ids)).rows.map(row => ({ id: row.id, name: row.name }))
+}

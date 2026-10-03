@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { apiRequest, ErrorNotice, Loading, StatusBadge, useAction, useResource } from '../../../../Global/Util/Frontend'
-import { formatMoney } from '../../../../lib/money'
+import { formatMoney } from '../../Shared'
 import type { Page, RoundSummary } from '../../../../lib/domain-types'
 
 export function RoundList({ endpoint, empty = '아직 정산 회차가 없어요.', onMore }: { endpoint: string; empty?: string; onMore?: () => void }) {

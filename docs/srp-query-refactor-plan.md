@@ -462,3 +462,14 @@ API 목록과 요청별 SQL 순서는 [분리한 API 흐름과 SQL](refactored-a
 후속 요청에 따라 getMe()의 withReadTransaction()을 기존 withDatabaseConnection()으로 교체했다. 공용 풀의 제한 시간·회원 상태/온보딩 목적 검사·Account DTO·private, no-store 응답을 유지하며 BEGIN·COMMIT·ROLLBACK·명시적 락·SET 없이 AUTH 내 정보 읽기 1회만 수행한다. 기존 정상 SQL 3회에서 1회로 감소하고, 연결은 성공·실패 모두 반환한다. User 쓰기와 다른 기존 조회의 트랜잭션은 유지한다.
 
 검증: scripts/user.integration.test.ts가 app·가입 전·탈퇴 후 온보딩·완료 후 무효가 된 온보딩 JWT·탈퇴 회원 app JWT·존재하지 않는 회원의 GET /api/me를 실제 SQL 로그로 확인한다. 회원 조회 경로는 AUTH SELECT 1회이며 BEGIN·COMMIT·ROLLBACK·SET·명시적 락이 없고 연결을 모두 반환한다. JWT 누락은 SQL 0회다. 후속 단위 91개·격리 DB/MinIO 전체 통합 40개·프로덕션 빌드 통과.
+
+
+## Settle-01: 구현된 회차·지출·정산·영수증 도메인 분리
+
+2026-10-03: 기존 Settle의 미종료 참여 조회·회차 생성/목록 UI에 회차 상세·지출·제외·개인 정산·영수증을 추가하고, 21개 메서드/경로를 SettleController로 옮겼다. Controller는 HTTP/알림, Service는 권한·상태·버전·금액/분배 규칙·저장 순서, Repository는 SQL, DAO는 내부 DB 행 타입, Shared는 공개 DTO와 순수 money/split 계산을 소유한다. src/app의 페이지는 Settle Frontend 공개 진입점을 조합한다. src/lib/round-store.ts와 기존 화면 구현 파일은 제거했으며 lib의 money/split/domain-types 경로는 호환 재수출만 한다.
+
+Group의 공개 getActiveRoundCandidates()에 같은 DB Client를 전달하여 회차 생성 후보를 읽는다. 기존 모임/회원/수취 계좌 JOIN은 유지하며 Settle Repository는 타 도메인 테이블을 변경하지 않는다. 영수증 AVIF 변환·MinIO 객체 작업은 Global Util의 FileCompressor·MinIOUtil로 옮겼다. API·SQL 순서·트랜잭션·공통 락·멱등 재생·버전 검사·과거 참여 조회·KRW 계좌 공개 범위를 유지한다. 앞의 UUIDv7 회차 생성 티켓 및 전역 락 제거 계획은 이번 분리에서 구현하지 않았다.
+
+[분리한 API 흐름과 SQL 8절](refactored-api-flows-and-sql.md#8-settle-요청-흐름sql)에 S1~S21별 프론트→Guard→Controller→Service→SQL→응답 흐름, 정확한 호출 수와 행 수에 따른 계산식을 기록했다. scripts/settle-sql.integration.test.ts가 공개 Service의 실제 SQL 횟수·트랜잭션·재생·최종 저장 분기를 확인한다. 기존 권한/경합/롤백/통화/계좌/영수증 통합 검사는 공개 Backend를 사용한다. domain-boundaries.test.ts는 Settle의 프론트·서버·공유 계약과 타 도메인 내부 import 금지를 검사한다.
+
+검증 결과: 단위 93개·격리 DB/MinIO 통합 45개·프로덕션 빌드·전체 Chrome 브라우저 검증 통과. 실제 JWT Guard/WebSocket 검증도 통합 검사에 포함했다.

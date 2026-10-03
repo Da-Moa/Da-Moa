@@ -32,7 +32,7 @@ for (const [namespace, domain] of [['Domain', 'Health'], ['Domain', 'Group'], ['
       return target ? [target] : []
     })
     graph.set(file, dependencies)
-    if (['Group', 'User'].includes(domain)) for (const target of dependencies) {
+    if (['Group', 'User', 'Settle'].includes(domain)) for (const target of dependencies) {
       for (const area of ['Frontend', 'Shared']) {
         const directory = resolve(root, `Domain/${domain}/${area}`) + '/'
         if (target.startsWith(directory) && !file.includes(`/Domain/${domain}/`)) assert.equal(target, directory + 'index.ts', `${domain} internal import: ${file} -> ${target}`)
@@ -83,4 +83,17 @@ test('User rules and HTTP handlers delegate SQL to repositories and Auth keeps u
     assert.match(source, /Domain\/User\/Backend/)
     assert.doesNotMatch(source, /\.query\s*\(|lib\/auth-store|lib\/authorization/)
   }
+})
+
+test('Settle HTTP and rules delegate SQL and storage to their owners', () => {
+  for (const file of ['Controller/SettleController.ts', 'Service/SettleService.ts']) {
+    const source = readFileSync(resolve('src/Domain/Settle/Backend', file), 'utf8')
+    assert.doesNotMatch(source, /\.query\s*\(|from ['"](?:sharp|@aws-sdk\/)/, file)
+  }
+  const repository = readFileSync('src/Domain/Settle/Backend/Repository/SettleRepository.ts', 'utf8')
+  assert.doesNotMatch(repository, /\b(?:INSERT INTO|UPDATE|DELETE FROM)\s+(?:users|groups|group_members|group_invites|mutation_requests)\b/i)
+  assert.doesNotMatch(repository, /\b(?:Response|AppError|withWriteTransaction|withReadTransaction)\b/)
+  const route = readFileSync('src/app/api/[...path]/route.ts', 'utf8')
+  assert.match(route, /Domain\/Settle\/Backend/)
+  assert.doesNotMatch(route, /lib\/round-store|\.query\s*\(|formData|publishRoundInvalidation/)
 })

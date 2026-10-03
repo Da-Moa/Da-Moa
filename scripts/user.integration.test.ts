@@ -15,7 +15,7 @@ import { applyMigrations } from './migrations.mjs'
 import { completeTestOnboarding } from './bank-test-support.ts'
 import { uuidV7 } from '../src/lib/uuid.ts'
 import { createGroup } from '../src/Domain/Group/Backend/index.ts'
-import { createRound } from '../src/lib/round-store.ts'
+import { createRound } from '../src/Domain/Settle/Backend/index.ts'
 
 const database = process.env.TEST_DATABASE_URL
 if (!database || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(database).hostname) || !new URL(database).pathname.toLowerCase().includes('test')) throw new Error('TEST_DATABASE_URL must name an isolated local test database')

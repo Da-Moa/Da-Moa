@@ -9,7 +9,7 @@ import { getDatabasePool } from '../src/lib/db-client.mjs'
 import { acceptInvite, createGroup, createInvite, getGroup, getInvite, leaveGroup, listGroups, revokeInvite } from '../src/Domain/Group/Backend/index.ts'
 import { applyMigrations } from './migrations.mjs'
 import { completeTestOnboarding } from './bank-test-support.ts'
-import { createRound, getRound, roundCommand } from '../src/lib/round-store.ts'
+import { createRound, getRound, roundCommand } from '../src/Domain/Settle/Backend/index.ts'
 import { publishGroupInvalidation } from '../src/lib/realtime-server.ts'
 
 const database = process.env.TEST_DATABASE_URL

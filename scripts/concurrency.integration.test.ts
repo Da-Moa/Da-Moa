@@ -10,7 +10,7 @@ import { signInKakao } from '../src/Global/Auth/Backend/index.ts'
 import { createDatabaseClient } from '../src/lib/db.ts'
 import { AppError } from '../src/lib/errors.ts'
 import { acceptInvite, createGroup, createInvite, leaveGroup } from '../src/Domain/Group/Backend/index.ts'
-import { addReceipt, createRound, getRound, getSettlement, roundCommand, saveExpense, setSettlementCheck } from '../src/lib/round-store.ts'
+import { addReceipt, createRound, getRound, getSettlement, roundCommand, saveExpense, setSettlementCheck } from '../src/Domain/Settle/Backend/index.ts'
 import { applyMigrations } from './migrations.mjs'
 import { completeTestOnboarding as completeOnboarding } from './bank-test-support.ts'
 

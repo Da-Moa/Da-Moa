@@ -51,6 +51,8 @@ npm run dev
 
 회원 구현은 `src/Domain/User`의 Frontend(내 정보·계좌 설정·온보딩·계정 Context), Backend(Controller·Service·Repository·DAO·Exception), Shared(DTO·순수 은행 규칙)로 분리합니다. 기존 `GET /api/me`, `POST /api/me/onboarding`, `PUT /api/me/bank-account`, `POST /api/auth/withdraw` 경로와 응답을 유지합니다. 로그인·JWT 발급·회원 인증 판단은 Global/Auth가 담당하고 회원 SQL은 User 공개 기능을 사용합니다. 탈퇴는 BEGIN → advisory transaction lock 획득 → AUTH → 미종료 참여 회차 조회 → 조건부 소프트 삭제·멤버십 종료 단일 SQL → COMMIT의 6회입니다. 회차 생성·모임 탈퇴와 같은 락을 사용하며 회원 상태·미종료 참여 검사를 락 안에서 수행합니다. Settle·Group 소유 SQL을 공개 진입점으로 조합해 탈퇴와 멤버십 종료를 원자적으로 저장하며, 성공은 COMMIT·실패는 ROLLBACK으로 락을 자동 해제하고 롤백 실패 연결은 폐기합니다. [분리한 API 목록](docs/refactored-api-flows-and-sql.md#user)과 [User 요청 흐름](docs/refactored-api-flows-and-sql.md#7-user-요청-흐름sql)을 참고하세요.
 
+정산 구현은 `src/Domain/Settle`의 Frontend(회차 생성·목록·상세·지출 폼·개인 정산), Backend(Controller·Service·Repository·DAO·Exception), Shared(DTO·순수 금액/분배 계산)로 분리합니다. 회차·지출·참여자 제외·확정/재오픈/전송/추첨·개인 안내/수취 확인/종료·영수증의 기존 21개 API를 유지합니다. API Route는 Group/Settle 공개 Controller로 분배하며, 회차 생성 후보는 Group 공개 기능에 같은 DB Client를 전달합니다. 영수증 변환과 MinIO 객체 작업은 Global Util 공개 기능을 사용합니다. 기존 트랜잭션·락·멱등 성공 재생·버전 검사·KRW 수취 계좌 공개 범위를 유지하며 회차 생성 키/락 정책은 변경하지 않습니다. [Settle 요청 흐름과 SQL 횟수](docs/refactored-api-flows-and-sql.md#8-settle-요청-흐름sql)에 API별 실제 순서·변동 횟수·검증 방법을 기록합니다.
+
 공용 `pg.Pool`은 새 PostgreSQL 연결의 startup parameter로 `statement_timeout=15000`(15초), `lock_timeout=10000`(10초)을 설정합니다. 풀의 일반 조회와 읽기·쓰기 트랜잭션에 같은 제한을 적용하며 요청마다 `SET LOCAL`을 실행하지 않습니다. 풀 설정 변경 후에는 앱 서버를 재시작해야 기존 풀 연결도 새 기본값을 사용합니다. 마이그레이션용 독립 연결의 별도 제한 설정은 유지합니다.
 
 ## 사용자 흐름

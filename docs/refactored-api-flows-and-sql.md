@@ -1,6 +1,6 @@
 # 분리한 API 목록·로직 흐름·SQL
 
-작성 기준: 2026-10-03의 현재 구현. Health 5개, Group 8개, User 4개 API를 기록한다. 모임 수정 API는 추가하지 않았다. 회차 생성·목록 UI는 Settle 공개 컴포넌트를 사용하지만, 해당 API의 백엔드 전체 분리는 아직 진행하지 않았으므로 아래 분리 완료 목록에 포함하지 않는다.
+작성 기준: 2026-10-03의 현재 구현. Health 5개, Group 8개, User 4개, Settle 21개 API를 기록한다. 모임 수정 API는 추가하지 않았다. Settle의 API별 호출 흐름·SQL 횟수·검증은 [8절](#8-settle-요청-흐름sql)에 기록한다.
 
 SQL은 해당 함수의 실제 query() 문자열을 가져와 PostgreSQL 형식으로 정리했다. $1 등의 바인딩 위치를 유지하며 실제 토큰·회원 정보·계좌·연결 문자열은 넣지 않는다. SQL 번호는 문서의 식별자이며 요청 순서는 API별 흐름에서 지정한다.
 
@@ -73,6 +73,34 @@ GroupSummary는 모임 ID·이름·생성자 ID·생성 시각이다. 목록은 
 은행 입력은 기존 수동 등록만 지원한다. 계좌 원본 숫자·표시 형식을 분리하며, 신규 가입/재가입은 확인 이력을 초기화한다. 계좌 변경은 같은 정규화 은행·번호·예금주일 때만 기존 확인 이력을 보존한다. 진행 중 정산이 있어도 대표 계좌 변경은 가능하다. 가입 완료·탈퇴에는 멱등 기록을 새로 추가하지 않았다.
 
 카카오 콜백 `/auth/v1/kakao`와 테스트 로그인 `/api/auth/test-login`은 Global/Auth가 처리한다. 회원 upsert·테스트 회원 조회/생성만 User의 공개 기능으로 옮겼으므로 User API 목록에 포함하지 않는다. JWT 갱신·로그아웃도 Global/Auth 소유다.
+
+### Settle
+
+기존 **21개 메서드/경로**를 SettleController.getSettleResponse()로 분배한다. Access JWT·가입 완료·미탈퇴 확인, 동일 출처의 변경 요청, private/no-store 응답을 유지한다. 변경 요청은 Idempotency-Key, 회차 생성 외 변경은 expectedVersion을 사용한다.
+
+| 메서드·경로 | Service | 공개 입력/응답 | 흐름 |
+|---|---|---|---|
+| POST /api/groups/{groupId}/rounds | createRound() | CreateRoundRequestDTO → MutationResult | S1 |
+| GET /api/groups/{groupId}/rounds | listRounds(groupId) | q·status·limit·cursor → Page<RoundSummary> | S2 |
+| GET /api/rounds | listRounds() | q·status·limit·cursor → Page<RoundSummary> | S3 |
+| GET /api/rounds/{roundId} | getRound() | limit·cursor → RoundDetail | S4 |
+| DELETE /api/rounds/{roundId} | roundCommand('cancel') | VersionRequestDTO → MutationResult | S5 |
+| POST /api/rounds/{roundId}/expenses | saveExpense() | ExpenseRequestDTO → MutationResult | S6 |
+| PATCH /api/rounds/{roundId}/expenses/{expenseId} | saveExpense(expenseId) | ExpenseRequestDTO → MutationResult | S7 |
+| DELETE /api/rounds/{roundId}/expenses/{expenseId} | deleteExpense() | VersionRequestDTO → MutationResult | S8 |
+| GET /api/rounds/{roundId}/members/{userId}/exclusion-check | checkExclusion() | ExclusionCheck | S9 |
+| POST /api/rounds/{roundId}/members/{userId}/exclude | excludeMember() | VersionRequestDTO → MutationResult | S10 |
+| POST /api/rounds/{roundId}/confirm | roundCommand('confirm') | VersionRequestDTO → MutationResult | S11 |
+| POST /api/rounds/{roundId}/reopen | roundCommand('reopen') | VersionRequestDTO → MutationResult | S12 |
+| POST /api/rounds/{roundId}/send | roundCommand('send') | VersionRequestDTO → MutationResult | S13 |
+| POST /api/rounds/{roundId}/draw | roundCommand('draw') | VersionRequestDTO → MutationResult | S14 |
+| GET /api/rounds/{roundId}/settlement | getSettlement() | SettlementDTO | S15 |
+| POST /api/rounds/{roundId}/settlement-check | setSettlementCheck() | SettlementCheckRequestDTO → MutationResult | S16 |
+| POST /api/rounds/{roundId}/complete | roundCommand('complete') | VersionRequestDTO → MutationResult | S17 |
+| POST /api/rounds/{roundId}/force-complete | roundCommand('force-complete') | VersionRequestDTO → MutationResult | S18 |
+| POST /api/rounds/{roundId}/expenses/{expenseId}/receipts | addReceipt() | multipart(file,expectedVersion) → MutationResult | S19 |
+| GET /api/receipts/{receiptId} | getReceipt() | 인증된 바이너리 이미지 | S20 |
+| DELETE /api/rounds/{roundId}/expenses/{expenseId}/receipts/{receiptId} | removeReceipt() | VersionRequestDTO → MutationResult | S21 |
 
 ## 3. 공통 실행 순서와 SQL 식별자
 
@@ -777,7 +805,7 @@ node --import ./scripts/test-server-only.mjs --import tsx --test scripts/group.i
 
 공통 유틸 세분화 후 `npm test` 81개, `npm run build`, 격리된 로컬 테스트 DB/MinIO 버킷의 `npm run test:integration` 38개가 모두 통과했다. 기존 입력·페이지네이션·멱등 동작과 Group SQL 호출 수를 유지한다. 이번 후속 변경은 UI를 수정하지 않았다.
 
-이 문서는 현재 코드의 요청/SQL 흐름 기록이며 실제 사용자 쿼리 확인 결과를 대신하지 않는다. 다음 도메인 작업은 [Group-01](srp-query-refactor-plan.md#group-01-구현된-모임초대참여-도메인-분리)의 사용자 쿼리 확인 후 진행한다.
+이 문서는 현재 코드의 요청/SQL 흐름 기록이며 실제 사용자 쿼리 확인 결과를 대신하지 않는다. Group 분리 실행 기록은 [Group-01](srp-query-refactor-plan.md#group-01-구현된-모임초대참여-도메인-분리), 이후 User·Settle의 현재 구현은 7·8절을 참고한다.
 
 JWT 인증 전환 검증 결과(2026-10-02): 단위 85개, 격리된 로컬 DB·MinIO 통합 38개, 프로덕션 빌드 및 전체 모바일 브라우저 회귀 검사 통과. 실제 로그인 완료 페이지의 localStorage/Bearer 전환과 로그아웃 토큰 삭제도 확인했다. 실제 카카오 외부 인증은 이번 자동 검사에 포함하지 않는다.
 
@@ -855,6 +883,291 @@ UserService·Controller에는 SQL이 없다. 미종료 회차 SQL은 [Settle Par
 
 User Frontend는 기존 화면·CSS·복사/클립보드·키보드 동작을 그대로 옮겼다. 계좌 폼 종료 시 User Requests가 공통 `discardPendingRequest()`로 민감한 재시도 본문을 지운다. 인증 실패로 로그인/가입 화면으로 이동할 때 공통 API 클라이언트는 모든 도메인의 미완료 본문과 이전 복구 콜백을 폐기한다.
 
-Group의 기존 users JOIN과 아직 분리하지 않은 Settle/realtime의 회원·수취 계좌 JOIN은 그대로 유지한다. 이번 User 분리는 기존 User API·은행 규칙·화면·회원 저장의 소유권을 옮긴 작업이며, Settle 백엔드 전체 이전이나 락 정책 변경은 포함하지 않는다.
+User 분리 당시 Group·Settle/realtime의 기존 회원·수취 계좌 JOIN은 그대로 유지했다. Settle 후속 분리는 아래 8절에 기록한다. 이번 User 분리는 기존 User API·은행 규칙·화면·회원 저장의 소유권을 옮긴 작업이며, Settle 백엔드 전체 이전이나 락 정책 변경은 포함하지 않는다.
 
 검증 결과(2026-10-03): `npm test` 91개, `npm run build`, 격리된 로컬 테스트 DB/MinIO의 DB 통합 38개와 실시간 통합 1개가 통과했다. 기존 개발 서버의 Next 실행 락 때문에 실시간 검사는 동일 소스의 임시 복사본에서 별도로 실행했다. 전체 모바일 브라우저 검사와 `--forms-only`도 통과하여 내 정보 단일 조회·수동 가입·계좌 저장/충돌 복구·탈퇴·재가입·로그아웃 및 320/390/1024px 폼을 확인했다. 기존 브라우저 검사의 후반 초대 수락도 현재 UI의 `모임으로 가기` 링크 선택 흐름에 맞췄다. 실제 카카오 외부 인증은 이번 검사 범위에 포함하지 않는다.
+
+## 8. Settle 요청 흐름·SQL
+
+회차·지출·부담자·영수증·개인 정산을 **21개 메서드/경로**로 분리했다. API 주소·응답·화면 동작·SQL 순서·기존 락 정책은 유지한다. 회차 생성의 UUIDv7 PK 전환과 전역 락 제거는 이 분리에서 구현하지 않았다. 현재 회차 ID는 서버의 randomUUID(), 요청 키는 기존 UUID 검사·성공 재생을 사용한다.
+
+공개 진입점은 [Settle Backend](../src/Domain/Settle/Backend/index.ts)·[Frontend](../src/Domain/Settle/Frontend/index.ts)·[Shared](../src/Domain/Settle/Shared/index.ts)다. [SettleController](../src/Domain/Settle/Backend/Controller/SettleController.ts)가 JSON/multipart·응답·after() 알림을, [SettleService](../src/Domain/Settle/Backend/Service/SettleService.ts)가 입력·권한·상태·버전·계산·저장 순서를, [SettleRepository](../src/Domain/Settle/Backend/Repository/SettleRepository.ts)가 SQL을 소유한다. SQL 행 타입은 내부 SettleDAO, not_found 오류는 SettleException에 있다. Controller·Service는 query()를 호출하지 않는다.
+
+RoundClient·SettlementClient·CreateRoundForm·RoundList는 Settle Frontend에 있다. 공개 DTO와 순수 money/split 계산은 Shared로 옮겼으며 기존 lib/money.ts·split.ts·domain-types.ts는 호환 재수출만 한다. 영수증 변환은 Global Util의 [FileCompressor](../src/Global/Util/Backend/FileCompressor.ts), 객체 저장은 [MinIOUtil](../src/Global/Util/Backend/MinIOUtil.ts)을 사용한다. 회차 생성 후보 조회는 Group의 getActiveRoundCandidates() 공개 함수에 **같은 Client**를 전달한다. 기존 모임 이름·회원 프로필·허용 수취 계좌 JOIN은 유지하되 Settle에서 Group/User 테이블을 변경하지 않는다.
+
+### SQL 계산 기준
+
+아래 수는 Service 호출의 실제 query() 횟수다. **BEGIN·락·AUTH·멱등 조회/저장·COMMIT을 포함**하고, Controller의 취소 전 알림 대상 조회·응답 후 실시간 발행·프론트 후속 GET·MinIO 작업은 별도로 센다. 풀 타임아웃은 startup parameter이며 요청별 SET LOCAL은 없다. JWT Guard 거절은 SQL 0회다. SQL에는 바인딩 자리만 기록하며 회원·계좌·토큰·파일 바이트는 로그에 출력하지 않는다.
+
+- `R`: BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY → AUTH → 업무 조회 → COMMIT. 제어 SQL 2회, AUTH 1회다. 읽기에는 명시적 락이 없다.
+- `W`: BEGIN → pg_advisory_xact_lock(1684106607) → AUTH → IDEM-READ → 업무 처리 → IDEM-SAVE → COMMIT. 업무 외 **6회**다. 성공 기록은 같은 트랜잭션에서 저장한다.
+- `P`: 새 회차의 참여자 수. `A`: 지출 편집자가 회차 생성자이면 0, 그 외 활성 참여 확인 SELECT이면 1.
+- `C`: PATCH에서 SELECTED의 participantIds 또는 CUSTOM의 customShares를 생략해 기존 부담금을 조회하면 1, 그 외 0.
+- `E`: 확정 시 기본 몫을 저장하는 균등 분배 지출 수(CUSTOM 제외). `S`: 최종 분담금 행 수. `M`: 제외 이력까지 포함한 회차 참여자 수. `T`: 최종 송금 행 수. `F = S + M + T`.
+- 일반 쓰기 성공 재생: BEGIN → 락 → AUTH → IDEM-READ → COMMIT = **5회**. 업무 SQL·버전 증가·IDEM-SAVE를 반복하지 않는다. 같은 키의 다른 payload는 409 idempotency_conflict·ROLLBACK이다.
+
+### S1. POST /api/groups/{groupId}/rounds — 회차 생성
+
+CreateRoundForm.start() → POST → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 Settle 분배 → SettleController.getSettleResponse()의 JSON 입력 → SettleService.createRound(CreateRoundRequestDTO) → 아래 DB 처리 → MutationResult → 회차 상세 화면 이동.
+
+1. onlyKeys(['name','currency','participantIds'])·textInput(name,100)·idsInput()·requireCurrency(). 이름은 trim 후 1~100자, 중복/잘못된 참여자 ID와 미지원 통화는 저장 전에 400이다.
+2. W의 BEGIN → 공통 트랜잭션 락 → AUTH(가입 완료·미탈퇴·app 목적) → UUID 요청 키/digest 검사·IDEM-READ. 세션 조회는 없다.
+3. Group 공개 requireGroupMembership()의 G-ACCESS → 본인을 포함해 최소 2명인지 확인 → getActiveRoundCandidates()의 G-CANDIDATES에서 선택한 활성 모임 참여자·가입 완료 회원을 한 번 조회한다. 조회 수와 입력 ID 수가 다르면 invalid_participants다.
+4. S-ROUND-INSERT 1회로 RECORDING·version=1·선택 통화를 저장 → S-MEMBER-INSERT를 P회 호출하여 이름 스냅샷을 저장한다. ID는 randomUUID()이며 요청 키를 PK로 사용하지 않는다.
+5. IDEM-SAVE → COMMIT → 연결 반환 → { id, roundId, status, version }. 알림 활성화 시 커밋 후 해당 회차 invalidation을 예약하고 프론트는 상세로 이동한다.
+
+SQL 순서: BEGIN → 락 → AUTH → IDEM-READ → G-ACCESS → G-CANDIDATES → S-ROUND-INSERT → S-MEMBER-INSERT × P → IDEM-SAVE → COMMIT = **9 + P회**(2명 11회, 3명 12회). 같은 키 성공 재생은 5회다. 회원·후보 확인부터 저장까지 같은 락·Client이며 실패는 전체 ROLLBACK이다.
+
+### S2. GET /api/groups/{groupId}/rounds — 모임별 회차 목록
+
+GroupClient의 RoundList.useResource()·loadMore() → GET → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController → SettleService.listRounds(access,query,groupId) → R → Page<RoundSummary> → 목록·다음 커서 반영.
+
+1. pagination()은 limit 기본 20·1~100과 cursor를 검사한다. q는 trim 후 1~100자이며 status는 active 또는 네 회차 상태만 허용한다.
+2. BEGIN 읽기 스냅샷 → AUTH → S-ROUND-LIST. round_members의 본인 참여 이력과 groupId를 조건으로 회차·모임 이름·최종 잔액·전체 지출·활성 회차 참여자 수를 조회한다. 모임에서 이탈하거나 회차에서 제외되어도 기존 참여 이력은 조회 조건에 남는다.
+3. 회차/모임 이름의 대소문자 무시 부분 검색, 상태 필터, (created_at,id) 내림차순 cursor·limit+1을 같은 SQL에 적용한다. pageOf()로 실제 페이지와 다음 cursor를 만든다.
+4. COMMIT → 연결 반환 → DTO 응답. GET은 상태·멱등 기록을 변경하거나 알림을 발행하지 않는다.
+
+SQL 순서: BEGIN → AUTH → S-ROUND-LIST → COMMIT = **4회**. 빈 결과도 4회다. 현재 모임 멤버 전체에게 회차를 공개하지 않고, 조회자 자신의 회차 참여 이력으로 제한한다.
+
+### S3. GET /api/rounds — 내 회차·정산 기록 목록
+
+HomeClient/정산 기록의 RoundList → GET → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController → SettleService.listRounds(access,query) → R → Page<RoundSummary> → 홈/기록 카드 반영.
+
+1. S2와 같은 limit·cursor·q·status 검사. status=active는 COMPLETED 제외, COMPLETED는 종료 기록만 조회한다.
+2. BEGIN → AUTH → S-ROUND-LIST. groupId는 NULL이며 본인이 참여한 모든 모임의 회차를 같은 조회로 검색한다.
+3. 회차마다 자신의 통화·잔액·지출 합계를 반환한다. 서로 다른 회차/통화를 하나의 금액으로 합산하지 않는다.
+4. pageOf() → COMMIT → 연결 반환. 과거 참여 이력의 조회 권한을 유지한다.
+
+SQL 순서: BEGIN → AUTH → S-ROUND-LIST → COMMIT = **4회**, 빈 결과도 4회다.
+
+### S4. GET /api/rounds/{roundId} — 회차 상세·지출 페이지·송금 예상
+
+RoundClient.useResource()·refresh()·loadMore() → GET → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController → SettleService.getRound() → R → RoundDetail → 참여자·지출·자신의 송금 관계 반영.
+
+1. BEGIN → AUTH → S-ROUND(findRound). 본인의 round_members 이력이 없으면 404 not_found다. 회차 생성자·모임 생성자를 구별한다.
+2. S-MEMBERS → pagination() → S-EXPENSES → S-SHARES → S-RECEIPTS → S-TOTAL → S-BALANCE. 지출 페이지의 부담금·영수증은 ID 배열로 한 번씩 조회한다. 빈 지출 페이지에도 두 조회를 실행한다.
+3. 최종 저장 전에는 페이지가 전체 지출을 포함하면 읽은 지출로 previewSettlement()를 계산한다. cursor가 있거나 다음 페이지가 있으면 S-SETTLEMENT-EXPENSES 1회를 추가하여 전체 지출 기준 예상과 미배분 나머지를 계산한다.
+4. 최종 저장 후에는 S-VIEWER-TRANSFERS 1회로 저장된 송금만 조회한다. 양쪽 경로 모두 본인이 송금자/수취인인 관계만 반환하며 계좌는 반환하지 않는다.
+5. COMMIT → 연결 반환. 더보기는 화면의 기존 버전과 다르면 최신 재조회를 안내한다.
+
+SQL 순서: BEGIN → AUTH → S-ROUND → S-MEMBERS → S-EXPENSES → S-SHARES → S-RECEIPTS → S-TOTAL → S-BALANCE → [전체 예상 지출 또는 저장 송금 조회] → COMMIT = **10회**, 최종 저장 전 추가 페이지/최종 저장 후에는 **11회**다.
+
+### S5. DELETE /api/rounds/{roundId} — 회차 전체 취소
+
+RoundClient.cancel()의 영구 삭제 확인 → DELETE → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController의 JSON·취소 전 수신자 확보 → SettleService.roundCommand('cancel',VersionRequestDTO) → W → MutationResult → 모임 상세 이동.
+
+1. 본문은 expectedVersion만 허용한다. 알림 활성화 시 Controller가 삭제 전에 captureRoundAudience()로 허가된 참여자의 알림 대상 목록을 확보한다.
+2. W → S-ROUND → 회차 생성자·RECORDING·expectedVersion 검사. 일반 참여자 취소와 확정/잠금/종료 회차 취소는 거절한다.
+3. S-ROUND-OBJECTS로 삭제할 영수증 객체 키 조회 → S-ROUND-DELETE. FK CASCADE로 회차의 지출·부담금·영수증 메타데이터·정산 행을 함께 삭제한다.
+4. IDEM-SAVE → COMMIT 후 MinIO 객체 정리 → 응답. DB 실패는 전체 ROLLBACK, 객체 삭제 실패는 로그를 남기고 이미 커밋한 취소를 되돌리지 않는다.
+5. 삭제 전 확보한 대상에게 round/group-rounds/settlement invalidation을 예약한다. 같은 키 취소 재시도는 회차가 없어도 성공 기록을 재생한다.
+
+Service SQL: BEGIN → 락 → AUTH → IDEM-READ → S-ROUND → S-ROUND-OBJECTS → S-ROUND-DELETE → IDEM-SAVE → COMMIT = **9회**, 성공 재생 5회. 알림 활성화 시 Controller의 사전 읽기는 별도 **5회**이며, 저장 후 발행은 확보한 대상 사용으로 DB 조회 0회다. 프론트 확인 대화상자가 있어도 실제 은행 기록을 삭제하는 기능은 아니다.
+
+### S6. POST /api/rounds/{roundId}/expenses — 지출 기록
+
+RoundClient.ExpenseForm.save() → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.saveExpense(ExpenseRequestDTO) → W → MutationResult → 지출 폼 종료·상세 재조회.
+
+1. W → S-ROUND → RECORDING·편집 가능 참여자·expectedVersion 검사. 회차 생성자는 추가 활성 참여 조회 없이 허용하고 다른 작성자는 S-ACTIVE-MEMBER 1회로 제외 여부를 검사한다.
+2. 허용 필드 description·amount·payerId·splitMode·participantIds·customShares·expectedVersion 검사. description은 trim 후 1~500자, 금액은 해당 통화의 정확한 BigInt 최소 단위로 파싱한다. 1건 100,000,000 주 단위 한도를 확인한다.
+3. S-MEMBERS로 이번 회차의 활성 결제자/부담자 검사. ALL은 서버가 전체 부담자를 결정, SELECTED는 선택 ID, CUSTOM은 중복 없는 ID·양의 개별 금액·합계의 정확한 일치를 확인한다.
+4. S-TOTAL로 전체 지출 1,000,000,000 주 단위 한도 확인 → S-EXPENSE-INSERT → S-SHARES-DELETE → S-SHARES-INSERT(unnest 일괄 저장) → S-BUMP로 회차 버전 증가.
+5. IDEM-SAVE → COMMIT → 응답·after() invalidation. stale_round이면 프론트는 입력을 유지한 채 최신 상세를 조회하고 버전을 바꿔 한 번 재저장한다.
+
+SQL 순서: W의 6회 + S-ROUND → [S-ACTIVE-MEMBER] → S-MEMBERS → S-TOTAL → S-EXPENSE-INSERT → S-SHARES-DELETE → S-SHARES-INSERT → S-BUMP = **13 + A회**(생성자 13회, 일반 작성자 14회). 실패는 지출·부담금·버전·성공 기록 전체 ROLLBACK이다.
+
+### S7. PATCH /api/rounds/{roundId}/expenses/{expenseId} — 지출 수정
+
+ExpenseForm.save() → PATCH → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.saveExpense(ExpenseRequestDTO,expenseId) → W → MutationResult → 상세 재조회.
+
+1. W → S-ROUND → S-EXPENSE. 존재하는 지출의 작성자 또는 회차 생성자만 RECORDING 상태에서 수정한다. 일반 작성자는 활성 참여 확인 1회가 추가된다.
+2. expectedVersion과 S6의 입력 규칙을 검사한다. 생략 필드는 기존 지출 값으로 유지하며 회차 통화는 수정 입력에 허용하지 않는다.
+3. S-MEMBERS. SELECTED에서 participantIds를 생략하면 S-SHARE-MEMBERS, 기존 CUSTOM에서 customShares를 생략하면 S-ASSIGNED-SHARES를 1회 조회한다. CUSTOM 합계는 새 총 금액과 다시 비교한다.
+4. S-TOTAL에서 기존 금액을 빼고 수정 금액을 더해 한도 검사 → S-EXPENSE-UPDATE(기본 몫/나머지 초기화) → 부담금 DELETE·일괄 INSERT → S-BUMP.
+5. IDEM-SAVE → COMMIT → 상세 재조회. 프론트 버전 충돌 복구는 S6과 같다.
+
+SQL: **14 + A + C회**. 생성자 ALL 수정 14회, 일반 작성자 15회, 생략한 SELECTED/CUSTOM 부담금 조회가 있으면 각각 1회 추가한다. 부분 필드 수정도 같은 원자적 저장·버전 검사·멱등 재생을 사용한다.
+
+### S8. DELETE /api/rounds/{roundId}/expenses/{expenseId} — 지출 삭제
+
+ExpenseCard.remove()의 확인 → DELETE → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.deleteExpense(VersionRequestDTO) → W → MutationResult → 상세 재조회.
+
+1. expectedVersion 외 필드를 거절한다. W → S-ROUND → S-EXPENSE → 작성자/회차 생성자·RECORDING·버전 검사. 일반 작성자는 S-ACTIVE-MEMBER를 추가한다.
+2. S-EXPENSE-OBJECTS로 영수증 키 조회 → S-EXPENSE-DELETE. 부담금·영수증 메타데이터는 CASCADE로 삭제한다.
+3. S-BUMP → IDEM-SAVE → COMMIT → MinIO 객체 정리 → 응답·알림 예약.
+4. 같은 키 성공 재생은 삭제 SQL·객체 정리를 반복하지 않는다. DB 실패는 전체 ROLLBACK이며 객체 삭제 실패는 커밋을 되돌리지 않는다.
+
+SQL: W 6회 + S-ROUND → S-EXPENSE → [S-ACTIVE-MEMBER] → S-EXPENSE-OBJECTS → S-EXPENSE-DELETE → S-BUMP = **11 + A회**.
+
+### S9. GET /api/rounds/{roundId}/members/{userId}/exclusion-check — 제외 가능 여부
+
+RoundClient.checkExclusion() → GET → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController → SettleService.checkExclusion() → R → ExclusionCheck → 제외 안내 대화상자.
+
+1. BEGIN → AUTH → S-ROUND → 회차 생성자 권한 확인. S-MEMBERS로 대상 참여 이력과 제외 여부를 읽는다.
+2. S-EXCLUSION-EXPENSES가 결제자 겸 부담자·SELECTED 부담자·CUSTOM 부담자인 관련 지출과 작성자 스냅샷을 조회한다.
+3. 생성자 제외 불가·이미 제외·RECORDING/CONFIRMED 외 상태·관련 지출·제외 후 최소 2명 조건을 allowed/reason/expenses로 반환한다.
+4. COMMIT → 연결 반환. 가능 여부 조회는 참여자나 부담금을 변경하지 않는다. CONFIRMED에서는 검토만 가능하고 실제 제외는 재오픈 후 실행한다.
+
+SQL 순서: BEGIN → AUTH → S-ROUND → S-MEMBERS → S-EXCLUSION-EXPENSES → COMMIT = **6회**.
+
+### S10. POST /api/rounds/{roundId}/members/{userId}/exclude — 회차 참여자 제외
+
+RoundClient.exclude()의 확인 → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.excludeMember(VersionRequestDTO) → W → MutationResult → 대화상자 종료·상세 재조회.
+
+1. expectedVersion만 허용. W → S-ROUND → 생성자·RECORDING·버전 확인.
+2. S-MEMBERS → S-EXCLUSION-EXPENSES로 S9 조건을 락 안에서 다시 검사한다. 최소 인원은 minimum_participants, 다른 차단은 member_exclusion_blocked와 관련 지출을 반환한다.
+3. S-MEMBER-EXCLUDE로 excluded_at 저장 → S-ALL-SHARE-REMOVE로 ALL 지출에서 해당 부담자만 삭제 → S-BUMP.
+4. IDEM-SAVE → COMMIT. 모임의 group_members·다른 회차·과거 이름 스냅샷은 변경하지 않는다. 제외한 사람도 이 회차의 과거 조회 이력을 유지한다.
+5. 커밋 후 회차 참여자와 현재 모임 참여자에게 관련 invalidation을 예약한다.
+
+SQL: W 6회 + S-ROUND → S-MEMBERS → S-EXCLUSION-EXPENSES → S-MEMBER-EXCLUDE → S-ALL-SHARE-REMOVE → S-BUMP = **12회**. 후행 알림 수신자 조회는 별도 5회다.
+
+### S11. POST /api/rounds/{roundId}/confirm — 정산 확정
+
+RoundClient.command('confirm') → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.roundCommand('confirm',VersionRequestDTO) → W → MutationResult → 상세 재조회·화면 위로 이동.
+
+1. expectedVersion만 허용. W → S-ROUND → 생성자·버전·RECORDING 검사.
+2. S-MEMBERS → S-SETTLEMENT-EXPENSES. 활성 참여자 최소 2명·지출 존재·결제자/부담자·CUSTOM 합계·1건/회차 금액 한도를 다시 확인한다.
+3. ALL/SELECTED의 각 지출에 calculateBase()를 적용하고 S-BASE-SAVE를 E회 호출한다. CUSTOM의 지정 부담금은 그대로 유지한다.
+4. S-CONFIRM으로 CONFIRMED·confirmed_at 저장 → S-BUMP → IDEM-SAVE → COMMIT.
+5. 응답·알림 후 프론트 최신 상세 반영. 확정은 최종 송금 저장·나머지 추첨·메시지 발송을 실행하지 않는다.
+
+SQL: W 6회 + S-ROUND → S-MEMBERS → S-SETTLEMENT-EXPENSES → S-BASE-SAVE × E → S-CONFIRM → S-BUMP = **11 + E회**. 균등 지출 1건이면 12회다.
+
+### S12. POST /api/rounds/{roundId}/reopen — 기록 단계 재오픈
+
+RoundClient.command('reopen') → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.roundCommand('reopen',VersionRequestDTO) → W → MutationResult → 상세 재조회.
+
+1. expectedVersion만 허용. W → S-ROUND → 생성자·버전·CONFIRMED 검사. LOCKED/COMPLETED 재오픈은 거절한다.
+2. S-BASE-CLEAR로 균등 기본 몫·나머지 컬럼 초기화 → S-REOPEN으로 RECORDING·confirmed_at=NULL 저장한다. 입력한 CUSTOM 부담금은 지우지 않는다.
+3. S-BUMP → IDEM-SAVE → COMMIT → 응답·알림 예약.
+4. 지출 원본과 참여자·통화는 유지하며 다시 편집/확정할 수 있다.
+
+SQL: W 6회 + S-ROUND → S-BASE-CLEAR → S-REOPEN → S-BUMP = **10회**.
+
+### S13. POST /api/rounds/{roundId}/send — 전송·기록 잠금
+
+RoundClient.command('send')의 확인 → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.roundCommand('send',VersionRequestDTO) → W → MutationResult → 개인 정산 화면 이동.
+
+1. expectedVersion만 허용. W → S-ROUND → 생성자·버전·CONFIRMED 검사 → S-MEMBERS → S-SETTLEMENT-EXPENSES로 지출 재검증.
+2. S-LOCK으로 LOCKED·locked_at 저장 → S-REMAINDER로 미배분 나머지 존재 여부 조회.
+3. 나머지가 있으면 최종 저장을 추첨까지 미룬다. 나머지가 없으면 finalize(false)가 S-MEMBERS → S-SETTLEMENT-EXPENSES를 다시 조회하고 확정 계산한다.
+4. 최종 저장은 S-FINAL-SHARE × S → S-BALANCE-INSERT × M → S-TRANSFER-INSERT × T → S-FINALIZE 1회다. 분담금·잔액·송금·최종 시각은 같은 트랜잭션에 저장한다.
+5. S-BUMP → IDEM-SAVE → COMMIT → 정산 화면 이동·알림. 실제 송금/카카오 전송은 없으며 링크만 직접 공유한다.
+
+나머지 있음: W 6회 + S-ROUND → S-MEMBERS → S-SETTLEMENT-EXPENSES → S-LOCK → S-REMAINDER → S-BUMP = **12회**. 나머지 없음: 여기에 최종 저장의 재검증 2회·F회·최종 시각 1회가 추가되어 **15 + F회**다. 2명·분담금 2행·송금 1행이면 F=5로 20회다.
+
+### S14. POST /api/rounds/{roundId}/draw — 나머지 한 번 추첨
+
+SettlementClient.command('draw') → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.roundCommand('draw',VersionRequestDTO) → W → MutationResult → 정산 안내 재조회.
+
+1. expectedVersion만 허용. W → S-ROUND → 생성자 확인. finalized_at이 이미 있으면 버전/상태 검사 전에 저장된 상태·버전을 반환하여 재추첨을 막는다.
+2. 미저장 회차는 버전·LOCKED 확인 → S-MEMBERS → S-SETTLEMENT-EXPENSES로 지출·부담금 재검증.
+3. finalizeSettlement()에 crypto.randomInt를 전달한다. 지출별 서로 다른 균등 부담자에게 최소 단위 1씩 나머지를 배분하고 CUSTOM 지정 부담금은 유지한다.
+4. S-FINAL-SHARE × S → S-BALANCE-INSERT × M → S-TRANSFER-INSERT × T → S-FINALIZE → S-BUMP.
+5. IDEM-SAVE → COMMIT. 중간 저장 실패는 전체 ROLLBACK이며 최종 결과가 저장된 회차를 다시 뽑지 않는다.
+
+SQL: W 6회 + S-ROUND → S-MEMBERS → S-SETTLEMENT-EXPENSES → 최종 행 저장 F회 → S-FINALIZE → S-BUMP = **11 + F회**. 이미 저장된 결과를 새 키로 요청하면 W 6회 + S-ROUND = **7회**, 같은 키 성공 재생은 5회다.
+
+### S15. GET /api/rounds/{roundId}/settlement — 내 정산·최신 수취 계좌
+
+SettlementClient.useResource()·reload()·화면 복귀 갱신 → GET → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController → SettleService.getSettlement() → R → SettlementDTO → 내 보낼/받을 금액·수취 확인 현황.
+
+1. BEGIN → AUTH → S-ROUND로 참여 이력 확인 → S-CHECKS로 실제 수취인별 bool_and(received_at IS NOT NULL)·마지막 확인 시각·프로필 조회.
+2. finalized_at이 없으면 최종 대기 DTO만 반환한다. 미저장 금액이나 계좌를 최종 안내로 노출하지 않는다.
+3. 최종 저장 후 S-BALANCE → S-OUTGOING → S-INCOMING. outgoing은 본인이 보내며 아직 확인되지 않은 송금, incoming은 본인이 받는 모든 송금과 received_at이다.
+4. S-OUTGOING은 KRW일 때만 **조회자 자신의 실제 수취인** users에 계좌 컬럼을 JOIN한다. 생성자 권한으로 다른 계좌를 추가 공개하지 않는다. KRW 이외 통화는 SQL의 계좌 SELECT 컬럼과 응답의 account 속성을 모두 생략한다.
+5. 부담액−결제액 부호·최신 계좌·확인 현황·sharePath를 DTO로 변환 → COMMIT. verifiedAt이 없으면 화면에서 정확히 `확인되지 않은 계좌입니다.`를 표시한다.
+
+미저장 SQL: BEGIN → AUTH → S-ROUND → S-CHECKS → COMMIT = **5회**. 최종 저장 후에는 S-BALANCE → S-OUTGOING → S-INCOMING 3회를 더해 **8회**다. 금액·계좌를 실시간 메시지나 성공 재생 기록에 저장하지 않는다.
+
+### S16. POST /api/rounds/{roundId}/settlement-check — 수취 수동 확인·해제
+
+SettlementClient.setChecked(checked,senderId?) → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.setSettlementCheck(SettlementCheckRequestDTO) → W → MutationResult → 정산 안내 재조회.
+
+1. onlyKeys(['expectedVersion','checked','senderId']). checked는 boolean이며 선택 senderId는 공백 없는 1~128자 식별자 형식으로 검사한다.
+2. W → S-ROUND → 버전·LOCKED·최종 저장 완료 검사.
+3. S-RECEIVED 한 UPDATE는 receiver_id=본인과 선택 sender_id로 제한한다. checked=true는 기존 확인 시각을 COALESCE로 유지하고 false는 NULL로 해제한다. senderId 생략은 본인의 모든 incoming에 적용한다.
+4. 영향 행이 없으면 403 forbidden이다. 다른 수취인 확인·종료 후 변경은 거절한다. 이 작업은 회차 버전을 증가시키지 않는다.
+5. IDEM-SAVE → COMMIT → 정산 DTO 재조회·알림 예약. 은행 입금 자동 조회는 없다.
+
+SQL: W 6회 + S-ROUND → S-RECEIVED = **8회**. 같은 키 성공 재생은 5회이며 동시 수취인 확인을 같은 잠금 아래 합성한다.
+
+### S17. POST /api/rounds/{roundId}/complete — 일반 정산 종료
+
+SettlementClient.command('complete')의 확인 → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.roundCommand('complete',VersionRequestDTO) → W → MutationResult → 정산 기록 화면 이동.
+
+1. expectedVersion만 허용. W → S-ROUND → 생성자·버전·LOCKED·최종 저장 완료 검사.
+2. S-PENDING-COUNT가 received_at IS NULL인 송금 수를 조회한다. 남아 있으면 409 pending_settlement_checks와 pendingCount를 반환하고 ROLLBACK한다.
+3. 모두 확인되었으면 S-COMPLETE로 COMPLETED·completed_at 저장 → S-BUMP → IDEM-SAVE → COMMIT.
+4. 종료한 회차는 읽기 전용이다. 기존 분담금·잔액·송금·계좌 안내 조회는 보존하며 실제 은행 입금을 검증하지 않는다.
+5. 성공 후 기록 화면 이동·알림 예약. 참여 이력의 미종료 회차 제한에서 이 회차가 빠진다.
+
+SQL: W 6회 + S-ROUND → S-PENDING-COUNT → S-COMPLETE → S-BUMP = **10회**. 미확인 거절은 BEGIN → 락 → AUTH → IDEM-READ → S-ROUND → S-PENDING-COUNT → ROLLBACK = **7회**다.
+
+### S18. POST /api/rounds/{roundId}/force-complete — 강제 정산 종료
+
+SettlementClient.command('force-complete')의 미확인 인원·되돌릴 수 없음 경고 → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.roundCommand('force-complete',VersionRequestDTO) → W → MutationResult → 정산 기록 화면 이동.
+
+1. expectedVersion만 허용. W → S-ROUND → 생성자·버전·LOCKED·최종 저장 완료 검사.
+2. S-PENDING-COUNT를 실행하지 않고 S-COMPLETE → S-BUMP로 종료를 저장한다. 미확인 송금의 received_at을 임의로 확인 처리하지 않는다.
+3. IDEM-SAVE → COMMIT → 응답·알림 예약. 일반 종료와의 경합도 기존 쓰기 잠금·버전/상태 검사로 하나만 성공한다.
+4. 경고와 종료 후 읽기 전용 흐름을 유지한다.
+
+SQL: W 6회 + S-ROUND → S-COMPLETE → S-BUMP = **9회**.
+
+### S19. POST /api/rounds/{roundId}/expenses/{expenseId}/receipts — 영수증 추가
+
+ExpenseCard.upload() → POST multipart → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController의 file·expectedVersion → SettleService.addReceipt() → 사전 읽기·AVIF 변환·MinIO 저장·W 재검증 → MutationResult → 영수증 대화상자 종료·상세 재조회.
+
+1. Controller는 동일 출처·file 한 개·허용 폼 키(file,expectedVersion)를 확인한다. 파일 원본 SHA-256·경로·버전·claimed type을 멱등 payload로 사용한다.
+2. 사전 읽기: BEGIN → AUTH → IDEM-READ → S-ROUND → S-EXPENSE → [S-ACTIVE-MEMBER] → COMMIT. 편집 권한·RECORDING·expectedVersion을 확인한다. 기존 성공이면 즉시 재생하여 변환/업로드를 반복하지 않는다.
+3. Global FileCompressor가 실제 JPEG/PNG/WebP 포맷과 claimed type을 비교하고 autoOrient().avif()로 변환한다. Global MinIOUtil이 비공개 버킷의 `receipts/{userId}/{key}.avif`에 저장한다. 이미지 작업은 DB 쓰기 락 밖에서 수행한다.
+4. W → S-ROUND → S-EXPENSE → [S-ACTIVE-MEMBER]로 현재 상태·권한·버전을 다시 검사 → S-RECEIPT-INSERT로 Object Key·MIME·크기·해시 저장 → S-BUMP → IDEM-SAVE → COMMIT.
+5. 변환 타입 오류는 415, 변환/저장 불가는 503, 사전 검증 이후 잠긴 회차는 DB 재검사에서 거절한다. 객체 저장 후 DB 실패로 남는 객체의 자동 정리는 현재 제공하지 않는다(기존 ponytail 한계 유지).
+
+사전 SQL **6 + A회**, 저장 SQL **10 + A회**, 합계 **16 + 2A회**(생성자 16회, 일반 작성자 18회). 이미 성공한 업로드는 BEGIN → AUTH → IDEM-READ → COMMIT = **4회**다. MinIO PUT·AVIF 변환은 SQL 횟수에 포함하지 않는다. 앱 파일 크기 제한을 추가하지 않고 변환기의 픽셀 안전장치를 유지한다.
+
+### S20. GET /api/receipts/{receiptId} — 인증된 영수증 이미지 조회
+
+ReceiptImage.view() → GET(blob) → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController → SettleService.getReceipt() → R·MinIO 읽기 → 이미지 바이트 → 브라우저 Object URL·미리보기.
+
+1. BEGIN → AUTH → S-RECEIPT. 영수증 → 지출 → round_members JOIN의 본인 참여 이력으로 조회 권한을 제한한다. 다른 회차 영수증은 404다.
+2. Object Key가 있으면 MIME·키만 읽고 COMMIT 후 MinIO GET으로 바이트를 가져온다. DB 읽기 트랜잭션을 잡고 객체 네트워크 작업을 기다리지 않는다.
+3. 과거 BYTEA 영수증이면 같은 스냅샷에서 S-LEGACY-CONTENT 1회를 추가하고 COMMIT한다. 기존 JPEG/PNG/WebP 등 저장 MIME을 유지한다.
+4. Controller는 실제 MIME·X-Content-Type-Options:nosniff·Cache-Control:private,no-store로 바이너리 응답한다. JSON data envelope를 쓰지 않는다.
+5. 브라우저가 미리보기를 접거나 컴포넌트를 해제할 때 Object URL을 폐기한다.
+
+Object Key SQL: BEGIN → AUTH → S-RECEIPT → COMMIT = **4회**, BYTEA는 S-LEGACY-CONTENT 추가로 **5회**다. MinIO GET은 별도 외부 작업이다.
+
+### S21. DELETE /api/rounds/{roundId}/expenses/{expenseId}/receipts/{receiptId} — 영수증 삭제
+
+ExpenseCard.removeReceipt()의 확인 → DELETE → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.removeReceipt(VersionRequestDTO) → W → MutationResult → 상세 재조회.
+
+1. expectedVersion만 허용. W → S-ROUND → S-EXPENSE → [S-ACTIVE-MEMBER] → 작성자/회차 생성자·RECORDING·버전 확인.
+2. S-RECEIPT-DELETE는 receiptId와 expenseId를 함께 제한하고 Object Key를 RETURNING한다. 삭제 행이 없으면 404 not_found·ROLLBACK이다.
+3. S-BUMP → IDEM-SAVE → COMMIT → Object Key가 있으면 MinIO 삭제 → 응답·알림 예약. 지출 원본은 유지한다.
+4. 같은 키 성공 재생은 DB 삭제·객체 삭제를 반복하지 않으며 BYTEA 영수증은 외부 객체 삭제 없이 처리한다.
+
+SQL: W 6회 + S-ROUND → S-EXPENSE → [S-ACTIVE-MEMBER] → S-RECEIPT-DELETE → S-BUMP = **10 + A회**.
+
+### Settle 실시간·검증 경계
+
+일반 변경 후 알림 수신자 조회는 BEGIN → 회차 group_id → round_members → COMMIT = **별도 4회**다. 참여자 제외는 활성 모임 멤버 조회까지 **5회**다. 취소는 삭제 전의 허가된 수신자를 읽는 **5회**를 별도 사용하고 삭제 후 DB 조회를 생략한다. 실시간 비활성화 시 모두 SQL 0회다. after() 알림 실패는 이미 저장한 변경을 롤백하지 않는다. 메시지에는 rounds·group-rounds·round·settlement와 필요한 groups/group 키만 넣고 금액·계좌·영수증·초대 토큰은 넣지 않는다.
+
+[scripts/settle-sql.integration.test.ts](../scripts/settle-sql.integration.test.ts)는 실제 PostgreSQL SQL 로그로 생성 11/12회·목록 4회·상세 10/11회·지출 작성자별 13/14회·수정 14회·삭제 12회·제외 검토 6회·제외 12회·확정 12회·재오픈 10회·나머지 있는 전송 12회·없는 전송 20회·추첨 17회/재추첨 방지 7회·최종 전/후 안내 5/8회·수취 확인 8회·일반/강제 종료 10/9회·취소 9회·영수증 생성/조회/삭제 16/4/10회·일반 성공 재생 5회·영수증 재생 4회·종료 후 편집 거절 ROLLBACK을 검증한다. 숫자는 해당 테스트의 참여자·분담금·송금 행 수 기준이며 위 계산식이 일반 규칙이다.
+
+기존 [settlement.integration.test.ts](../scripts/settlement.integration.test.ts)·[concurrency.integration.test.ts](../scripts/concurrency.integration.test.ts)·[receipt-migration.integration.test.ts](../scripts/receipt-migration.integration.test.ts)·[routes.integration.test.ts](../scripts/routes.integration.test.ts)는 Settle 공개 진입점을 통해 권한·과거 조회·정확한 통화/금액·CUSTOM 합계·멱등성·버전 충돌·추첨 중간 실패 취소·상태 전이 경합·사전 검사 후 업로드 경합·최신 수취 계좌 제한·기존 BYTEA 영수증을 검증한다. [domain-boundaries.test.ts](../src/lib/domain-boundaries.test.ts)는 Frontend/Shared→Backend 금지, 서버 전용 표시, 다른 도메인 내부 import 금지와 Controller/Service의 SQL 미포함을 검사한다. [settle.test.ts](../src/lib/settle.test.ts)는 경로 분배·출처·JSON/multipart 오류를 검사한다.
+
+재현: README대로 개발/운영과 분리된 **로컬 test DB와 MinIO 버킷**을 지정한 뒤 다음을 실행한다. 실제 바인딩/계좌/토큰을 로그로 출력하지 않는다.
+
+```bash
+npm test
+node --import ./scripts/test-server-only.mjs --import tsx --test scripts/settle-sql.integration.test.ts
+npm run test:integration
+npm run build
+# 동일 테스트 DB·JWT secret의 앱과 Chrome debugging을 준비한 뒤
+node --import ./scripts/test-server-only.mjs --import tsx scripts/browser-check.mjs
+```
+
+Settle 분리 검증 결과(2026-10-03): `npm test` **93개**, 격리된 로컬 PostgreSQL·MinIO의 `npm run test:integration` **45개**, `npm run build`가 통과했다. 전체 `scripts/browser-check.mjs`도 통과하여 실제 Chrome에서 회차 생성·지출/CUSTOM·버전 충돌 재저장·영수증·제외·확정/추첨·최신 수취 계좌·수취 확인·종료/읽기 전용·과거 조회·탈퇴/재가입·응답 유실 재시도를 확인했다. 기존 개발 서버와 분리한 소스/의존성 복사본을 사용했으며 실제 카카오 외부 인증은 이번 검증 대상이 아니다.

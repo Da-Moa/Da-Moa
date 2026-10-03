@@ -168,3 +168,8 @@ export const endUserMembershipsSql = `
   WHERE user_id = $1 AND left_at IS NULL AND EXISTS(SELECT 1 FROM withdrawn)
   RETURNING group_id
 `
+
+export function findRoundCandidates(client: Database, groupId: string, ids: string[]) {
+  return client.query<{ id: string; name: string }>(`SELECT u.id,COALESCE(u.display_name,'카카오 사용자') AS name FROM group_members m JOIN users u ON u.id=m.user_id
+      WHERE m.group_id=$1 AND m.user_id=ANY($2::text[]) AND m.left_at IS NULL AND u.deleted_at IS NULL AND u.onboarding_completed_at IS NOT NULL ORDER BY u.id`, [groupId, ids])
+}

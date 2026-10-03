@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { apiRequest, SheetSelect, useAction } from '../../../../Global/Util/Frontend'
-import { CURRENCIES, CURRENCY_CODES } from '../../../../lib/money'
+import { CURRENCIES, CURRENCY_CODES } from '../../Shared'
 import type { Member, MutationResult } from '../../../../lib/domain-types'
 
 export function CreateRoundForm({ groupId, members, userId, action }: { groupId: string; members: Member[]; userId: string; action: ReturnType<typeof useAction> }) {

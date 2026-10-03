@@ -1,16 +1,16 @@
 'use client'
 
-import { useAccount } from '../../Domain/User/Frontend'
+import { useAccount } from '../../../User/Frontend'
 
 import { Fragment, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { ArrowRight, ChevronDown, ChevronLeft, ImagePlus, Pencil, Plus, Trash2, X } from 'lucide-react'
-import { AnimatedMoney } from '../animated-money'
-import { ApiError, apiRequest } from '../../lib/api-client'
-import type { ExclusionCheck, Expense, MutationResult, Receipt, RoundDetail } from '../../lib/domain-types'
-import { amountInputPattern, currencyDecimals, expenseInputMaximum, formatAmountInput, formatMoney, minorToAmount, parseAmount } from '../../lib/money'
-import { ErrorNotice, Loading, ParticipantAvatar, SheetSelect, StatusBadge, useAction, useResource } from './ui'
+import { AnimatedMoney } from '../../../../Global/Util/Frontend'
+import { ApiError, apiRequest } from '../../../../Global/Util/Frontend'
+import type { ExclusionCheck, Expense, MutationResult, Receipt, RoundDetail } from '../../Shared'
+import { amountInputPattern, currencyDecimals, expenseInputMaximum, formatAmountInput, formatMoney, minorToAmount, parseAmount } from '../../Shared'
+import { ErrorNotice, Loading, ParticipantAvatar, SheetSelect, StatusBadge, useAction, useResource } from '../../../../Global/Util/Frontend'
 
 const expenseDayFormatter = new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' })
 function expenseDay(createdAt: number) {
