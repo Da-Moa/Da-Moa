@@ -82,12 +82,12 @@ function summary(row: RoundRow): RoundSummary {
 }
 
 export async function listRounds(access: Identity, query: URLSearchParams, groupId?: string) {
-  const { limit, cursor } = pagination(query)
-  const status = query.get('status')
-  const search = query.has('q') ? textInput(query.get('q'), 100) : null
-  if (status && !['active', 'RECORDING', 'CONFIRMED', 'LOCKED', 'COMPLETED'].includes(status)) badInput()
-  return withReadTransaction(async client => {
+  return withDatabaseConnection(async client => {
     const account = await requireAccount(client, access)
+    const { limit, cursor } = pagination(query)
+    const status = query.get('status')
+    const search = query.has('q') ? textInput(query.get('q'), 100) : null
+    if (status && !['active', 'RECORDING', 'CONFIRMED', 'LOCKED', 'COMPLETED'].includes(status)) badInput()
     const { rows } = await repository.findRounds(client, account.id, groupId ?? null, status, search, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1)
     return pageOf(rows.map(summary), limit, row => row)
   })

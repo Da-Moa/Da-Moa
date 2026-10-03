@@ -34,11 +34,15 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
     process.env.DB_QUERY_LOG = 'true'
     let statements: string[] = []
     const logger = t.mock.method(console, 'info', (message: string) => { statements.push(message.replace(/^SQL:\s*/, '').replace(/\s+/g, ' ').trim()) })
-    const trace = async <T>(count: number, write: boolean | 'receipt' | 'session', work: () => Promise<T>) => {
+    const trace = async <T>(count: number, write: boolean | 'receipt' | 'session' | 'connection', work: () => Promise<T>) => {
       statements = []
       const result = await work()
       assert.equal(statements.length, count, statements.join('\n'))
-      if (write === 'session') {
+      if (write === 'connection') {
+        assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
+        if (count) assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
+        if (count === 2) assert.match(statements[1], /FROM rounds r JOIN groups g/)
+      } else if (write === 'session') {
         assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b/.test(sql) && !/pg_advisory_xact_lock|FOR UPDATE|FOR SHARE|mutation_requests/.test(sql)))
         assert.equal(statements[0], 'SELECT pg_advisory_lock(1684106607)')
         assert.equal(statements.at(-1), 'SELECT pg_advisory_unlock(1684106607) AS unlocked')
@@ -82,8 +86,25 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         assert.equal((await db.query('SELECT 1 FROM round_members WHERE round_id=$1', [rejectedKey])).rowCount, 0)
       } finally { await db.query(`ALTER TABLE round_members DROP CONSTRAINT ${constraint}`) }
 
-      await trace(4, false, () => listRounds(a, new URLSearchParams(), group.id))
-      await trace(4, false, () => listRounds(a, new URLSearchParams({ q: '없는회차' })))
+      for (const groupId of [group.id, undefined]) {
+        const first = await trace(2, 'connection', () => listRounds(a, new URLSearchParams({ limit: '1', status: 'active', q: body.name }), groupId))
+        assert.equal(first.items.length, 1)
+        assert.ok(first.nextCursor)
+        const second = await trace(2, 'connection', () => listRounds(a, new URLSearchParams({ limit: '1', cursor: first.nextCursor! }), groupId))
+        assert.equal(second.items.length, 1)
+        assert.equal(second.nextCursor, null)
+        assert.deepEqual(new Set([...first.items, ...second.items].map(item => item.id)), new Set([round.id, concurrentKey]))
+        assert.deepEqual((await trace(2, 'connection', () => listRounds(a, new URLSearchParams({ q: '없는회차' }), groupId))).items, [])
+        for (const [input, expected] of [
+          [{ limit: '0' }, 'invalid_input'], [{ limit: '101' }, 'invalid_input'], [{ limit: '1.5' }, 'invalid_input'],
+          [{ cursor: 'invalid' }, 'invalid_cursor'], [{ status: 'INVALID' }, 'invalid_input'], [{ q: '' }, 'invalid_input'],
+        ] as const) {
+          await trace(1, 'connection', () => assert.rejects(listRounds(a, new URLSearchParams(input), groupId), (error: { code: string }) => error.code === expected))
+          await trace(1, 'connection', () => assert.rejects(listRounds({ ...a, userId: randomUUID() }, new URLSearchParams(input), groupId), (error: { code: string }) => error.code === 'unauthorized'))
+        }
+        await trace(0, 'connection', () => assert.rejects(listRounds(null, new URLSearchParams({ limit: '0' }), groupId), (error: { code: string }) => error.code === 'unauthorized'))
+      }
+      assert.deepEqual((await trace(2, 'connection', () => listRounds(a, new URLSearchParams(), randomUUID()))).items, [])
       await trace(10, false, () => getRound(a, round.id, new URLSearchParams()))
       let version = 1
       const expenseKey = key(), expenseBody = { description: '지출', amount: '100', payerId: b.userId, splitMode: 'ALL', expectedVersion: version }
@@ -130,6 +151,9 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       await trace(5, true, () => setSettlementCheck(b, checkKey, round.id, checkBody))
       await command('complete', 10)
       const cancelled = await trace(4, 'session', () => createRound(a, uuidV7(), group.id, { ...body, participantIds: [a.userId, b.userId] }))
+      const historical = await trace(2, 'connection', () => listRounds(c, new URLSearchParams(), group.id))
+      assert.ok(historical.items.some(item => item.id === round.id), 'excluded participants retain round history')
+      assert.ok(historical.items.every(item => item.id !== cancelled.id), 'group membership alone does not expose a round')
       await trace(9, true, () => roundCommand(a, key(), cancelled.id, 'cancel', { expectedVersion: 1 }))
       const even = await trace(4, 'session', () => createRound(a, uuidV7(), group.id, { ...body, participantIds: [a.userId, b.userId] }))
       let evenVersion = (await trace(13, true, () => saveExpense(a, key(), even.id, { ...expenseBody, amount: '100', expectedVersion: 1 }))).version!

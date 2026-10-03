@@ -889,7 +889,7 @@ User 분리 당시 Group·Settle/realtime의 기존 회원·수취 계좌 JOIN�
 
 ## 8. Settle 요청 흐름·SQL
 
-회차·지출·부담자·영수증·개인 정산을 **21개 메서드/경로**로 분리했다. API 주소·응답·화면 동작·SQL 순서·기존 락 정책은 유지한다. 회차 생성은 UUIDv7 ticket을 PK로 사용하며 공용 세션 락·AUTH·단일 저장·락 해제 4회 흐름으로 처리한다. 명시적 트랜잭션·멱등 성공 기록은 없으며 나머지 변경의 기존 정책은 유지한다.
+회차·지출·부담자·영수증·개인 정산을 **21개 메서드/경로**로 분리했다. API 주소·응답·화면 동작은 유지한다. 회차 목록은 트랜잭션 없이 AUTH → 입력 검증 → 단일 조회의 SQL 2회로 처리한다. 회차 생성은 UUIDv7 ticket을 PK로 사용하며 공용 세션 락·AUTH·단일 저장·락 해제 4회 흐름으로 처리한다. 명시적 트랜잭션·멱등 성공 기록은 없으며 나머지 변경의 기존 정책은 유지한다.
 
 공개 진입점은 [Settle Backend](../src/Domain/Settle/Backend/index.ts)·[Frontend](../src/Domain/Settle/Frontend/index.ts)·[Shared](../src/Domain/Settle/Shared/index.ts)다. [SettleController](../src/Domain/Settle/Backend/Controller/SettleController.ts)가 JSON/multipart·응답·after() 알림을, [SettleService](../src/Domain/Settle/Backend/Service/SettleService.ts)가 입력·권한·상태·버전·계산·저장 순서를, [SettleRepository](../src/Domain/Settle/Backend/Repository/SettleRepository.ts)가 SQL을 소유한다. SQL 행 타입은 내부 SettleDAO, not_found 오류는 SettleException에 있다. Controller·Service는 query()를 호출하지 않는다.
 
@@ -920,25 +920,25 @@ SQL 순서: **락 획득 → AUTH → 조건부 회차·참여자 INSERT → 락
 
 ### S2. GET /api/groups/{groupId}/rounds — 모임별 회차 목록
 
-GroupClient의 RoundList.useResource()·loadMore() → GET → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController → SettleService.listRounds(access,query,groupId) → R → Page<RoundSummary> → 목록·다음 커서 반영.
+GroupClient의 RoundList.useResource()·loadMore() → GET → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController → SettleService.listRounds(access,query,groupId) → 공용 풀 연결 → Page<RoundSummary> → 목록·다음 커서 반영.
 
-1. pagination()은 limit 기본 20·1~100과 cursor를 검사한다. q는 trim 후 1~100자이며 status는 active 또는 네 회차 상태만 허용한다.
-2. BEGIN 읽기 스냅샷 → AUTH → S-ROUND-LIST. round_members의 본인 참여 이력과 groupId를 조건으로 회차·모임 이름·최종 잔액·전체 지출·활성 회차 참여자 수를 조회한다. 모임에서 이탈하거나 회차에서 제외되어도 기존 참여 이력은 조회 조건에 남는다.
+1. 공용 풀 연결에서 AUTH 내 정보 조회(+1). 회원의 가입·탈퇴 상태를 검사한 뒤 pagination()으로 limit 기본 20·1~100과 cursor를 검사한다. q는 trim 후 1~100자이며 status는 active 또는 네 회차 상태만 허용한다.
+2. S-ROUND-LIST(+1): round_members의 본인 참여 이력과 groupId를 조건으로 회차·모임 이름·최종 잔액·전체 지출·활성 회차 참여자 수를 조회한다. 모임에서 이탈하거나 회차에서 제외되어도 기존 참여 이력은 조회 조건에 남는다.
 3. 회차/모임 이름의 대소문자 무시 부분 검색, 상태 필터, (created_at,id) 내림차순 cursor·limit+1을 같은 SQL에 적용한다. pageOf()로 실제 페이지와 다음 cursor를 만든다.
-4. COMMIT → 연결 반환 → DTO 응답. GET은 상태·멱등 기록을 변경하거나 알림을 발행하지 않는다.
+4. 성공·실패 모두 finally에서 연결 반환. GET은 상태·멱등 기록을 변경하거나 알림을 발행하지 않는다.
 
-SQL 순서: BEGIN → AUTH → S-ROUND-LIST → COMMIT = **4회**. 빈 결과도 4회다. 현재 모임 멤버 전체에게 회차를 공개하지 않고, 조회자 자신의 회차 참여 이력으로 제한한다.
+SQL 순서: **AUTH(+1) → 입력 검증 → S-ROUND-LIST(+1) = 2회**. 빈 결과도 2회, 회원 상태·입력 거절은 AUTH 1회다. BEGIN·COMMIT·ROLLBACK·명시적 락은 없다. 현재 모임 멤버 전체에게 회차를 공개하지 않고, 조회자 자신의 회차 참여 이력으로 제한한다.
 
 ### S3. GET /api/rounds — 내 회차·정산 기록 목록
 
-HomeClient/정산 기록의 RoundList → GET → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController → SettleService.listRounds(access,query) → R → Page<RoundSummary> → 홈/기록 카드 반영.
+HomeClient/정산 기록의 RoundList → GET → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController → SettleService.listRounds(access,query) → 공용 풀 연결 → Page<RoundSummary> → 홈/기록 카드 반영.
 
-1. S2와 같은 limit·cursor·q·status 검사. status=active는 COMPLETED 제외, COMPLETED는 종료 기록만 조회한다.
-2. BEGIN → AUTH → S-ROUND-LIST. groupId는 NULL이며 본인이 참여한 모든 모임의 회차를 같은 조회로 검색한다.
+1. S2와 같은 AUTH → limit·cursor·q·status 검사. status=active는 COMPLETED 제외, COMPLETED는 종료 기록만 조회한다.
+2. S-ROUND-LIST. groupId는 NULL이며 본인이 참여한 모든 모임의 회차를 같은 조회로 검색한다.
 3. 회차마다 자신의 통화·잔액·지출 합계를 반환한다. 서로 다른 회차/통화를 하나의 금액으로 합산하지 않는다.
-4. pageOf() → COMMIT → 연결 반환. 과거 참여 이력의 조회 권한을 유지한다.
+4. pageOf() → 연결 반환. 과거 참여 이력의 조회 권한을 유지한다.
 
-SQL 순서: BEGIN → AUTH → S-ROUND-LIST → COMMIT = **4회**, 빈 결과도 4회다.
+SQL 순서: **AUTH(+1) → 입력 검증 → S-ROUND-LIST(+1) = 2회**, 빈 결과도 2회다. 공통 listRounds()에서 트랜잭션 없이 처리하며 회원 상태·입력 거절은 AUTH 1회다.
 
 ### S4. GET /api/rounds/{roundId} — 회차 상세·지출 페이지·송금 예상
 
