@@ -1,5 +1,5 @@
 import { uuidV7 } from '../src/lib/uuid.ts'
-// UI regression in an isolated local DB; --forms-only checks custom input and bank controls.
+// UI regression in an isolated local DB; --forms-only checks controls, --account-only checks bank invalidation.
 // Run with a dev server using that same test DB and Chrome --remote-debugging-port=9223.
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
@@ -142,6 +142,54 @@ try {
   await cdp('Fetch.enable', { patterns: [{ urlPattern: `${origin}/api/rounds/*/expenses`, requestStage: 'Response' }] })
   await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
   await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
+  if (process.argv.includes('--account-only')) {
+    const member = await user('계좌 재조회', '001234567890')
+    await setSession(member.session)
+    const hold = await cdp('Page.addScriptToEvaluateOnNewDocument', { source: `
+      window.__bankInvalidations = [];
+      const NativeSocket = window.WebSocket;
+      window.WebSocket = class extends NativeSocket {
+        constructor(...args) {
+          super(...args);
+          if (new URL(args[0], location.href).pathname !== '/realtime') return;
+          window.__bankSocket = this;
+          this.addEventListener('message', event => {
+            const data = JSON.parse(event.data);
+            if (data.type === 'invalidate' && data.keys.includes('me')) {
+              event.stopImmediatePropagation();
+              window.__bankInvalidations.push({ socket: this, data: event.data });
+            }
+          });
+        }
+      };
+    ` })
+    await navigate('/home/account', '내 정보')
+    await waitFor('window.__bankSocket?.readyState === WebSocket.OPEN')
+    await new Promise(resolve => setTimeout(resolve, 700))
+    await click('계좌 수정하기')
+    await fill('[name=accountNumber]', '94160201358511')
+    await fill('[name=bankCode]', '004')
+    await fill('[name=accountHolder]', '수정 검증')
+    const reads = apiReads.length
+    await click('계좌 저장')
+    await waitFor(hasText('계좌를 저장했어요.'))
+    await waitFor('window.__bankInvalidations.length === 1')
+    await new Promise(resolve => setTimeout(resolve, 700))
+    assert.equal(apiReads.length, reads, 'bank PUT must not trigger any GET before invalidation delivery')
+    assert.equal(await evaluate("document.querySelector('.account-bank-toggle').disabled"), true, 'wait for the saved version before reopening the editor')
+    await evaluate("window.__bankInvalidations.splice(0).forEach(({ socket, data }) => socket.onmessage(new MessageEvent('message', { data })))")
+    await waitFor("document.querySelector('.account-details').textContent.includes('941602-01-358511')")
+    await new Promise(resolve => setTimeout(resolve, 700))
+    assert.deepEqual(apiReads.slice(reads), ['/api/me'], 'one me GET after WebSocket invalidation')
+    await click('계좌 수정하기')
+    assert.equal(await evaluate("document.querySelector('[name=accountNumber]').value"), '941602-01-358511')
+    assert.deepEqual(exceptions, [])
+    await cdp('Page.removeScriptToEvaluateOnNewDocument', { identifier: hold.identifier })
+    console.log('PASS bank PUT triggers no GET; WebSocket invalidation triggers one me GET and refreshes the form')
+    ws.close()
+    await fetch(`${debuggerOrigin}/json/close/${tab.id}`)
+    process.exit(0)
+  }
   if (process.argv.includes('--invites-only')) {
     const owner = await user('초대 생성자', '001234567890')
     const participant = await user('초대 참여자', '002234567890')

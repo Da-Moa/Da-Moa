@@ -15,7 +15,7 @@ export function AccountPanel() {
   const bankForm = useBankForm('/api/me/bank-account')
   const [draftVersion, setDraftVersion] = useState(account.bankVersion)
   const [formKey, setFormKey] = useState(0)
-  const [ready, setReady] = useState(true)
+  const ready = account.bankVersion >= draftVersion
   const [saved, setSaved] = useState(false)
   const [editingBank, setEditingBank] = useState(false)
   const bankToggle = useRef<HTMLButtonElement>(null)
@@ -33,7 +33,7 @@ export function AccountPanel() {
   async function reloadLatest() {
     bankForm.clear()
     const latest = await reloadAccount()
-    if (latest) { setDraftVersion(latest.bankVersion); setFormKey(key => key + 1); setReady(true); action.setError(null); setSaved(false) }
+    if (latest) { setDraftVersion(latest.bankVersion); setFormKey(key => key + 1); action.setError(null); setSaved(false) }
   }
   function cancelBankEdit() {
     bankForm.clear(); action.setError(null); setSaved(false); setEditingBank(false)
@@ -44,10 +44,8 @@ export function AccountPanel() {
     setSaved(false)
     const result = await action.run(() => apiRequest<BankAccountResponseDTO>('/api/me/bank-account', { method: 'PUT', body: { ...bankValues(form), expectedBankVersion: draftVersion }, signal: bankForm.signal() }))
     if (result) {
-      bankForm.clear(); setReady(false)
-      const latest = await reloadAccount()
-      if (latest) { setDraftVersion(latest.bankVersion); setFormKey(key => key + 1); setReady(true); cancelBankEdit(); setSaved(true) }
-      else action.setError(new Error('계좌를 저장했지만 최신 정보를 불러오지 못했어요. 저장된 계좌를 다시 불러와 주세요.'))
+      setDraftVersion(result.bankVersion); setFormKey(key => key + 1)
+      cancelBankEdit(); setSaved(true)
     }
   }
   async function logout() {
@@ -81,7 +79,7 @@ export function AccountPanel() {
       <span className="account-avatar">{account.profileImageUrl ? <img alt="" height={80} width={80} referrerPolicy="no-referrer" src={account.profileImageUrl} /> : <CircleUserRound size={40} />}</span>
       <h2 id="account-profile-heading">{account.displayName ?? '카카오 사용자'}님의 정보</h2>
       <dl className="account-details"><div><dt>이름</dt><dd>{account.displayName ?? '카카오 사용자'}</dd></div>{account.email && <div><dt>이메일</dt><dd>{account.email}</dd></div>}<div><dt>계좌</dt><dd>{account.bankAccount ? `${account.bankAccount.bankName} · ${account.bankAccount.formattedAccountNumber ?? formatAccountNumber(account.bankAccount.bankCode ?? account.bankAccount.bankName, account.bankAccount.accountNumber)}` : '등록된 계좌가 없어요.'}</dd></div></dl>
-      <button aria-expanded={editingBank} className="secondary-button account-bank-toggle" disabled={action.busy} onClick={() => { if (editingBank) cancelBankEdit(); else { setDraftVersion(account.bankVersion); setEditingBank(true) } }} ref={bankToggle} type="button">{editingBank ? '계좌 수정 닫기' : '계좌 수정하기'}</button>
+      <button aria-expanded={editingBank} className="secondary-button account-bank-toggle" disabled={action.busy || !ready} onClick={() => { if (editingBank) cancelBankEdit(); else { setDraftVersion(account.bankVersion); setEditingBank(true) } }} ref={bankToggle} type="button">{editingBank ? '계좌 수정 닫기' : !ready ? '저장된 계좌 확인 중…' : '계좌 수정하기'}</button>
     </section>
     {editingBank && <section className="domain-card stack" id="bank-settings" aria-label="계좌 수정">
     <form aria-busy={action.busy} autoComplete="off" className="stack" ref={bankForm.form} onSubmit={event => { event.preventDefault(); void save(event.currentTarget) }}>

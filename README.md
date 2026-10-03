@@ -124,6 +124,8 @@ npm run dev -- --port 3087
 node --import ./scripts/test-server-only.mjs --import tsx scripts/browser-check.mjs
 # 초대 수락 후 GET 미실행·WebSocket 목록 갱신만 검증
 node --import ./scripts/test-server-only.mjs --import tsx scripts/browser-check.mjs --invites-only
+# 계좌 저장 후 GET 미실행·WebSocket 내 정보 갱신만 검증
+node --import ./scripts/test-server-only.mjs --import tsx scripts/browser-check.mjs --account-only
 ```
 
 `BROWSER_APP_ORIGIN` 기본값은 `http://localhost:3087`, `CHROME_DEBUG_ORIGIN`은 `http://127.0.0.1:9223`입니다. 스크립트는 테스트 DB에 기존 가입 완료 회원을 만들고 모바일 크기의 Chrome에서 초대·지출·증빙·제외·확정·추첨·최신 수취 계좌 표시·링크 복사·종료와 응답 유실 재시도를 검사합니다. 가입·재가입 화면은 계좌 직접 입력 폼을 검사합니다. 카카오 실제 인증은 별도로 확인해야 합니다. 결과 이미지는 시스템 임시 디렉터리의 `da-moa-browser-artifacts/settlement.png`에 저장하며 `BROWSER_ARTIFACT_DIR`로 위치를 지정할 수 있습니다.

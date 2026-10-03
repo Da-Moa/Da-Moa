@@ -819,17 +819,17 @@ OnboardingForm.register() → POST → Node Proxy → JWT Guard(Access JWT 검�
 
 ### U3. PUT /api/me/bank-account — 대표 계좌 변경
 
-AccountPanel.save() → PUT → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 User 위임 → UserController.getBankAccountResponse() → updateBankAccount() → 공용 풀 연결 → BankAccountResponseDTO → 입력 정리·최신 /api/me 재조회·폼 닫기.
+AccountPanel.save() → PUT → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 User 위임 → UserController.getBankAccountResponse() → updateBankAccount() → 공용 풀 연결 → BankAccountResponseDTO → 입력 정리·폼 닫기 → WebSocket me invalidation 수신 후 /api/me 재조회.
 
 1. Controller가 sameOrigin() 검사 → 최대 16,384바이트 JSON·Idempotency-Key 읽기. 공용 풀 연결을 확보하며 BEGIN·COMMIT·ROLLBACK·명시적 락·SET은 실행하지 않는다.
 2. AUTH: requireAccount()가 본인 회원을 조회하고 가입 완료·미탈퇴·app 목적을 확인한다.
 3. objectBody()·normalizeBankAccountInput()으로 허용 필드·은행 코드·계좌번호·예금주·expectedBankVersion 검증 및 정규화. 은행명은 지원 은행 코드의 이름을 사용한다. 기존 mutationDigest()로 UUID 요청 키 형식만 검사하며 성공 기록을 조회·저장하지 않는다.
 4. U-BANK-UPDATE: UserRepository.saveBankAccount()가 `id`·expectedBankVersion과 일치하고 현재도 활성 가입 상태(`deleted_at IS NULL AND onboarding_completed_at IS NOT NULL`)인 행만 UPDATE한다. 계좌 원본·표시 형식·은행·예금주·갱신 시각·bank_version 증가를 한 문장으로 저장한다. 기존 은행 코드·계좌번호·예금주가 정규화 입력과 같을 때만 확인 이력을 유지하며, 다르면 초기화한다. 갱신 행이 0개면 409 bank_account_conflict로 거절한다.
-5. 성공하면 `{ data: { id, bankVersion: expectedBankVersion + 1 } }` 반환·after()로 publishBankInvalidation() 예약. 연결은 성공·실패 모두 finally에서 풀에 반환한다. 프론트는 기존 ErrorNotice로 실패를 표시하고 버전 충돌 시 최신 정보 다시 불러오기를 제공한다.
+5. 성공하면 `{ data: { id, bankVersion: expectedBankVersion + 1 } }` 반환·after()로 publishBankInvalidation() 예약. 연결은 성공·실패 모두 finally에서 풀에 반환한다. 프론트는 성공 응답의 bankVersion으로 저장을 확인하고 폼을 닫으며, PUT 성공 직후에는 GET을 실행하지 않는다. 최신 계좌는 WebSocket의 me invalidation에서만 자동 재조회하고 저장된 버전이 반영된 뒤 편집을 다시 허용한다. 기존 ErrorNotice로 실패를 표시하고 버전 충돌 시 최신 정보 다시 불러오기를 제공한다.
 
 정상 SQL: **AUTH 내 정보 읽기 (+1) → 입력 검증 → U-BANK-UPDATE 조건부 UPDATE (+1) = 2회**. 기존 12회에서 트랜잭션·락·중복 AUTH·멱등 기록 SQL을 제거했다. 출처·JSON·JWT 거절은 0회, 회원 상태·계좌 입력·요청 키 오류는 AUTH 1회, 버전 충돌과 AUTH 후 상태 변경 거절은 AUTH + UPDATE 2회다. 같은 버전의 동시 요청은 하나만 성공하며, 같은 요청 키·본문의 재전송도 이미 저장된 버전이면 409다. 응답이 유실되면 최신 내 정보를 조회해 저장 결과를 확인한다. 진행 중 정산 조회·외부 계좌 확인은 없다.
 
-[scripts/user.integration.test.ts](../scripts/user.integration.test.ts)에서 실제 SQL 2회·트랜잭션/락/멱등 기록 미실행, AUTH 우선 검증, 동시 수정의 단일 성공, 409 응답과 안내, 동일 계좌 확인 보존·변경 시 초기화, AUTH 후 탈퇴/가입 상태 변경 거절 및 연결 반환을 검증한다.
+[scripts/user.integration.test.ts](../scripts/user.integration.test.ts)에서 실제 SQL 2회·트랜잭션/락/멱등 기록 미실행, AUTH 우선 검증, 동시 수정의 단일 성공, 409 응답과 안내, 동일 계좌 확인 보존·변경 시 초기화, AUTH 후 탈퇴/가입 상태 변경 거절 및 연결 반환을 검증한다. `scripts/browser-check.mjs --account-only`는 실제 me invalidation 전달을 잠시 보류하여 PUT 직후 GET 0회, 전달 후 /api/me GET 1회와 편집 폼의 최신 계좌 반영을 검증한다.
 
 ### U4. POST /api/auth/withdraw — 회원탈퇴
 
