@@ -7,10 +7,8 @@ import {
   accessTokenForRefresh, createAccessToken, createRefreshToken, currentTimestamp, readAccessToken, readRefreshToken,
   type AccessToken,
 } from '../src/lib/auth.ts'
-import {
-  signInKakao, withdrawAccount,
-  type AuthSession,
-} from '../src/lib/auth-store.ts'
+import { withdrawAccount } from '../src/Domain/User/Backend/index.ts'
+import { signInKakao, type AuthSession } from '../src/Global/Auth/Backend/index.ts'
 import { getAccount } from '../src/lib/authorization.ts'
 import { createDatabaseClient, withReadTransaction, withWriteTransaction } from '../src/lib/db.ts'
 import { AppError } from '../src/lib/errors.ts'

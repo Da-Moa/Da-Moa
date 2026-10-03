@@ -1,4 +1,4 @@
-import OnboardingClient from './onboarding-client'
+import { OnboardingClient } from '../../Domain/User/Frontend'
 
 export default function OnboardingPage() {
   return <OnboardingClient />

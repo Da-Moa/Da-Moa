@@ -1,11 +1,13 @@
 'use client'
 
+import { useAccount } from '../../../User/Frontend'
+
 import { useRef, useState } from 'react'
 import { ChevronLeft, Search, X } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { MAX_GROUP_MEMBERS, type GroupDetail, type GroupMutationResult as MutationResult } from '../../Shared'
-import { apiRequest, CopyLink, ErrorNotice, Loading, useAccount, useAction, useResource } from '../../../../Global/Util/Frontend'
+import { apiRequest, CopyLink, ErrorNotice, Loading, useAction, useResource } from '../../../../Global/Util/Frontend'
 import { CreateRoundForm, RoundList } from '../../../Settle/Frontend'
 
 export default function GroupClient({ groupId }: { groupId: string }) {

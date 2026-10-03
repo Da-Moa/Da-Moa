@@ -3,7 +3,7 @@ import {
   ACCESS_TOKEN_COOKIE_NAME, REFRESH_TOKEN_COOKIE_NAME, authCookieOptions,
   refreshCookieOptions, safeReturnTo,
 } from '../../../../lib/auth'
-import { signInTestAccount } from '../../../../lib/auth-store'
+import { signInTestAccount } from '../../../../Global/Auth/Backend/index'
 import { AppError, errorResponse } from '../../../../lib/errors'
 import { readBytes, requestOrigin } from '../../../../lib/http'
 import { testLoginGuard } from '../../../../lib/test-accounts'

@@ -444,3 +444,21 @@ User의 공개 `getActiveUserProfiles()`는 필요한 ID를 한 번에 조회하
 ### 2026-10-02 풀 기본 타임아웃
 
 공용 pg.Pool에 statement_timeout=15000·lock_timeout=10000을 지정했다. PostgreSQL 연결 시작 단계에서 적용하므로 앞선 트랜잭션당 SET LOCAL 두 문장은 제거하며 마이그레이션용 독립 연결은 기존 별도 제한을 유지한다. 쓰기 부가 SQL은 BEGIN·락·COMMIT의 3회, 읽기는 BEGIN·COMMIT의 2회다. 앱 서버 재시작 후 기존 풀도 새 기본값을 사용한다.
+
+
+## User-01: 구현된 회원·계좌 도메인 분리
+
+2026-10-03 후속 요청에 따라 기존 User API 4개와 회원 화면·은행 규칙을 분리했다. `auth-store.ts`를 제거하고 내 정보·가입/재가입·계좌 변경·탈퇴는 UserController/UserService/UserRepository/UserDAO/UserException과 공개 Shared DTO로 옮겼다. 로그인·JWT 발급은 Global/Auth의 AuthService에 두며, requireAccount()의 회원 SQL은 User 공개 조회에 위임한다.
+
+계좌 입력·설정·온보딩·AccountProvider/useAccount는 User Frontend의 공개 진입점에서 제공한다. AppShell은 기존 내 정보 조회/이동 검사와 실시간 연결을 유지하며 User Provider를 조합한다. 탈퇴는 같은 Client로 Settle 공개 미종료 참여 조회·Group 공개 멤버십 종료·User 소프트 삭제를 수행한다. 기존 계좌 버전, 성공 멱등 재생, 가입 목적, 재가입 동의, 과거 기록, 쿠키와 커밋 후 알림을 유지한다. SQL 최적화·전역 락 정책 변경·Settle 전체 이전은 이번 범위가 아니다.
+
+API 목록과 요청별 SQL 순서는 [분리한 API 흐름과 SQL](refactored-api-flows-and-sql.md#user)에 기록했다. User의 서버/클라이언트·공개 import 경계와 Controller/Service의 SQL 미보유를 자동 검사한다.
+
+검증 결과(2026-10-03): `npm test` 91개, `npm run build`, 격리된 로컬 테스트 DB/MinIO의 DB 통합 38개와 실시간 통합 1개가 통과했다. 기존 개발 서버의 Next 실행 락 때문에 실시간 검사는 동일 소스의 임시 복사본에서 별도로 실행했다. 전체 모바일 브라우저 검사와 `--forms-only`도 통과하여 내 정보 단일 조회·수동 가입·계좌 저장/충돌 복구·탈퇴·재가입·로그아웃 및 320/390/1024px 폼을 확인했다. 기존 브라우저 검사의 후반 초대 수락도 현재 UI의 `모임으로 가기` 링크 선택 흐름에 맞췄다. 실제 카카오 외부 인증은 이번 검사 범위에 포함하지 않는다.
+
+
+### User-02: GET /api/me 단일 AUTH 조회
+
+후속 요청에 따라 getMe()의 withReadTransaction()을 기존 withDatabaseConnection()으로 교체했다. 공용 풀의 제한 시간·회원 상태/온보딩 목적 검사·Account DTO·private, no-store 응답을 유지하며 BEGIN·COMMIT·ROLLBACK·명시적 락·SET 없이 AUTH 내 정보 읽기 1회만 수행한다. 기존 정상 SQL 3회에서 1회로 감소하고, 연결은 성공·실패 모두 반환한다. User 쓰기와 다른 기존 조회의 트랜잭션은 유지한다.
+
+검증: scripts/user.integration.test.ts가 app·가입 전·탈퇴 후 온보딩·완료 후 무효가 된 온보딩 JWT·탈퇴 회원 app JWT·존재하지 않는 회원의 GET /api/me를 실제 SQL 로그로 확인한다. 회원 조회 경로는 AUTH SELECT 1회이며 BEGIN·COMMIT·ROLLBACK·SET·명시적 락이 없고 연결을 모두 반환한다. JWT 누락은 SQL 0회다. 후속 단위 91개·격리 DB/MinIO 전체 통합 40개·프로덕션 빌드 통과.

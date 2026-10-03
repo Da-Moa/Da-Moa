@@ -32,12 +32,12 @@ for (const [namespace, domain] of [['Domain', 'Health'], ['Domain', 'Group'], ['
       return target ? [target] : []
     })
     graph.set(file, dependencies)
-    if (domain === 'Group') for (const target of dependencies) {
+    if (['Group', 'User'].includes(domain)) for (const target of dependencies) {
       for (const area of ['Frontend', 'Shared']) {
-        const directory = resolve(root, `Domain/Group/${area}`) + '/'
-        if (target.startsWith(directory) && !file.includes('/Domain/Group/')) assert.equal(target, directory + 'index.ts', `Group internal import: ${file} -> ${target}`)
+        const directory = resolve(root, `Domain/${domain}/${area}`) + '/'
+        if (target.startsWith(directory) && !file.includes(`/Domain/${domain}/`)) assert.equal(target, directory + 'index.ts', `${domain} internal import: ${file} -> ${target}`)
       }
-      if (file.includes('/Domain/Group/Frontend/') && target.includes('/Domain/') && !target.includes('/Domain/Group/')) {
+      if (file.includes(`/Domain/${domain}/Frontend/`) && target.includes('/Domain/') && !target.includes(`/Domain/${domain}/`)) {
         assert.match(target, /\/(Frontend|Shared)\/index\.ts$/, `Other domain frontend internal import: ${file} -> ${target}`)
       }
     }
@@ -66,5 +66,21 @@ for (const [namespace, domain] of [['Domain', 'Health'], ['Domain', 'Group'], ['
         assert.ok(!dependency.statements.some(statement => ts.isExpressionStatement(statement) && ts.isStringLiteral(statement.expression) && statement.expression.text === 'use client'), `${domain} backend reaches client module: ${target}`)
       }
     }
+  }
+})
+
+test('User rules and HTTP handlers delegate SQL to repositories and Auth keeps user persistence behind the public entry', () => {
+  for (const file of ['Controller/UserController.ts', 'Service/UserService.ts']) {
+    const source = readFileSync(resolve('src/Domain/User/Backend', file), 'utf8')
+    assert.doesNotMatch(source, /\.query\s*\(/, file)
+  }
+  const repository = readFileSync(resolve('src/Domain/User/Backend/Repository/UserRepository.ts'), 'utf8')
+  assert.doesNotMatch(repository, /\b(?:group_members|round_members|rounds|refresh_sessions)\b/)
+  const auth = readFileSync(resolve('src/Global/Auth/Backend/Service/AuthService.ts'), 'utf8')
+  assert.doesNotMatch(auth, /\.query\s*\(|\brefresh_sessions\b/)
+  for (const path of ['me', 'me/onboarding', 'me/bank-account', 'auth/withdraw']) {
+    const source = readFileSync(resolve('src/app/api', path, 'route.ts'), 'utf8')
+    assert.match(source, /Domain\/User\/Backend/)
+    assert.doesNotMatch(source, /\.query\s*\(|lib\/auth-store|lib\/authorization/)
   }
 })

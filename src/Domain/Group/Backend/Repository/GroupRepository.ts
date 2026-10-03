@@ -161,3 +161,12 @@ export async function joinGroup(client: Database, tokenHash: string, userId: str
     COALESCE((SELECT member_ids FROM eligible),'{}'::text[]) AS member_ids,
     EXISTS(SELECT 1 FROM saved) AS joined`, [tokenHash, userId, now, key, digest, memberLimit])).rows[0]
 }
+
+export async function findActiveUserGroupIds(client: Database, userId: string): Promise<string[]> {
+  const { rows } = await client.query('SELECT group_id FROM group_members WHERE user_id=$1 AND left_at IS NULL', [userId])
+  return rows.map(row => String(row.group_id))
+}
+
+export async function endUserMemberships(client: Database, userId: string, now: number) {
+  await client.query('UPDATE group_members SET left_at = $2 WHERE user_id = $1 AND left_at IS NULL', [userId, now])
+}

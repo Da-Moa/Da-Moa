@@ -1,5 +1,7 @@
 'use client'
 
+import { useAccount } from '../../Domain/User/Frontend'
+
 import { Fragment, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
@@ -8,7 +10,7 @@ import { AnimatedMoney } from '../animated-money'
 import { ApiError, apiRequest } from '../../lib/api-client'
 import type { ExclusionCheck, Expense, MutationResult, Receipt, RoundDetail } from '../../lib/domain-types'
 import { amountInputPattern, currencyDecimals, expenseInputMaximum, formatAmountInput, formatMoney, minorToAmount, parseAmount } from '../../lib/money'
-import { ErrorNotice, Loading, ParticipantAvatar, SheetSelect, StatusBadge, useAccount, useAction, useResource } from './ui'
+import { ErrorNotice, Loading, ParticipantAvatar, SheetSelect, StatusBadge, useAction, useResource } from './ui'
 
 const expenseDayFormatter = new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' })
 function expenseDay(createdAt: number) {

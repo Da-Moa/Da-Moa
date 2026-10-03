@@ -16,7 +16,7 @@ import {
   type KakaoProfile,
   verifyKakaoIdToken,
 } from '../../../../lib/auth'
-import { signInKakao } from '../../../../lib/auth-store'
+import { signInKakao } from '../../../../Global/Auth/Backend/index'
 import { requestOrigin } from '../../../../lib/http'
 
 export const runtime = 'nodejs'

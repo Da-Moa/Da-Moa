@@ -174,3 +174,9 @@ export async function acceptInvite(access: Identity, key: string, token: string,
     })
   })
 }
+
+export async function endUserMemberships(client: Database, userId: string, now: number): Promise<string[]> {
+  const groupIds = await repository.findActiveUserGroupIds(client, userId)
+  await repository.endUserMemberships(client, userId, now)
+  return groupIds
+}

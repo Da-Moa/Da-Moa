@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
-import { apiRequest, ApiError, discardBankAccountRequests } from './api-client.ts'
+import { apiRequest, ApiError } from './api-client.ts'
+import { discardBankAccountRequests } from '../Domain/User/Frontend/Requests.ts'
 
 const originalFetch = globalThis.fetch
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
@@ -287,5 +288,30 @@ test('me refresh and retry failures stop without an authentication loop', async 
     await assert.rejects(apiRequest('/api/me'), error => error instanceof ApiError && error.status === (refreshStatus === 200 ? 404 : refreshStatus))
     assert.deepEqual(paths, refreshStatus === 200 ? ['/api/me', '/api/auth/refresh', '/api/me'] : ['/api/me', '/api/auth/refresh'])
     assert.equal(redirects.length, refreshStatus === 401 ? 1 : 0)
+  }
+})
+
+test('authentication redirects discard pending bodies and recovery callbacks across domains', async () => {
+  for (const status of [401, 403]) {
+    fakeWindow()
+    let calls = 0
+    globalThis.fetch = async input => {
+      calls++
+      return String(input) === '/api/groups'
+        ? Response.json({ error: 'storage_unavailable' }, { status: 503 })
+        : Response.json({ error: status === 401 ? 'unauthorized' : 'onboarding_required' }, { status })
+    }
+    await assert.rejects(() => apiRequest('/api/groups', { method: 'POST', body: { name: '기존 입력' } }))
+    let recover: (() => Promise<unknown>) | undefined
+    await assert.rejects(() => apiRequest('/api/groups', { method: 'POST', body: { name: '새 입력' } }), error => {
+      assert.ok(error instanceof ApiError)
+      recover = error.recover
+      return error.code === 'unresolved_request'
+    })
+    await assert.rejects(() => apiRequest('/api/me'))
+    const beforeRecovery = calls
+    assert.ok(recover)
+    await assert.rejects(recover, error => error instanceof ApiError && error.code === 'request_discarded')
+    assert.equal(calls, beforeRecovery)
   }
 })

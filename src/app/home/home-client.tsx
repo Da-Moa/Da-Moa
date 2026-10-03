@@ -1,10 +1,11 @@
 'use client'
 
+import { useAccount } from '../../Domain/User/Frontend'
+
 import { useState } from 'react'
 import Link from 'next/link'
 import { ChevronRight, CircleUserRound, History, Search, Users } from 'lucide-react'
 import type { HomeTab } from './authenticated-home'
-import { useAccount } from './ui'
 import { GroupsList } from '../../Domain/Group/Frontend'
 import { RoundList } from '../../Domain/Settle/Frontend'
 

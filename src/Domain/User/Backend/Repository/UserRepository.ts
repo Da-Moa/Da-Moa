@@ -1,0 +1,70 @@
+import 'server-only'
+import { randomUUID } from 'node:crypto'
+import type { Database } from '../../../../Global/Util/Backend'
+import type { KakaoProfile } from '../../../../Global/Auth/Backend'
+import type { BankAccountInput } from '../../Shared'
+import type { SignInUserRow, UserRow } from '../DAO/UserDAO'
+
+export async function findUser(client: Database, userId: string): Promise<UserRow | undefined> {
+  const { rows } = await client.query<UserRow>(`
+    SELECT u.id, u.display_name, u.email, u.profile_image_url,
+           u.bank_name, u.account_number, u.account_number_formatted, u.account_holder, u.bank_code, u.bank_verified_at, u.bank_version,
+           u.deleted_at, u.onboarding_completed_at
+    FROM users u WHERE u.id = $1
+  `, [userId])
+  return rows[0]
+}
+
+export async function upsertKakaoUser(client: Database, providerSubject: string, profile: KakaoProfile, now: number): Promise<SignInUserRow> {
+  const { rows } = await client.query<SignInUserRow>(`
+      INSERT INTO users(id, provider, provider_subject, display_name, email, profile_image_url, created_at, updated_at)
+      VALUES ($1, 'kakao', $2, $3, $4, $5, $6, $6)
+      ON CONFLICT (provider, provider_subject) DO UPDATE SET
+        display_name = COALESCE(EXCLUDED.display_name, users.display_name),
+        email = COALESCE(EXCLUDED.email, users.email),
+        profile_image_url = COALESCE(EXCLUDED.profile_image_url, users.profile_image_url),
+        updated_at = EXCLUDED.updated_at
+      RETURNING id, deleted_at, onboarding_completed_at
+    `, [randomUUID(), providerSubject, profile.displayName, profile.email, profile.profileImageUrl, now])
+  return rows[0]
+}
+
+export async function insertTestOnboardingUser(client: Database, id: string, now: number) {
+  await client.query(`
+        INSERT INTO users(id, provider, provider_subject, display_name, created_at, updated_at)
+        VALUES ($1, 'test', $2, '민지', $3, $3)
+      `, [id, `da-moa:test-only:onboarding:${id}`, now])
+}
+
+export async function findTestSignInUser(client: Database, id: string, providerSubject: string): Promise<string | undefined> {
+  const { rows } = await client.query(`
+      SELECT id FROM users
+      WHERE id = $1 AND provider = 'test' AND provider_subject = $2
+        AND deleted_at IS NULL AND onboarding_completed_at IS NOT NULL
+        AND bank_name IS NOT NULL AND account_number IS NOT NULL AND account_holder IS NOT NULL
+    `, [id, providerSubject])
+  return rows[0]?.id
+}
+
+export async function saveOnboarding(client: Database, userId: string, bank: BankAccountInput, now: number) {
+  await client.query(`
+      UPDATE users SET bank_name = $2, account_number = $3, account_holder = $4,
+        bank_updated_at = $5, deleted_at = NULL, onboarding_completed_at = $5, updated_at = $5,
+        bank_code = $6, account_number_formatted = $7,
+        bank_verified_at = NULL, bank_verification_tran_id = NULL, bank_version = bank_version + 1
+      WHERE id = $1
+    `, [userId, bank.bankName, bank.accountNumber, bank.accountHolder, now, bank.bankCode, bank.formattedAccountNumber])
+}
+
+export async function saveBankAccount(client: Database, userId: string, bank: BankAccountInput, now: number) {
+  await client.query(`UPDATE users SET bank_name = $2, account_number = $3, account_holder = $4,
+      bank_updated_at = $5, updated_at = $5, bank_code = $6, account_number_formatted = $7,
+      bank_verified_at = CASE WHEN bank_code=$6 AND account_number=$3 AND account_holder=$4 THEN bank_verified_at ELSE NULL END,
+      bank_verification_tran_id = CASE WHEN bank_code=$6 AND account_number=$3 AND account_holder=$4 THEN bank_verification_tran_id ELSE NULL END,
+      bank_version = bank_version + 1 WHERE id = $1`,
+    [userId, bank.bankName, bank.accountNumber, bank.accountHolder, now, bank.bankCode, bank.formattedAccountNumber])
+}
+
+export async function softDeleteUser(client: Database, userId: string, now: number) {
+  await client.query('UPDATE users SET deleted_at = $2, updated_at = $2 WHERE id = $1', [userId, now])
+}

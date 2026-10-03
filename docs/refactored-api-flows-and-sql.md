@@ -1,6 +1,6 @@
 # 분리한 API 목록·로직 흐름·SQL
 
-작성 기준: 2026-10-03의 현재 구현. Health 5개와 Group 8개 API를 기록한다. 모임 수정 API는 추가하지 않았다. 회차 생성·목록 UI는 Settle 공개 컴포넌트를 사용하지만, 해당 API의 백엔드 전체 분리는 아직 진행하지 않았으므로 아래 분리 완료 목록에 포함하지 않는다.
+작성 기준: 2026-10-03의 현재 구현. Health 5개, Group 8개, User 4개 API를 기록한다. 모임 수정 API는 추가하지 않았다. 회차 생성·목록 UI는 Settle 공개 컴포넌트를 사용하지만, 해당 API의 백엔드 전체 분리는 아직 진행하지 않았으므로 아래 분리 완료 목록에 포함하지 않는다.
 
 SQL은 해당 함수의 실제 query() 문자열을 가져와 PostgreSQL 형식으로 정리했다. $1 등의 바인딩 위치를 유지하며 실제 토큰·회원 정보·계좌·연결 문자열은 넣지 않는다. SQL 번호는 문서의 식별자이며 요청 순서는 API별 흐름에서 지정한다.
 
@@ -13,6 +13,10 @@ SQL은 해당 함수의 실제 query() 문자열을 가져와 PostgreSQL 형식�
 | Group 업무 규칙 | [GroupService](../src/Domain/Group/Backend/Service/GroupService.ts) |
 | Group SQL | [GroupRepository](../src/Domain/Group/Backend/Repository/GroupRepository.ts) |
 | Group 공개 계약 | [Group Shared](../src/Domain/Group/Shared/index.ts)의 GroupSummary·GroupListItem·GroupDetail·InvitePreview·GroupMutationResult·입력 DTO |
+| User HTTP | [UserController](../src/Domain/User/Backend/Controller/UserController.ts)의 내 정보·가입·계좌 변경·탈퇴 응답 |
+| User 업무 규칙·SQL | [UserService](../src/Domain/User/Backend/Service/UserService.ts), [UserRepository](../src/Domain/User/Backend/Repository/UserRepository.ts), 내부 UserDAO·UserException |
+| User UI·공개 계약 | [User Frontend](../src/Domain/User/Frontend/index.ts)의 AccountPanel·OnboardingClient·계좌 폼·AccountProvider, [User Shared](../src/Domain/User/Shared/index.ts)의 DTO·순수 은행 규칙 |
+| 로그인·JWT 발급 | [AuthService](../src/Global/Auth/Backend/Service/AuthService.ts). 회원 SQL은 User 공개 기능으로 위임하고 JWT 구현은 Global/Auth에 유지 |
 | 입력 검증 | [input-validation-util.ts](../src/Global/Util/Backend/input-validation-util.ts)의 textInput()·onlyKeys()·idsInput() |
 | 페이지네이션 | [pagenation-util.ts](../src/Global/Util/Backend/pagenation-util.ts)의 pagination()·pageOf() |
 | 멱등 실행 | [idempotency-util.ts](../src/Global/Util/Backend/idempotency-util.ts)의 domainMutation()·Identity. 기존 lib/mutations.ts의 replayMutation()·saveMutation() 재사용 |
@@ -54,6 +58,21 @@ SQL은 해당 함수의 실제 query() 문자열을 가져와 PostgreSQL 형식�
 | POST /api/invites/{token}/accept | acceptInvite() | 경로 원문 토큰 | GroupMutationResult: 모임 id | 가입 완료 회원, 유효 초대, 정원 조건 |
 
 GroupSummary는 모임 ID·이름·생성자 ID·생성 시각이다. 목록은 활성 회원 수와 최대 5명의 미리보기를 붙인다. 상세는 현재 멤버·생성자 여부·생성자에게만 유효 초대를 반환한다. InvitePreview는 모임 ID·이름·현재 참여 여부·만료 시각이다. Group API는 계좌나 내부 DB 행을 응답에 담지 않는다.
+
+### User
+
+기존 경로·메서드를 유지한 **4개 분리 API**다. Node Proxy → JWT Guard → 기존 Route Handler → UserController → UserService 순서로 처리한다. 네 API 모두 Bearer Access JWT와 `Cache-Control: private, no-store`를 사용하며, 변경 요청은 동일 출처를 검사한다. 온보딩 목적 JWT도 내 정보 조회·가입 완료에 사용할 수 있다.
+
+| 메서드·경로 | Controller → Service | 입력 | 성공 응답 | 주요 조건 |
+|---|---|---|---|---|
+| GET /api/me | getMeResponse() → getMe() | 없음 | `{ data: Account }`: 프로필·가입/탈퇴 상태·본인 계좌·bankVersion | 본인 정보만 조회, 가입 전 JWT 허용 |
+| POST /api/me/onboarding | getOnboardingResponse() → completeOnboarding() | OnboardingRequestDTO: bankCode·accountNumber·accountHolder·expectedBankVersion·선택 confirmRejoin | `{ data: { id, returnTo, accessToken } }` + Refresh 쿠키 | 온보딩 목적·최신 계좌 버전·탈퇴 회원의 명시적 재가입 동의 |
+| PUT /api/me/bank-account | getBankAccountResponse() → updateBankAccount() | BankAccountRequestDTO + Idempotency-Key | `{ data: { id, bankVersion } }` | 가입 완료 회원, 성공 재생을 버전 검사보다 먼저 처리 |
+| POST /api/auth/withdraw | getWithdrawalResponse() → withdrawAccount() | 없음 | `{ ok: true }` + 인증·복귀·OIDC 쿠키 삭제 | 제외된 참여 이력까지 모든 미종료 회차가 없어야 함 |
+
+은행 입력은 기존 수동 등록만 지원한다. 계좌 원본 숫자·표시 형식을 분리하며, 신규 가입/재가입은 확인 이력을 초기화한다. 계좌 변경은 같은 정규화 은행·번호·예금주일 때만 기존 확인 이력을 보존한다. 진행 중 정산이 있어도 대표 계좌 변경은 가능하다. 가입 완료·탈퇴에는 멱등 기록을 새로 추가하지 않았다.
+
+카카오 콜백 `/auth/v1/kakao`와 테스트 로그인 `/api/auth/test-login`은 Global/Auth가 처리한다. 회원 upsert·테스트 회원 조회/생성만 User의 공개 기능으로 옮겼으므로 User API 목록에 포함하지 않는다. JWT 갱신·로그아웃도 Global/Auth 소유다.
 
 ## 3. 공통 실행 순서와 SQL 식별자
 
@@ -295,7 +314,7 @@ SELECT
 
 ### AUTH — 회원 상태 확인
 
-출처: [src/lib/authorization.ts](../src/lib/authorization.ts).
+출처: [UserRepository.findUser()](../src/Domain/User/Backend/Repository/UserRepository.ts). Global/Auth의 requireAccount()가 User 공개 조회로 회원 상태를 확인한다.
 
 ```sql
 SELECT
@@ -765,3 +784,72 @@ JWT 인증 전환 검증 결과(2026-10-02): 단위 85개, 격리된 로컬 DB·
 모임 목록 후속 변경: scripts/group.integration.test.ts에서 목록·검색 3회/빈 결과 2회, 트랜잭션 SQL 미실행, 생성 시각과 반대로 배치한 ID 커서, 멤버가 여러 명인 모임의 페이지 크기, 여러 모임이 공유하는 멤버의 프로필 일괄 조회, LIKE 특수문자의 문자 검색을 확인한다.
 
 모임 목록 후속 검증 결과(2026-10-02): 단위 85개·격리 DB/MinIO 통합 38개·프로덕션 빌드 통과. 일반 목록·검색 3회, 빈 결과 2회와 ID 커서를 실제 SQL 로그로 검증했다.
+
+## 7. User 요청 흐름·SQL
+
+최초 User 분리는 기존 SQL·트랜잭션을 유지했다. 후속 개선으로 GET /api/me는 읽기 트랜잭션을 제거하고 공용 풀 연결에서 AUTH 한 문장만 실행한다. 쓰기 트랜잭션·전역 락과 계좌 변경의 두 단계 트랜잭션은 유지한다. 아래 수는 `BEGIN`·기존 advisory lock·`COMMIT`까지 포함하며, 응답 후 실시간 알림의 별도 조회는 제외한다.
+
+### U1. GET /api/me — 내 정보 조회
+
+AppShell.useResource()/OnboardingClient.useResource() → GET → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 User 위임 → UserController.getMeResponse() → getMe() → 공용 풀 연결 → Account → AccountProvider 또는 온보딩 폼 반영.
+
+1. 공용 풀에서 연결 확보. BEGIN·COMMIT·ROLLBACK·명시적 락·SET은 실행하지 않는다.
+2. AUTH: requireAccount()가 User 공개 getUserAccountState()를 호출하여 JWT의 userId로 본인 users 한 행 조회. JWT 목적과 회원의 가입·탈퇴 상태를 검사하며 온보딩 목적도 허용한다. 회원이 없거나 목적과 현재 회원 상태가 맞지 않으면 unauthorized.
+3. 프로필·purpose·가입/탈퇴 시각·bankVersion을 Account DTO로 변환. 은행명·계좌번호·예금주가 모두 있으면 본인 bankAccount를 구성하고, 아니면 null 반환. DB 행이나 다른 회원 계좌는 반환하지 않는다.
+4. `{ data: Account }` 응답. 연결은 성공·실패 모두 finally에서 풀에 반환한다.
+
+정상 SQL: **AUTH 내 정보 읽기 (+1) = 1회**. 회원 상태 거절도 AUTH 1회 후 종료하며 JWT Guard 거절은 SQL 0회다. 기존 R-START·TX-COMMIT의 2회를 제거해 정상 호출은 3회에서 1회로 줄었다. 멱등 기록·회원 변경은 없다.
+
+단일 조회 검증: [scripts/user.integration.test.ts](../scripts/user.integration.test.ts)에서 정상 회원·온보딩·회원 상태 거절의 실제 SQL 1회, 트랜잭션/락/SET 미실행, 성공·거절 후 풀 연결 반환을 확인했다. 후속 단위 91개·격리 DB/MinIO 통합 40개·빌드 통과.
+
+### U2. POST /api/me/onboarding — 가입 완료·재가입
+
+OnboardingForm.register() → POST → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 User 위임 → UserController.getOnboardingResponse() → completeOnboarding() → 공용 풀 연결·쓰기 트랜잭션 → OnboardingResponseDTO·Refresh 쿠키 → Access 토큰 저장·폼 입력 정리·returnTo로 이동.
+
+1. Controller가 sameOrigin() 검사 → 최대 16,384바이트 JSON 읽기 → 안전한 returnTo 쿠키 해석. Service가 objectBody()·normalizeBankAccountInput()으로 허용 필드·은행·번호·예금주·expectedBankVersion·confirmRejoin 검증 및 정규화. 입력 오류는 DB 접근 전에 거절한다.
+2. W-START: BEGIN → 기존 `pg_advisory_xact_lock(1684106607)` 획득.
+3. AUTH로 본인 회원 상태 조회. assertOnboarding()이 온보딩 목적·탈퇴 회원의 명시적 confirmRejoin·최신 계좌 버전을 검사한다. 목적이 app이면 already_onboarded, 재가입 동의가 없으면 rejoin_confirmation_required, 버전이 다르면 bank_account_conflict.
+4. U-ONBOARDING: UserRepository.saveOnboarding()이 users의 계좌 원본·표시 형식·예금주·은행 코드를 저장하고 deleted_at을 NULL로 변경. 가입/계좌 갱신 시각 설정·bank_version 증가·기존 계좌 확인 이력 초기화를 한 UPDATE로 처리한다. 기존 모임 멤버십은 복구하지 않는다.
+5. Global/Auth의 issueTokens()로 app 목적 Access/Refresh JWT 발급 → TX-COMMIT. JWT 발급에는 SQL이 없다.
+6. Controller가 `{ data: { id, returnTo, accessToken } }`과 Refresh 쿠키를 반환하고 기존 Access 쿠키·복귀 쿠키를 삭제. 커밋 후 after()로 publishBankInvalidation() 예약.
+
+정상 SQL: W-START(2) → AUTH → U-ONBOARDING → TX-COMMIT = 5회. 출처·JSON·계좌 입력 오류는 0회, 회원 상태·목적·동의·버전 거절은 W-START(2) → AUTH → TX-ROLLBACK = 4회다. 멱등 기록·외부 계좌 확인은 없다. 실패는 전체 ROLLBACK하며 계좌와 가입 상태를 함께 보존한다.
+
+### U3. PUT /api/me/bank-account — 대표 계좌 변경
+
+AccountPanel.save() → PUT → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 User 위임 → UserController.getBankAccountResponse() → updateBankAccount() → 공용 풀의 두 쓰기 트랜잭션 → BankAccountResponseDTO → 입력 정리·최신 /api/me 재조회·폼 닫기.
+
+1. Controller가 sameOrigin() 검사 → 최대 16,384바이트 JSON·Idempotency-Key 읽기. Service가 objectBody()·normalizeBankAccountInput()으로 수동 계좌 입력과 expectedBankVersion 검증·정규화. 입력 오류는 DB 접근 전에 거절한다.
+2. 첫 W-START(2) → AUTH로 가입 완료·미탈퇴 회원 확인. 서버 비밀키로 경로·회원 ID·정규화 은행/번호/예금주·계좌 버전 등의 HMAC fingerprint 생성. replayMutation()이 UUID 요청 키를 검사하고 operation='bank-account.update'의 IDEM-READ 실행.
+3. 같은 키·같은 fingerprint의 성공 기록이 있으면 TX-COMMIT 후 기존 `{ id, bankVersion }` 반환. 같은 키의 입력이 다르면 idempotency_conflict·TX-ROLLBACK. 성공 기록이 없으면 첫 트랜잭션을 COMMIT하고 fingerprint 유지.
+4. 두 번째 W-START(2) → AUTH → IDEM-READ로 현재 회원 상태와 성공 기록 재확인. 다른 동시 요청이 같은 작업을 이미 저장했다면 버전 검사 전에 성공 재생. 성공 기록이 없을 때만 assertBankVersion()으로 expectedBankVersion 확인.
+5. U-BANK-UPDATE: UserRepository.saveBankAccount()가 계좌 원본·표시 형식·은행·예금주·갱신 시각을 UPDATE하고 bank_version 증가. 기존 은행 코드·계좌번호·예금주가 정규화 입력과 같을 때만 확인 이력을 유지하며, 다르면 초기화한다.
+6. IDEM-SAVE로 `{ id, bankVersion: expectedBankVersion + 1 }` 성공 메타데이터 저장 → TX-COMMIT. 계좌와 성공 기록은 같은 트랜잭션에서 저장하며 실패는 함께 ROLLBACK.
+7. Controller가 `{ data: { id, bankVersion } }` 반환·after()로 publishBankInvalidation() 예약. 프론트의 최신 내 정보 재조회가 실패하면 재제출을 잠그고 다시 불러오기 안내를 표시한다.
+
+정상 SQL: 첫 W-START(2) → AUTH → IDEM-READ → TX-COMMIT = 5회, 두 번째 W-START(2) → AUTH → IDEM-READ → U-BANK-UPDATE → IDEM-SAVE → TX-COMMIT = 7회, 합계 12회. 첫 조회의 성공 재생은 5회, 두 번째 조회의 성공 재생·버전 충돌은 합계 10회다. 입력 오류는 0회이며 진행 중 정산 조회·외부 계좌 확인은 없다. 응답 유실은 같은 키·같은 입력으로 재시도하며 성공 재생은 버전 검사보다 먼저 처리한다.
+
+### U4. POST /api/auth/withdraw — 회원탈퇴
+
+AccountPanel.withdraw()의 확인 대화상자 → POST → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 User 위임 → UserController.getWithdrawalResponse() → withdrawAccount() → 공용 풀 연결·쓰기 트랜잭션 → `{ ok: true }`·쿠키 삭제 → 클라이언트 Access 토큰·미완료 계좌 입력 정리·홈 이동.
+
+1. Controller가 sameOrigin() 검사. Service가 W-START(2)로 BEGIN·기존 전역 advisory transaction lock 획득.
+2. AUTH로 본인의 가입 완료·미탈퇴 상태 확인.
+3. S-UNFINISHED-USER: 같은 Client로 Settle 공개 getUnfinishedUserRounds() 호출. round_members → rounds → groups JOIN으로 본인의 모든 미종료 참여 이력과 모임 이름 조회. excluded_at 조건을 두지 않아 회차에서 제외된 참여 이력도 포함한다. 행이 있으면 unfinished_rounds와 해당 회차 목록 반환·TX-ROLLBACK.
+4. Group 공개 endUserMemberships()를 같은 Client로 호출. G-USER-GROUPS가 본인의 활성 group_members에서 모임 ID 조회 → G-USER-LEAVE가 활성 멤버십의 left_at UPDATE. 별도 트랜잭션은 열지 않는다.
+5. U-WITHDRAW: UserRepository.softDeleteUser()가 users의 deleted_at·updated_at UPDATE. 계좌·회원 행·과거 회차/정산 기록은 삭제하지 않는다.
+6. TX-COMMIT 후 Controller가 `{ ok: true }` 반환. Access/Refresh·복귀·OIDC 쿠키 삭제 및 after()의 publishDepartureInvalidation(groupIds) 예약. 공통 API 클라이언트와 AccountPanel이 클라이언트 토큰·미완료 계좌 입력을 정리한다.
+
+정상 SQL: W-START(2) → AUTH → S-UNFINISHED-USER → G-USER-GROUPS → G-USER-LEAVE → U-WITHDRAW → TX-COMMIT = 8회. 미종료 회차 거절은 W-START(2) → AUTH → S-UNFINISHED-USER → TX-ROLLBACK = 5회다. 동일 Client의 멤버십 종료·회원 소프트 삭제는 함께 성공·롤백하며, 성공·실패 모두 연결을 반환한다. 멱등 기록·DB 세션 삭제·외부 계좌 해제는 없다.
+
+User SQL의 실제 원문과 바인딩 순서는 [UserRepository](../src/Domain/User/Backend/Repository/UserRepository.ts)에 있다. `findUser()`는 회원 ID 한 개로 프로필·계좌·가입/탈퇴 상태를 조회하고 UserService가 숫자 시각/버전과 공개 DTO로 변환한다. `saveOnboarding()`은 기존 계좌 저장과 확인 초기화, `saveBankAccount()`는 동일 계좌 확인 보존과 버전 증가, `softDeleteUser()`는 deleted_at·updated_at만 갱신한다. 과거 정산과 계좌는 삭제하지 않는다.
+
+UserService·Controller에는 SQL이 없다. 탈퇴 협력 함수는 호출자가 연 **동일 DB Client**를 사용하고 별도 트랜잭션을 열지 않으므로 멤버십 종료와 회원 탈퇴는 함께 성공·롤백한다. 미종료 회차 조회는 [Settle ParticipationRepository](../src/Domain/Settle/Backend/Repository/ParticipationRepository.ts), 모임 ID 조회와 멤버십 변경은 [GroupRepository](../src/Domain/Group/Backend/Repository/GroupRepository.ts)에 있다. 기존 미종료 회차의 모임 이름 JOIN은 유지한다.
+
+가입/계좌 저장 성공 후 `publishBankInvalidation()`은 본인의 `me`와 해당 회원에게 지급할 송금자의 `settlements` 키를 발행한다. 탈퇴 성공 후 `publishDepartureInvalidation()`은 남은 모임 멤버의 목록·상세 키를 발행한다. 쿠키 처리·알림 예약은 Controller, 계좌 버전·멱등·재가입·탈퇴 판단은 Service, DB 행 타입은 내부 DAO, 오류 생성은 내부 Exception에 있다. 실시간 메시지에는 계좌·금액·토큰을 넣지 않는다.
+
+User Frontend는 기존 화면·CSS·복사/클립보드·키보드 동작을 그대로 옮겼다. 계좌 폼 종료 시 User Requests가 공통 `discardPendingRequest()`로 민감한 재시도 본문을 지운다. 인증 실패로 로그인/가입 화면으로 이동할 때 공통 API 클라이언트는 모든 도메인의 미완료 본문과 이전 복구 콜백을 폐기한다.
+
+Group의 기존 users JOIN과 아직 분리하지 않은 Settle/realtime의 회원·수취 계좌 JOIN은 그대로 유지한다. 이번 User 분리는 기존 User API·은행 규칙·화면·회원 저장의 소유권을 옮긴 작업이며, Settle 백엔드 전체 이전이나 락 정책 변경은 포함하지 않는다.
+
+검증 결과(2026-10-03): `npm test` 91개, `npm run build`, 격리된 로컬 테스트 DB/MinIO의 DB 통합 38개와 실시간 통합 1개가 통과했다. 기존 개발 서버의 Next 실행 락 때문에 실시간 검사는 동일 소스의 임시 복사본에서 별도로 실행했다. 전체 모바일 브라우저 검사와 `--forms-only`도 통과하여 내 정보 단일 조회·수동 가입·계좌 저장/충돌 복구·탈퇴·재가입·로그아웃 및 320/390/1024px 폼을 확인했다. 기존 브라우저 검사의 후반 초대 수락도 현재 UI의 `모임으로 가기` 링크 선택 흐름에 맞췄다. 실제 카카오 외부 인증은 이번 검사 범위에 포함하지 않는다.

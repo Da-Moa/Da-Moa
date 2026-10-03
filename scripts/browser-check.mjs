@@ -7,10 +7,10 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import sharp from 'sharp'
-import { signInKakao } from '../src/lib/auth-store.ts'
+import { signInKakao } from '../src/Global/Auth/Backend/index.ts'
 import { REFRESH_TOKEN_COOKIE_NAME } from '../src/lib/auth.ts'
 import { withWriteTransaction } from '../src/lib/db.ts'
-import { BANKS, formatAccountNumber } from '../src/lib/bank-account.ts'
+import { BANKS, formatAccountNumber } from '../src/Domain/User/Shared/index.ts'
 import { CURRENCIES, CURRENCY_CODES } from '../src/lib/money.ts'
 
 const database = process.env.TEST_DATABASE_URL
@@ -846,6 +846,8 @@ try {
   await setSession(participant.session)
   await navigate(departureInvite.sharePath, '초대 수락하고 참여하기')
   await click('초대 수락하고 참여하기')
+  await waitFor(hasText('이미 참여 중인 모임이에요.'))
+  await evaluate("document.querySelector('a.primary-button').click()")
   await waitFor(`location.pathname === '/home/groups/${departureGroup.id}' && ${hasText('현재 멤버 2명')}`)
   const memberDepartureReads = apiReads.length
   await click('모임 나가기')

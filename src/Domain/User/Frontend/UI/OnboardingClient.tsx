@@ -1,8 +1,10 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { ApiError, apiRequest, discardBankAccountRequests } from '../../lib/api-client'
-import { BankFields, bankValues, ErrorNotice, Loading, type Account, useAction, useBankForm, useResource } from '../home/ui'
+import { ApiError, apiRequest, ErrorNotice, Loading, useAction, useResource } from '../../../../Global/Util/Frontend'
+import { discardBankAccountRequests } from '../Requests'
+import { BankFields, bankValues, useBankForm } from './BankFields'
+import type { Account, OnboardingResponseDTO } from '../../Shared'
 
 export default function OnboardingClient() {
   const me = useResource<Account>('/api/me')
@@ -28,7 +30,7 @@ function OnboardingForm({ account, reload }: { account: Account; reload: () => P
     if (latest) { setDraftVersion(latest.bankVersion); setFormKey(key => key + 1); action.setError(null) }
   }
   async function register(form: HTMLFormElement) {
-    const result = await action.run(() => apiRequest<{ id: string; returnTo: string }>('/api/me/onboarding', { method: 'POST', body: { ...bankValues(form), expectedBankVersion: draftVersion, confirmRejoin: Boolean(account.deletedAt) }, signal: bankForm.signal() }))
+    const result = await action.run(() => apiRequest<OnboardingResponseDTO>('/api/me/onboarding', { method: 'POST', body: { ...bankValues(form), expectedBankVersion: draftVersion, confirmRejoin: Boolean(account.deletedAt) }, signal: bankForm.signal() }))
     if (result) { bankForm.clear(); window.location.replace(result.returnTo) }
   }
   async function logout() {

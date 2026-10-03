@@ -25,9 +25,11 @@ export function discardPendingRequest(path: string, method: string) {
   unfinishedRequests.delete(operation)
 }
 
-export function discardBankAccountRequests() {
-  discardPendingRequest('/api/me/bank-account', 'PUT')
-  discardPendingRequest('/api/me/onboarding', 'POST')
+function discardPendingRequests() {
+  for (const operation of unfinishedRequests.keys()) {
+    const separator = operation.indexOf(' ')
+    discardPendingRequest(operation.slice(separator + 1), operation.slice(0, separator))
+  }
 }
 
 function snapshot(body: unknown): unknown {
@@ -137,12 +139,12 @@ async function request<T>(path: string, options: RequestOptions): Promise<T> {
   const result = await response.json().catch(() => null) as { data?: T; error?: string; message?: string; details?: unknown } | null
   if (response.status === 401) {
     clearAccessToken()
-    discardBankAccountRequests()
+    discardPendingRequests()
     window.location.assign(`/login?returnTo=${encodeURIComponent(destination())}`)
     throw new ApiError(401, 'unauthorized', '로그인이 필요해요.')
   }
   if (response.status === 403 && result?.error === 'onboarding_required') {
-    discardBankAccountRequests()
+    discardPendingRequests()
     window.location.assign(`/onboarding?returnTo=${encodeURIComponent(destination())}`)
   }
   if (!response.ok) {

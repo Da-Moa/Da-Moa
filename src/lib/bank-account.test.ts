@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { formatAccountNumber, normalizeBankAccountInput, parseClipboardAccount, recognizedAccountNumber, suggestBanks } from './bank-account.ts'
+import { formatAccountNumber, normalizeBankAccountInput, parseClipboardAccount, recognizedAccountNumber, suggestBanks } from '../Domain/User/Shared/index.ts'
 
 test('manual bank input keeps leading zeroes and rejects former verification fields', () => {
   const input = { bankCode: '002', accountNumber: '031-1234 5678-901', accountHolder: ' 테스트 ', expectedBankVersion: 0 }
