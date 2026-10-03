@@ -18,6 +18,15 @@ export type ShareRow = {
   final_amount_minor: string | null; received_remainder: boolean | null
 }
 export type ReceiptRow = { id: string; expense_id: string; mime_type: string; byte_size: number; object_key: string | null }
+export type SettlementExpenseRow = Pick<ExpenseRow, 'id' | 'payer_id' | 'amount_minor' | 'split_mode'> & {
+  participant_ids: string[]; shares: { userId: string; assignedAmountMinor: string | null }[] | null
+}
+export type RoundDetailRow = RoundRow & {
+  members: MemberRow[];
+  expenses: (ExpenseRow & { shares: Omit<ShareRow, 'expense_id'>[]; receipts: Pick<ReceiptRow, 'id' | 'mime_type' | 'byte_size'>[] })[];
+  settlement_expenses: SettlementExpenseRow[];
+  transfers: { sender_id: string; receiver_id: string; amount_minor: string }[]
+}
 export type ExclusionExpenseRow = {
   id: string; description: string; amount_minor: string; author_id: string; author_name: string; reason: string
 }

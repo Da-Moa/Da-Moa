@@ -2,12 +2,51 @@ import 'server-only'
 import type { Database } from '../../../../Global/Util/Backend'
 import { roundCreationCandidatesSql } from '../../../Group/Backend'
 import type { Currency, Expense } from '../../Shared'
-import type { RoundRow, MemberRow, ExpenseRow, ShareRow, ReceiptRow, ExclusionExpenseRow, OutgoingRow, IncomingRow } from '../DAO/SettleDAO'
+import type { RoundRow, RoundDetailRow, MemberRow, ExpenseRow, ShareRow, ReceiptRow, SettlementExpenseRow, ExclusionExpenseRow, OutgoingRow, IncomingRow } from '../DAO/SettleDAO'
 
 export function findRound(client: Database, id: string, userId: string) {
   return client.query<RoundRow>(`SELECT r.*,g.name AS group_name,g.creator_id AS group_creator_id,
     (r.creator_id=$2) AS is_creator
     FROM rounds r JOIN groups g ON g.id=r.group_id JOIN round_members m ON m.round_id=r.id AND m.user_id=$2 WHERE r.id=$1`, [id, userId])
+}
+
+export function findRoundDetail(client: Database, id: string, userId: string, createdAt: string | null, cursorId: string | null, limit: number) {
+  return client.query<RoundDetailRow>(`SELECT r.*,g.name AS group_name,g.creator_id AS group_creator_id,
+    (r.creator_id=$2) AS is_creator,b.balance_minor,
+    (SELECT COALESCE(sum(amount_minor),0)::text FROM expenses WHERE round_id=r.id) AS total_minor,
+    COALESCE(members.items,'[]'::jsonb) AS members,COALESCE(page.items,'[]'::jsonb) AS expenses,
+    COALESCE(preview.items,'[]'::jsonb) AS settlement_expenses,COALESCE(transfers.items,'[]'::jsonb) AS transfers
+    FROM rounds r JOIN groups g ON g.id=r.group_id JOIN round_members viewer ON viewer.round_id=r.id AND viewer.user_id=$2
+    LEFT JOIN settlement_balances b ON b.round_id=r.id AND b.user_id=$2
+    LEFT JOIN LATERAL (
+      SELECT jsonb_agg(jsonb_build_object('user_id',rm.user_id,'display_name_snapshot',rm.display_name_snapshot,
+        'excluded_at',rm.excluded_at::text,'profile_image_url',CASE WHEN u.deleted_at IS NULL THEN u.profile_image_url ELSE NULL END)
+        ORDER BY rm.user_id) AS items FROM round_members rm JOIN users u ON u.id=rm.user_id WHERE rm.round_id=r.id
+    ) members ON true
+    LEFT JOIN LATERAL (
+      SELECT jsonb_agg(to_jsonb(e) || jsonb_build_object('amount_minor',e.amount_minor::text,'base_share_minor',e.base_share_minor::text,
+        'created_at',e.created_at::text,'updated_at',e.updated_at::text,
+        'shares',COALESCE((SELECT jsonb_agg(jsonb_build_object('user_id',s.user_id,'assigned_amount_minor',s.assigned_amount_minor::text,
+          'final_amount_minor',s.final_amount_minor::text,'received_remainder',s.received_remainder) ORDER BY s.user_id)
+          FROM expense_shares s WHERE s.expense_id=e.id),'[]'::jsonb),
+        'receipts',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',rc.id,'mime_type',rc.mime_type,'byte_size',rc.byte_size)
+          ORDER BY rc.created_at,rc.id) FROM expense_receipts rc WHERE rc.expense_id=e.id),'[]'::jsonb))
+        ORDER BY e.created_at DESC,e.id DESC) AS items
+      FROM (SELECT * FROM expenses WHERE round_id=r.id AND ($3::bigint IS NULL OR (created_at,id)<($3::bigint,$4::text))
+        ORDER BY created_at DESC,id DESC LIMIT $5) e
+    ) page ON true
+    LEFT JOIN LATERAL (
+      SELECT jsonb_agg(jsonb_build_object('id',e.id,'payer_id',e.payer_id,'amount_minor',e.amount_minor::text,'split_mode',e.split_mode,
+        'participant_ids',ARRAY(SELECT s.user_id FROM expense_shares s WHERE s.expense_id=e.id ORDER BY s.user_id),
+        'shares',(SELECT jsonb_agg(jsonb_build_object('userId',s.user_id,'assignedAmountMinor',s.assigned_amount_minor::text) ORDER BY s.user_id)
+          FROM expense_shares s WHERE s.expense_id=e.id)) ORDER BY e.id) AS items
+      FROM expenses e WHERE e.round_id=r.id AND r.finalized_at IS NULL
+    ) preview ON true
+    LEFT JOIN LATERAL (
+      SELECT jsonb_agg(jsonb_build_object('sender_id',t.sender_id,'receiver_id',t.receiver_id,'amount_minor',t.amount_minor::text)
+        ORDER BY t.sender_id,t.receiver_id) AS items FROM settlement_transfers t
+      WHERE t.round_id=r.id AND r.finalized_at IS NOT NULL AND (t.sender_id=$2 OR t.receiver_id=$2)
+    ) transfers ON true WHERE r.id=$1`, [id, userId, createdAt, cursorId, limit])
 }
 
 export function bumpRound(client: Database, id: string) {
@@ -20,20 +59,8 @@ export function findMembers(client: Database, roundId: string) {
     FROM round_members rm JOIN users u ON u.id=rm.user_id WHERE rm.round_id=$1 ORDER BY rm.user_id`, [roundId])
 }
 
-export function findExpenses(client: Database, roundId: string, createdAt: string | null, cursorId: string | null, limit: number | null) {
-  return client.query<ExpenseRow>(`SELECT * FROM expenses WHERE round_id=$1 AND ($2::bigint IS NULL OR (created_at,id)<($2::bigint,$3::text)) ORDER BY created_at DESC,id DESC LIMIT $4`, [roundId, createdAt, cursorId, limit])
-}
-
-export function findShares(client: Database, ids: string[]) {
-  return client.query<ShareRow>('SELECT * FROM expense_shares WHERE expense_id=ANY($1::text[]) ORDER BY user_id', [ids])
-}
-
-export function findReceipts(client: Database, ids: string[]) {
-  return client.query<Pick<ReceiptRow, 'id' | 'expense_id' | 'mime_type' | 'byte_size'>>('SELECT id,expense_id,mime_type,byte_size FROM expense_receipts WHERE expense_id=ANY($1::text[]) ORDER BY created_at,id', [ids])
-}
-
 export function findSettlementExpenses(client: Database, roundId: string) {
-  return client.query<Pick<ExpenseRow, 'id' | 'payer_id' | 'amount_minor' | 'split_mode'> & { participant_ids: string[]; shares: { userId: string; assignedAmountMinor: string | null }[] | null }>(`SELECT e.id,e.payer_id,e.amount_minor,e.split_mode,
+  return client.query<SettlementExpenseRow>(`SELECT e.id,e.payer_id,e.amount_minor,e.split_mode,
     ARRAY(SELECT s.user_id FROM expense_shares s WHERE s.expense_id=e.id ORDER BY s.user_id) AS participant_ids,
     (SELECT json_agg(json_build_object('userId',s.user_id,'assignedAmountMinor',s.assigned_amount_minor::text) ORDER BY s.user_id)
       FROM expense_shares s WHERE s.expense_id=e.id) AS shares
@@ -66,10 +93,6 @@ export function findTotal(client: Database, roundId: string) {
 
 export function findBalance(client: Database, roundId: string, userId: string) {
   return client.query<{ balance_minor: string }>('SELECT balance_minor FROM settlement_balances WHERE round_id=$1 AND user_id=$2', [roundId, userId])
-}
-
-export function findViewerTransfers(client: Database, roundId: string, userId: string) {
-  return client.query<{ sender_id: string; receiver_id: string; amount_minor: string }>('SELECT sender_id,receiver_id,amount_minor FROM settlement_transfers WHERE round_id=$1 AND (sender_id=$2 OR receiver_id=$2) ORDER BY sender_id,receiver_id', [roundId, userId])
 }
 
 export async function insertRound(client: Database, id: string, groupId: string, userId: string, name: string, currency: Currency, now: number, ids: string[]) {

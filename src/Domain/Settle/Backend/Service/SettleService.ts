@@ -6,7 +6,7 @@ import { formatMoney, MAX_EXPENSE_MAJOR, MAX_ROUND_TOTAL_MAJOR, minorLimit, pars
 import { calculateBase, finalizeSettlement, previewSettlement, validateCustomShares } from '../../Shared'
 import type { ExclusionCheck, Expense, MutationResult, RoundDetail, RoundMember, RoundStatus, RoundSummary, SettlementDTO, SettlementTransfer } from '../../Shared'
 
-import type { RoundRow, ExpenseRow } from '../DAO/SettleDAO'
+import type { RoundRow, MemberRow, ExpenseRow, ShareRow, ReceiptRow } from '../DAO/SettleDAO'
 import { duplicateRound, missing } from '../Exception/SettleException'
 import * as repository from '../Repository/SettleRepository'
 
@@ -36,29 +36,24 @@ async function bump(client: Database, id: string): Promise<MutationResult> {
   return { ...rows[0], roundId: id }
 }
 
-async function membersFor(client: Database, roundId: string): Promise<RoundMember[]> {
-  const { rows } = await repository.findMembers(client, roundId)
-  return rows.map(row => ({ userId: row.user_id, displayName: row.display_name_snapshot, profileImageUrl: row.profile_image_url, excludedAt: row.excluded_at === null ? null : Number(row.excluded_at) }))
+function memberDetails(row: MemberRow): RoundMember {
+  return { userId: row.user_id, displayName: row.display_name_snapshot, profileImageUrl: row.profile_image_url, excludedAt: row.excluded_at === null ? null : Number(row.excluded_at) }
 }
 
-async function expensesFor(client: Database, roundId: string, query?: URLSearchParams) {
-  const { limit, cursor } = query ? pagination(query) : { limit: null, cursor: null }
-  const { rows } = await repository.findExpenses(client, roundId, cursor?.createdAt ?? null, cursor?.id ?? null, limit === null ? null : limit + 1)
-  const ids = rows.map(row => row.id)
-  const { rows: shares } = await repository.findShares(client, ids)
-  const { rows: receipts } = await repository.findReceipts(client, ids)
-  const items: Expense[] = rows.map(row => {
-    const part = shares.filter(share => share.expense_id === row.id)
-    const base = row.split_mode === 'CUSTOM' ? null : calculateBase(BigInt(row.amount_minor), part.length)
-    return {
-      id: row.id, authorId: row.author_id, payerId: row.payer_id, description: row.description, amountMinor: row.amount_minor,
-      splitMode: row.split_mode, participantIds: part.map(s => s.user_id), baseShareMinor: base ? row.base_share_minor ?? base.base.toString() : null, remainderUnits: base ? row.remainder_units ?? base.remainder : 0,
-      shares: part.map(s => ({ userId: s.user_id, assignedAmountMinor: s.assigned_amount_minor, amountMinor: s.final_amount_minor, receivedRemainder: s.received_remainder })),
-      receipts: receipts.filter(r => r.expense_id === row.id).map(r => ({ id: r.id, mimeType: r.mime_type, byteSize: r.byte_size })),
-      createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
-    }
-  })
-  return limit === null ? { items, nextCursor: null } : pageOf(items, limit, row => row)
+async function membersFor(client: Database, roundId: string): Promise<RoundMember[]> {
+  const { rows } = await repository.findMembers(client, roundId)
+  return rows.map(memberDetails)
+}
+
+function expenseDetails(row: ExpenseRow, part: Omit<ShareRow, 'expense_id'>[], receipts: Pick<ReceiptRow, 'id' | 'mime_type' | 'byte_size'>[]): Expense {
+  const base = row.split_mode === 'CUSTOM' ? null : calculateBase(BigInt(row.amount_minor), part.length)
+  return {
+    id: row.id, authorId: row.author_id, payerId: row.payer_id, description: row.description, amountMinor: row.amount_minor,
+    splitMode: row.split_mode, participantIds: part.map(s => s.user_id), baseShareMinor: base ? row.base_share_minor ?? base.base.toString() : null, remainderUnits: base ? row.remainder_units ?? base.remainder : 0,
+    shares: part.map(s => ({ userId: s.user_id, assignedAmountMinor: s.assigned_amount_minor, amountMinor: s.final_amount_minor, receivedRemainder: s.received_remainder })),
+    receipts: receipts.map(r => ({ id: r.id, mimeType: r.mime_type, byteSize: r.byte_size })),
+    createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
+  }
 }
 
 async function settlementExpensesFor(client: Database, roundId: string): Promise<(Pick<Expense, 'id' | 'payerId' | 'amountMinor' | 'splitMode' | 'participantIds'> & { shares: Pick<Expense['shares'][number], 'userId' | 'assignedAmountMinor'>[] })[]> {
@@ -94,24 +89,24 @@ export async function listRounds(access: Identity, query: URLSearchParams, group
 }
 
 export async function getRound(access: Identity, roundId: string, query: URLSearchParams): Promise<RoundDetail> {
-  return withReadTransaction(async client => {
+  return withDatabaseConnection(async client => {
     const account = await requireAccount(client, access)
-    const round = await roundFor(client, roundId, account.id)
-    const members = await membersFor(client, roundId)
-    const expenses = await expensesFor(client, roundId, query)
-    const { rows: totals } = await repository.findTotal(client, roundId)
-    const { rows: balances } = await repository.findBalance(client, roundId, account.id)
+    const { limit, cursor } = pagination(query)
+    const { rows } = await repository.findRoundDetail(client, roundId, account.id, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1)
+    const round = rows[0]
+    if (!round) throw missing()
+    const members = round.members.map(memberDetails)
+    const expenses = pageOf(round.expenses.map(row => expenseDetails(row, row.shares, row.receipts)), limit, row => row)
     let transfers: SettlementTransfer[] = [], pendingRemainderMinor = '0'
     if (round.finalized_at === null) {
-      const allExpenses = !query.has('cursor') && expenses.nextCursor === null ? expenses.items : await settlementExpensesFor(client, roundId)
+      const allExpenses = round.settlement_expenses.map(row => ({ id: row.id, payerId: row.payer_id, amountMinor: row.amount_minor, splitMode: row.split_mode, participantIds: row.participant_ids, shares: row.shares ?? [] }))
       if (allExpenses.length) ({ transfers, pendingRemainderMinor } = previewSettlement(allExpenses, members.map(member => member.userId)))
     } else {
-      const { rows } = await repository.findViewerTransfers(client, roundId, account.id)
-      transfers = rows.map(row => ({ senderId: row.sender_id, receiverId: row.receiver_id, amountMinor: row.amount_minor }))
+      transfers = round.transfers.map(row => ({ senderId: row.sender_id, receiverId: row.receiver_id, amountMinor: row.amount_minor }))
     }
     transfers = transfers.filter(transfer => transfer.senderId === account.id || transfer.receiverId === account.id)
     return {
-      ...summary({ ...round, ...totals[0], ...balances[0], member_count: members.filter(m => m.excludedAt === null).length }),
+      ...summary({ ...round, member_count: members.filter(m => m.excludedAt === null).length }),
       creatorId: round.creator_id, groupCreatorId: round.group_creator_id, isCreator: round.is_creator, members, expenses: expenses.items, expensesNextCursor: expenses.nextCursor,
       transfers, pendingRemainderMinor,
     }

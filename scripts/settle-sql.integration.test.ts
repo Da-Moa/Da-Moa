@@ -105,7 +105,24 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         await trace(0, 'connection', () => assert.rejects(listRounds(null, new URLSearchParams({ limit: '0' }), groupId), (error: { code: string }) => error.code === 'unauthorized'))
       }
       assert.deepEqual((await trace(2, 'connection', () => listRounds(a, new URLSearchParams(), randomUUID()))).items, [])
-      await trace(10, false, () => getRound(a, round.id, new URLSearchParams()))
+      const empty = await trace(2, 'connection', () => getRound(a, round.id, new URLSearchParams()))
+      assert.deepEqual(empty.expenses, [])
+      assert.deepEqual(empty.transfers, [])
+      assert.equal(empty.totalMinor, '0')
+      assert.equal(empty.balanceMinor, null)
+      assert.equal(empty.memberCount, 3)
+      assert.equal(empty.expensesNextCursor, null)
+      for (const [input, expected] of [
+        [{ limit: '0' }, 'invalid_input'], [{ limit: '101' }, 'invalid_input'], [{ cursor: 'invalid' }, 'invalid_cursor'],
+      ] as const) {
+        await trace(1, 'connection', () => assert.rejects(getRound(a, round.id, new URLSearchParams(input)), (error: { code: string }) => error.code === expected))
+        await trace(1, 'connection', () => assert.rejects(getRound({ ...a, userId: randomUUID() }, round.id, new URLSearchParams(input)), (error: { code: string }) => error.code === 'unauthorized'))
+      }
+      await trace(0, 'connection', () => assert.rejects(getRound(null, round.id, new URLSearchParams({ limit: '0' })), (error: { code: string }) => error.code === 'unauthorized'))
+      await trace(2, 'connection', () => assert.rejects(getRound(a, randomUUID(), new URLSearchParams()), (error: { code: string }) => error.code === 'not_found'))
+      const nonParticipant = await member('비참여 모임 멤버')
+      await acceptInvite(nonParticipant, key(), invite.sharePath!.split('/').at(-1)!)
+      await trace(2, 'connection', () => assert.rejects(getRound(nonParticipant, round.id, new URLSearchParams()), (error: { code: string }) => error.code === 'not_found'))
       let version = 1
       const expenseKey = key(), expenseBody = { description: '지출', amount: '100', payerId: b.userId, splitMode: 'ALL', expectedVersion: version }
       const expense = await trace(13, true, () => saveExpense(a, expenseKey, round.id, expenseBody))
@@ -115,7 +132,19 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       version = updated.version!
       const participantExpense = await trace(14, true, () => saveExpense(b, key(), round.id, { ...expenseBody, expectedVersion: version }))
       version = participantExpense.version!
-      await trace(11, false, () => getRound(a, round.id, new URLSearchParams({ limit: '1' })))
+      const firstPage = await trace(2, 'connection', () => getRound(a, round.id, new URLSearchParams({ limit: '1' })))
+      const secondPage = await trace(2, 'connection', () => getRound(a, round.id, new URLSearchParams({ limit: '1', cursor: firstPage.expensesNextCursor! })))
+      assert.equal(firstPage.totalMinor, '201')
+      assert.equal(firstPage.pendingRemainderMinor, '3')
+      assert.deepEqual(secondPage.transfers, firstPage.transfers)
+      assert.equal(secondPage.expensesNextCursor, null)
+      assert.notEqual(firstPage.expenses[0].id, secondPage.expenses[0].id)
+      const pastEnd = Buffer.from(JSON.stringify({ createdAt: '0', id: 'end' })).toString('base64url')
+      const emptyPage = await trace(2, 'connection', () => getRound(a, round.id, new URLSearchParams({ cursor: pastEnd })))
+      assert.deepEqual(emptyPage.expenses, [])
+      assert.deepEqual(emptyPage.transfers, firstPage.transfers)
+      assert.equal(emptyPage.totalMinor, firstPage.totalMinor)
+      assert.equal(emptyPage.pendingRemainderMinor, firstPage.pendingRemainderMinor)
       const deleted = await trace(12, true, () => deleteExpense(b, key(), round.id, participantExpense.id, { expectedVersion: version }))
       version = deleted.version!
       const receiptKey = key(), receiptVersion = version
@@ -142,7 +171,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       // One expense: two shares + three historical members' balances + one transfer.
       await command('draw', 17)
       await command('draw', 7)
-      await trace(11, false, () => getRound(a, round.id, new URLSearchParams()))
+      await trace(2, 'connection', () => getRound(a, round.id, new URLSearchParams()))
       const settlement = await trace(8, false, () => getSettlement(a, round.id))
       assert.equal(settlement.outgoing.length, 1)
       assert.ok(settlement.outgoing[0].account)

@@ -942,15 +942,15 @@ SQL 순서: **AUTH(+1) → 입력 검증 → S-ROUND-LIST(+1) = 2회**, 빈 결�
 
 ### S4. GET /api/rounds/{roundId} — 회차 상세·지출 페이지·송금 예상
 
-RoundClient.useResource()·refresh()·loadMore() → GET → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController → SettleService.getRound() → R → RoundDetail → 참여자·지출·자신의 송금 관계 반영.
+RoundClient.useResource()·refresh()·loadMore() → GET → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController → SettleService.getRound() → 공용 DB 연결 → RoundDetail → 참여자·지출·자신의 송금 관계 반영.
 
-1. BEGIN → AUTH → S-ROUND(findRound). 본인의 round_members 이력이 없으면 404 not_found다. 회차 생성자·모임 생성자를 구별한다.
-2. S-MEMBERS → pagination() → S-EXPENSES → S-SHARES → S-RECEIPTS → S-TOTAL → S-BALANCE. 지출 페이지의 부담금·영수증은 ID 배열로 한 번씩 조회한다. 빈 지출 페이지에도 두 조회를 실행한다.
-3. 최종 저장 전에는 페이지가 전체 지출을 포함하면 읽은 지출로 previewSettlement()를 계산한다. cursor가 있거나 다음 페이지가 있으면 S-SETTLEMENT-EXPENSES 1회를 추가하여 전체 지출 기준 예상과 미배분 나머지를 계산한다.
-4. 최종 저장 후에는 S-VIEWER-TRANSFERS 1회로 저장된 송금만 조회한다. 양쪽 경로 모두 본인이 송금자/수취인인 관계만 반환하며 계좌는 반환하지 않는다.
-5. COMMIT → 연결 반환. 더보기는 화면의 기존 버전과 다르면 최신 재조회를 안내한다.
+1. AUTH 1회로 회원 상태를 확인한 뒤 limit·cursor를 검사한다.
+2. SettleRepository.findRoundDetail() 1회에서 rounds·groups·조회자의 round_members·settlement_balances를 JOIN한다. 본인의 round_members 이력이 없으면 404 not_found이며, 이탈·회차 제외 후에도 조회 가능하다.
+3. LATERAL 집계로 참여자와 사용자 이미지, 지출 페이지(limit+1)·부담금·영수증 메타데이터, 전체 지출 합계를 같은 문장의 스냅샷에서 읽는다. 부담금·영수증을 각각 집계하여 JOIN에 따른 중복을 막고 금액은 text로 반환한다. 탈퇴한 참여자의 이름 스냅샷은 보존하고 이미지는 숨긴다.
+4. 최종 저장 전에는 같은 SQL의 전체 지출·부담금으로 previewSettlement()를 계산한다. 페이지·빈 페이지에 관계없이 전체 예상과 미배분 나머지를 유지한다. 최종 저장 후에는 같은 SQL에서 본인의 저장된 송금만 조회한다. 계좌·영수증 본문은 반환하지 않는다.
+5. pageOf()로 다음 커서를 만들고 연결을 반환한다. 더보기는 화면의 기존 버전과 다르면 최신 재조회를 안내한다.
 
-SQL 순서: BEGIN → AUTH → S-ROUND → S-MEMBERS → S-EXPENSES → S-SHARES → S-RECEIPTS → S-TOTAL → S-BALANCE → [전체 예상 지출 또는 저장 송금 조회] → COMMIT = **10회**, 최종 저장 전 추가 페이지/최종 저장 후에는 **11회**다.
+SQL 순서: AUTH → 회차 상세 통합 JOIN = **2회**. 빈 지출·추가 페이지·최종 저장 후에도 2회이며 BEGIN·COMMIT·ROLLBACK·명시적 락은 없다. 입력 오류는 AUTH 1회 뒤 중단한다. 기존 findRound()·findMembers()·findSettlementExpenses()·findTotal()·findBalance()는 다른 정산 API에서 유지한다.
 
 ### S5. DELETE /api/rounds/{roundId} — 회차 전체 취소
 
