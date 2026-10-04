@@ -328,7 +328,28 @@ test('authenticated WebSocket receives only its own committed invalidations', as
       assert.equal((output.slice(repeatedCheckOutput).match(/SQL:/g) ?? []).length, 2)
     } finally { mine.socket.off('message', onRepeatedCheck) }
     await roundPost(`rounds/${drawRoundId}/settlement-check`, { ...checkBody, checked: false }, randomUUID(), other)
-    await roundPost(`rounds/${drawRoundId}/force-complete`, { expectedVersion: drawResult.version })
+    const forceBody = { expectedVersion: drawResult.version }, forceTicket = randomUUID(), forceOutput = output.length
+    const forced = await roundPost(`rounds/${drawRoundId}/force-complete`, forceBody, forceTicket)
+    const forceSql = output.slice(forceOutput).split('SQL:').slice(1).map(sql => sql.trim())
+    assert.equal(forceSql.length, 3, 'force completion including WebSocket publication uses exactly three SQL calls')
+    assert.match(forceSql[0], /FROM\s+users/)
+    assert.match(forceSql[1], /DISTINCT\s+receiver_id[\s\S]*AS pending_user_ids[\s\S]*AS user_ids/)
+    assert.match(forceSql[2], /UPDATE\s+rounds[\s\S]*INSERT INTO\s+mutation_requests/)
+    assert.ok(forceSql.every(sql => !/\b(BEGIN|COMMIT|ROLLBACK)\b|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
+    let forceReplayInvalidation = false
+    const onForceReplay = () => { forceReplayInvalidation = true }
+    mine.socket.on('message', onForceReplay)
+    try {
+      const replayOutput = output.length
+      const replay = await fetch(`${origin}/api/rounds/${drawRoundId}/force-complete`, {
+        method: 'POST', headers: { ...roundHeaders, 'idempotency-key': forceTicket }, body: JSON.stringify(forceBody),
+      })
+      assert.equal(replay.status, 200)
+      assert.deepEqual((await replay.json()).data, forced)
+      await new Promise(resolve => setTimeout(resolve, 250))
+      assert.equal(forceReplayInvalidation, false, 'force completion replay must not publish')
+      assert.equal((output.slice(replayOutput).match(/SQL:/g) ?? []).length, 2)
+    } finally { mine.socket.off('message', onForceReplay) }
     const refreshed = await fetch(`${origin}/api/auth/refresh`, { method: 'POST', headers: { origin, cookie: refreshCookie } })
     assert.equal(refreshed.status, 200, 'Refresh JWT works without an Access JWT')
     assert.equal((await fetch(`${origin}/api/me`, { headers: { authorization: `Bearer ${mine.accessToken}` } })).status, 200, 'Refresh rotation does not revoke an unexpired Access JWT')

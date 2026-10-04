@@ -452,6 +452,37 @@ async function confirmRound(access: Identity, key: string, roundId: string, body
 
 export async function roundCommand(access: Identity, key: string, roundId: string, action: string, body: VersionRequestDTO | Record<string, unknown>, captureAudience?: (audience: { groupId: string; userIds: string[] }) => void): Promise<MutationResult> {
   if (action === 'confirm') return confirmRound(access, key, roundId, body, captureAudience)
+  if (action === 'force-complete') return withDatabaseConnection(async client => {
+    const account = await requireAccount(client, access)
+    onlyKeys(body, ['expectedVersion'])
+    const digest = mutationDigest(key, { roundId, ...body })
+    const { rows: [round] } = await repository.findRoundForceCompletion(client, roundId, account.id, key)
+    const replay = mutationResult<MutationResult>(round, digest)
+    if (replay) return replay
+    if (!round.id) throw missing()
+    creator(round)
+    version(round, body.expectedVersion)
+    state(round, 'LOCKED')
+    if (round.finalized_at === null) throw new AppError(409, 'invalid_round_state', '나머지 배분을 먼저 완료해 주세요')
+    const current = await repository.forceCompleteRound(client, roundId, account.id, key, digest, round.version, nowSeconds()).catch(error => {
+      if (error?.code === '23505' && error.constraint === 'mutation_requests_pkey') {
+        throw new AppError(409, 'idempotency_conflict', '같은 요청 키로 다른 내용을 저장할 수 없어요')
+      }
+      throw error
+    })
+    if (!current.actor_active) throw new AppError(401, 'unauthorized', '로그인이 필요합니다')
+    const result = mutationResult<MutationResult>(current, digest)
+    if (!result) {
+      if (!current.id) throw missing()
+      creator(current)
+      version(current, body.expectedVersion)
+      state(current, 'LOCKED')
+      if (current.finalized_at === null) throw new AppError(409, 'invalid_round_state', '나머지 배분을 먼저 완료해 주세요')
+      throw new AppError(409, 'stale_round', '다른 변경이 먼저 저장됐어요. 최신 내역을 확인해 주세요')
+    }
+    if (current.completed) captureAudience?.({ groupId: round.group_id, userIds: round.user_ids })
+    return result
+  })
   if (action === 'complete') return withDatabaseConnection(async client => {
     const account = await requireAccount(client, access)
     onlyKeys(body, ['expectedVersion'])
@@ -535,7 +566,7 @@ export async function roundCommand(access: Identity, key: string, roundId: strin
     }, async client => { userId = (await requireAccount(client, access)).id })
   }
   onlyKeys(body, ['expectedVersion'])
-  if (!['send', 'force-complete'].includes(action)) throw missing()
+  if (action !== 'send') throw missing()
   return domainMutation(access, key, `round.${action}`, { roundId, ...body }, async (client, userId) => {
     const round = await roundFor(client, roundId, userId)
     creator(round)
@@ -548,10 +579,6 @@ export async function roundCommand(access: Identity, key: string, roundId: strin
       if (!rowCount) throw new AppError(409, 'stale_round', '다른 변경이 먼저 저장됐어요. 최신 내역을 확인해 주세요')
       const { rows } = await repository.findRemainder(client, roundId)
       if (!rows.length) await finalize(client, roundId, round.currency as Currency)
-    } else if (action === 'force-complete') {
-      state(round, 'LOCKED')
-      if (round.finalized_at === null) throw new AppError(409, 'invalid_round_state', '나머지 배분을 먼저 완료해 주세요')
-      await repository.completeRound(client, roundId, now)
     }
     return bump(client, roundId, round.version)
   })

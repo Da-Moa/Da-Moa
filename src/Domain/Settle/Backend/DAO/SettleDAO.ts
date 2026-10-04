@@ -63,6 +63,10 @@ export type RoundCompletionRow = RoundRow & {
   pending_count: number; user_ids: string[]; actor_active: boolean; completed: boolean;
   request_digest: string | null; response_metadata: unknown
 }
+export type RoundForceCompletionRow = RoundRow & {
+  pending_user_ids: string[]; user_ids: string[];
+  request_digest: string | null; response_metadata: unknown
+}
 export type SettlementRow = RoundRow & {
   confirmations: (Omit<MemberRow, 'excluded_at'> & { checked_at: string | null })[];
   outgoing: OutgoingRow[]; incoming: IncomingRow[]

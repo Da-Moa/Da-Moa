@@ -2,7 +2,7 @@ import 'server-only'
 import type { Database } from '../../../../Global/Util/Backend'
 import { roundCreationCandidatesSql } from '../../../Group/Backend'
 import type { Currency, Expense, MutationResult, finalizeSettlement } from '../../Shared'
-import type { RoundRow, RoundDetailRow, RoundConfirmationRow, RoundCompletionRow, ExpenseUpdateRow, ExpenseDeletionRow, MemberExclusionRow, MemberRow, ExpenseRow, ShareRow, ReceiptRow, SettlementExpenseRow, SettlementCheckRow, SettlementRow } from '../DAO/SettleDAO'
+import type { RoundRow, RoundDetailRow, RoundConfirmationRow, RoundCompletionRow, RoundForceCompletionRow, ExpenseUpdateRow, ExpenseDeletionRow, MemberExclusionRow, MemberRow, ExpenseRow, ShareRow, ReceiptRow, SettlementExpenseRow, SettlementCheckRow, SettlementRow } from '../DAO/SettleDAO'
 
 export function findRound(client: Database, id: string, userId: string) {
   return client.query<RoundRow>(`SELECT r.*,g.name AS group_name,g.creator_id AS group_creator_id,
@@ -426,8 +426,37 @@ export async function completeCheckedRound(client: Database, roundId: string, us
     FROM actor LEFT JOIN context ON true LEFT JOIN saved ON true LEFT JOIN recorded ON true`, [roundId, userId, key, digest, expectedVersion, now])).rows[0]
 }
 
-export function completeRound(client: Database, roundId: string, now: number) {
-  return client.query("UPDATE rounds SET status='COMPLETED',completed_at=$2 WHERE id=$1", [roundId, now])
+export function findRoundForceCompletion(client: Database, roundId: string, userId: string, key: string) {
+  return client.query<RoundForceCompletionRow>(`SELECT r.*,(r.creator_id=$2) AS is_creator,
+    ARRAY(SELECT DISTINCT receiver_id FROM settlement_transfers WHERE round_id=r.id AND received_at IS NULL ORDER BY receiver_id) AS pending_user_ids,
+    ARRAY(SELECT user_id FROM round_members WHERE round_id=r.id) AS user_ids,
+    saved.request_digest,saved.response_metadata
+    FROM (SELECT 1) anchor
+    LEFT JOIN rounds r ON r.id=$1 AND EXISTS(SELECT 1 FROM round_members WHERE round_id=r.id AND user_id=$2)
+    LEFT JOIN mutation_requests saved ON saved.actor_id=$2 AND saved.operation='round.force-complete' AND saved.request_key=$3`, [roundId, userId, key])
+}
+
+export async function forceCompleteRound(client: Database, roundId: string, userId: string, key: string, digest: string, expectedVersion: number, now: number) {
+  return (await client.query<RoundRow & { actor_active: boolean; completed: boolean; request_digest: string | null; response_metadata: unknown }>(`WITH actor AS (
+    SELECT EXISTS(SELECT 1 FROM users WHERE id=$2 AND deleted_at IS NULL AND onboarding_completed_at IS NOT NULL) AS active
+  ), context AS MATERIALIZED (
+    SELECT r.*,(r.creator_id=$2) AS is_creator
+    FROM rounds r JOIN round_members viewer ON viewer.round_id=r.id AND viewer.user_id=$2 WHERE r.id=$1
+  ), saved AS (
+    SELECT request_digest,response_metadata FROM mutation_requests WHERE actor_id=$2 AND operation='round.force-complete' AND request_key=$3
+  ), completed AS (
+    UPDATE rounds SET status='COMPLETED',completed_at=$6,version=version+1
+    WHERE id=$1 AND creator_id=$2 AND status='LOCKED' AND completed_at IS NULL AND finalized_at IS NOT NULL AND version=$5
+      AND (SELECT active FROM actor) AND EXISTS(SELECT 1 FROM context) AND NOT EXISTS(SELECT 1 FROM saved)
+    RETURNING id,status,version
+  ), recorded AS (
+    INSERT INTO mutation_requests(actor_id,operation,request_key,request_digest,resource_id,response_metadata,created_at)
+    SELECT $2,'round.force-complete',$3,$4,id,jsonb_build_object('id',id,'roundId',id,'status',status,'version',version),$6
+    FROM completed RETURNING request_digest,response_metadata
+  ) SELECT context.*,actor.active AS actor_active,
+    COALESCE(recorded.request_digest,saved.request_digest) AS request_digest,
+    COALESCE(recorded.response_metadata,saved.response_metadata) AS response_metadata,EXISTS(SELECT 1 FROM completed) AS completed
+    FROM actor LEFT JOIN context ON true LEFT JOIN saved ON true LEFT JOIN recorded ON true`, [roundId, userId, key, digest, expectedVersion, now])).rows[0]
 }
 
 export function findRoundCancellation(client: Database, roundId: string, userId: string, key: string) {

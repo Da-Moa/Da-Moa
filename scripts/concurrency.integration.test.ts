@@ -227,6 +227,94 @@ test('settlement checks compose concurrently and normal/forced completion cannot
   if (current.status === 'LOCKED') await roundCommand(lastCheck.owner, key(), lastCheck.roundId, 'complete', { expectedVersion: current.version })
 })
 
+test('force completion rechecks a competing completion or replay after reading pending receivers', { timeout: 15000 }, async t => {
+  for (const winnerAction of ['same-key', 'new-key', 'complete']) {
+    const fixture = await recordingRound()
+    const confirmed = await roundCommand(fixture.owner, key(), fixture.roundId, 'confirm', { expectedVersion: fixture.version })
+    const locked = await roundCommand(fixture.owner, key(), fixture.roundId, 'send', { expectedVersion: confirmed.version })
+    const finalized = await roundCommand(fixture.owner, key(), fixture.roundId, 'draw', { expectedVersion: locked.version })
+    if (winnerAction === 'complete') await setSettlementCheck(fixture.owner, key(), fixture.roundId, { expectedVersion: finalized.version, checked: true })
+    const requestKey = key(), body = { expectedVersion: finalized.version }
+    const pool = getDatabasePool(process.env.DATABASE_URL!), connect = pool.connect.bind(pool)
+    let resume!: () => void, reached!: () => void
+    const paused = new Promise<void>(resolve => { reached = resolve }), gate = new Promise<void>(resolve => { resume = resolve })
+    const connectionMock = t.mock.method(pool, 'connect', async () => {
+      connectionMock.mock.restore()
+      const borrowed = await connect()
+      const queryMock = t.mock.method(borrowed, 'query', new Proxy(borrowed.query, {
+        apply(target, receiver, args) {
+          const pending = Reflect.apply(target, receiver, args)
+          if (String(args[0]).includes('AS pending_user_ids')) {
+            queryMock.mock.restore()
+            return pending.then(async (result: unknown) => { reached(); await gate; return result })
+          }
+          return pending
+        },
+      }))
+      return borrowed
+    })
+    const older = roundCommand(fixture.owner, requestKey, fixture.roundId, 'force-complete', body, () => assert.fail('losing or replayed force completion must not publish'))
+      .then(result => ({ result, error: undefined }), error => ({ result: undefined, error }))
+    try {
+      await paused
+      const winner = await roundCommand(fixture.owner, winnerAction === 'same-key' ? requestKey : key(), fixture.roundId,
+        winnerAction === 'complete' ? 'complete' : 'force-complete', body)
+      const saved = await getSettlement(fixture.owner, fixture.roundId)
+      resume()
+      const outcome = await older
+      if (winnerAction === 'same-key') assert.deepEqual(outcome.result, winner)
+      else assert.equal(outcome.error?.code, 'stale_round')
+      assert.deepEqual(await getSettlement(fixture.owner, fixture.roundId), saved)
+      assert.equal(saved.version, finalized.version! + 1)
+    } finally { resume(); connectionMock.mock.restore(); await older }
+  }
+})
+
+test('force completion with the same key on different rounds commits one and preserves the loser', { timeout: 15000 }, async t => {
+  const fixture = await group()
+  const rounds = []
+  for (let index = 0; index < 2; index++) {
+    const round = await createRound(fixture.owner, uuidV7(), fixture.groupId, { name: '강제 종료 멱등 경합', currency: 'KRW', participantIds: [fixture.owner.userId, fixture.participant.userId] })
+    const expense = await saveExpense(fixture.owner, key(), round.id, { description: '지출', amount: '4', payerId: fixture.owner.userId, splitMode: 'ALL', expectedVersion: round.version })
+    const confirmed = await roundCommand(fixture.owner, key(), round.id, 'confirm', { expectedVersion: expense.version })
+    const locked = await roundCommand(fixture.owner, key(), round.id, 'send', { expectedVersion: confirmed.version })
+    rounds.push({ id: round.id, version: locked.version! })
+  }
+  const pool = getDatabasePool(process.env.DATABASE_URL!), connect = pool.connect.bind(pool)
+  let releaseReads!: () => void, reads = 0
+  const bothRead = new Promise<void>(resolve => { releaseReads = resolve })
+  const connectionMock = t.mock.method(pool, 'connect', async () => {
+    const borrowed = await connect()
+    const queryMock = t.mock.method(borrowed, 'query', new Proxy(borrowed.query, {
+      apply(target, receiver, args) {
+        const pending = Reflect.apply(target, receiver, args)
+        if (String(args[0]).includes('AS pending_user_ids')) {
+          queryMock.mock.restore()
+          return pending.then(async (result: unknown) => { if (++reads === 2) releaseReads(); await bothRead; return result })
+        }
+        return pending
+      },
+    }))
+    return borrowed
+  })
+  const requestKey = key()
+  try {
+    const outcomes = await Promise.allSettled(rounds.map(round => roundCommand(fixture.owner, requestKey, round.id, 'force-complete', { expectedVersion: round.version })))
+    assert.equal(outcomes.filter(result => result.status === 'fulfilled').length, 1)
+    for (let index = 0; index < outcomes.length; index++) {
+      const outcome = outcomes[index], current = await getSettlement(fixture.owner, rounds[index].id)
+      if (outcome.status === 'fulfilled') assert.equal(current.status, 'COMPLETED')
+      else {
+        assert.equal(outcome.reason.code, 'idempotency_conflict')
+        assert.equal(current.status, 'LOCKED')
+        assert.equal(current.version, rounds[index].version)
+        assert.equal((await getRound(fixture.owner, rounds[index].id, new URLSearchParams())).completedAt, null)
+      }
+      assert.ok(current.incoming.every(transfer => transfer.receivedAt === null))
+    }
+  } finally { releaseReads(); connectionMock.mock.restore() }
+})
+
 test('settlement check rechecks a duplicate or completed round after its incoming read', { timeout: 15000 }, async t => {
   for (const winnerAction of ['check', 'force-complete']) {
     const fixture = await recordingRound()

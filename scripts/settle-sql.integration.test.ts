@@ -35,11 +35,19 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
     process.env.DB_QUERY_LOG = 'true'
     let statements: string[] = []
     const logger = t.mock.method(console, 'info', (message: string) => { statements.push(message.replace(/^SQL:\s*/, '').replace(/\s+/g, ' ').trim()) })
-    const trace = async <T>(count: number, write: boolean | 'receipt' | 'session' | 'connection' | 'cancel' | 'expense' | 'patch' | 'delete' | 'exclude' | 'confirm' | 'reopen' | 'draw' | 'settlement' | 'check' | 'complete', work: () => Promise<T>) => {
+    const trace = async <T>(count: number, write: boolean | 'receipt' | 'session' | 'connection' | 'cancel' | 'expense' | 'patch' | 'delete' | 'exclude' | 'confirm' | 'reopen' | 'draw' | 'settlement' | 'check' | 'complete' | 'force-complete', work: () => Promise<T>) => {
       statements = []
       const result = await work()
       assert.equal(statements.length, count, statements.join('\n'))
-      if (write === 'complete') {
+      if (write === 'force-complete') {
+        assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
+        if (count) assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
+        if (count > 1) assert.match(statements[1], /DISTINCT receiver_id.*received_at IS NULL.*AS pending_user_ids.*AS user_ids.*operation = 'round.force-complete'/)
+        if (count === 3) {
+          assert.match(statements[2], /UPDATE rounds.*status = 'COMPLETED'.*version = version \+ 1.*status = 'LOCKED'.*finalized_at IS NOT NULL.*version = \$5.*INSERT INTO mutation_requests/)
+          assert.doesNotMatch(statements[2], /UPDATE settlement_transfers/)
+        }
+      } else if (write === 'complete') {
         assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
         if (count) assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
         if (count === 2) {
@@ -774,7 +782,56 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       evenVersion = (await trace(6, 'confirm', () => roundCommand(a, key(), even.id, 'confirm', { expectedVersion: evenVersion }))).version!
       // Two shares + two balances + one transfer, finalized directly by send.
       evenVersion = (await trace(20, true, () => roundCommand(a, key(), even.id, 'send', { expectedVersion: evenVersion }))).version!
-      await trace(9, true, () => roundCommand(a, key(), even.id, 'force-complete', { expectedVersion: evenVersion }))
+      await t.test('force completion reads pending receivers and atomically saves status, version and replay in three queries', async () => {
+        const requestKey = key(), request = { expectedVersion: evenVersion }
+        for (const [actor, ticket, id, input, expected, count] of [
+          [null, '', even.id, {}, 'unauthorized', 0],
+          [{ ...a, userId: randomUUID() }, '', even.id, {}, 'unauthorized', 1],
+          [a, '', even.id, request, 'invalid_request_key', 1],
+          [a, key(), even.id, { unexpected: true }, 'invalid_input', 1],
+          [b, key(), even.id, request, 'forbidden', 2],
+          [nonParticipant, key(), even.id, request, 'not_found', 2],
+          [a, key(), randomUUID(), request, 'not_found', 2],
+          [a, key(), even.id, { expectedVersion: '1' }, 'invalid_version', 2],
+          [a, key(), even.id, { expectedVersion: evenVersion - 1 }, 'stale_round', 2],
+          [a, key(), round.id, { expectedVersion: version }, 'invalid_round_state', 2],
+        ] as const) await trace(count, 'force-complete', () => assert.rejects(roundCommand(actor, ticket, id, 'force-complete', input, () => assert.fail('rejection must not publish')),
+          (error: { code: string }) => error.code === expected))
+        const unfinalized = await createRound(a, uuidV7(), group.id, { ...body, participantIds: [a.userId, b.userId] })
+        const saved = await saveExpense(a, key(), unfinalized.id, { ...expenseBody, amount: '3', expectedVersion: 1 })
+        const confirmed = await roundCommand(a, key(), unfinalized.id, 'confirm', { expectedVersion: saved.version })
+        const locked = await roundCommand(a, key(), unfinalized.id, 'send', { expectedVersion: confirmed.version })
+        await trace(2, 'force-complete', () => assert.rejects(roundCommand(a, key(), unfinalized.id, 'force-complete', { expectedVersion: locked.version }),
+          (error: { code: string }) => error.code === 'invalid_round_state'))
+        const before = await getSettlement(a, even.id)
+        const beforeRound = await getRound(a, even.id, new URLSearchParams())
+        assert.equal(before.requiredCount - before.checkedCount, 1)
+        const constraint = `force_complete_test_${key().replaceAll('-', '')}`
+        await db.query(`ALTER TABLE mutation_requests ADD CONSTRAINT ${constraint} CHECK (request_key <> '${requestKey}') NOT VALID`)
+        try {
+          await trace(3, 'force-complete', () => assert.rejects(roundCommand(a, requestKey, even.id, 'force-complete', request, () => assert.fail('failed save must not publish')),
+            (error: { code: string }) => error.code === '23514'))
+          assert.deepEqual(await getSettlement(a, even.id), before)
+          assert.deepEqual(await getRound(a, even.id, new URLSearchParams()), beforeRound)
+          assert.equal((await db.query('SELECT 1 FROM mutation_requests WHERE request_key=$1', [requestKey])).rowCount, 0)
+        } finally { await db.query(`ALTER TABLE mutation_requests DROP CONSTRAINT ${constraint}`) }
+        const result = await trace(3, 'force-complete', () => roundCommand(a, requestKey, even.id, 'force-complete', request, audience => {
+          assert.equal(audience.groupId, group.id)
+          assert.deepEqual(new Set(audience.userIds), new Set([a.userId, b.userId]))
+        }))
+        assert.equal(result.status, 'COMPLETED')
+        assert.equal(result.version, evenVersion + 1)
+        const after = await getSettlement(a, even.id)
+        assert.notEqual((await getRound(a, even.id, new URLSearchParams())).completedAt, null)
+        assert.deepEqual(after.confirmations, before.confirmations)
+        assert.deepEqual(after.incoming, before.incoming)
+        assert.deepEqual(after.outgoing, before.outgoing)
+        assert.deepEqual(await trace(2, 'force-complete', () => roundCommand(a, requestKey, even.id, 'force-complete', request, () => assert.fail('replay must not publish'))), result)
+        await trace(2, 'force-complete', () => assert.rejects(roundCommand(a, requestKey, even.id, 'force-complete', { expectedVersion: evenVersion + 1 }),
+          (error: { code: string }) => error.code === 'idempotency_conflict'))
+        await trace(2, 'force-complete', () => assert.rejects(roundCommand(a, key(), even.id, 'force-complete', { expectedVersion: result.version }),
+          (error: { code: string }) => error.code === 'invalid_round_state'))
+      })
       statements = []
       await assert.rejects(saveExpense(a, key(), even.id, { ...expenseBody, expectedVersion: evenVersion }), (error: { code: string }) => error.code === 'invalid_round_state')
       assert.equal(statements.length, 5)

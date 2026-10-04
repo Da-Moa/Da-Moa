@@ -1128,14 +1128,16 @@ SQL: **AUTH 1 + 미확인 수취 검사와 종료 저장 1 = 2회**(기존 10회
 
 ### S18. POST /api/rounds/{roundId}/force-complete — 강제 정산 종료
 
-SettlementClient.command('force-complete')의 미확인 인원·되돌릴 수 없음 경고 → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.roundCommand('force-complete',VersionRequestDTO) → W → MutationResult → 정산 기록 화면 이동.
+SettlementClient.command('force-complete')의 미확인 인원·되돌릴 수 없음 경고 → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.roundCommand('force-complete',VersionRequestDTO) → AUTH → 미완료 수취인 통합 조회 → 조건부 종료 저장 → MutationResult → 정산 기록 화면 이동.
 
-1. expectedVersion만 허용. W → S-ROUND → 생성자·버전·LOCKED·최종 저장 완료 검사.
-2. S-PENDING-COUNT를 실행하지 않고 S-COMPLETE → S-BUMP로 종료를 저장한다. 미확인 송금의 received_at을 임의로 확인 처리하지 않는다.
-3. IDEM-SAVE → COMMIT → 응답·알림 예약. 일반 종료와의 경합은 조건부 UPDATE와 버전/상태 검사로 하나만 성공한다.
-4. 경고와 종료 후 읽기 전용 흐름을 유지한다.
+1. AUTH로 내 정보 확인 **(+1)**. expectedVersion만 허용하고 요청 키·digest를 검증한다. 명시적 트랜잭션·advisory lock·행 잠금 조회 없이 같은 공용 DB 연결을 사용한다.
+2. `findRoundForceCompletion()`으로 회차 참여 권한·생성자·현재 상태/버전·최종 저장 시각·미완료 수취인 목록·알림 대상·같은 키의 성공 기록을 통합 조회 **(+1)**. `received_at IS NULL`인 송금의 `DISTINCT receiver_id`로 사람 목록을 구하므로 한 사람이 여러 송금을 받아도 한 번만 포함된다. 성공 재생은 즉시 반환하고, 새 요청은 회차 생성자·버전·LOCKED·최종 저장 완료를 검사한다.
+3. `forceCompleteRound()` 단일 CTE SQL로 **완료 처리·회차 상태 변경 (+1)**. 활성 회원·참여 권한·회차 생성자·LOCKED·미종료·최종 저장·버전·멱등 기록 부재를 다시 확인한 조건부 UPDATE로 `COMPLETED`, `completed_at`, `version+1`을 저장하고 성공 응답 기록 INSERT도 같은 문장에 포함한다. INSERT 실패는 종료 저장도 원자적으로 취소한다. 미완료 수취인이 있어도 회차를 종료하되 송금 `received_at`과 확인 상태는 보존한다.
+4. 일반/강제 종료가 경합하면 조건부 UPDATE의 상태·버전 재검사로 하나만 저장한다. 조회 후 동일 키가 먼저 성공했으면 저장 SQL에서 기존 결과를 재생한다. 서로 다른 회차에 같은 키를 동시에 사용하면 성공 기록 PK 충돌로 패자의 종료 저장도 취소하며 409 idempotency_conflict로 반환한다. 저장 성공만 조회에서 확보한 참여자 전체에게 invalidation을 예약하며 알림 대상 추가 SQL·재생 알림은 없다. 기존 경고와 종료 후 읽기 전용 흐름을 유지한다.
 
-SQL: W 6회 + S-ROUND → S-COMPLETE → S-BUMP = **9회**.
+SQL: AUTH **1회** + 미완료 수취인/권한/알림/멱등 통합 조회 **1회** + 조건부 종료/버전/성공 기록 저장 **1회** = **3회**(기존 9회). 입력 오류는 AUTH **1회**, 권한·상태·버전 거절과 성공 재생은 **2회**. 실제 SQL은 [findRoundForceCompletion()/forceCompleteRound()](../src/Domain/Settle/Backend/Repository/SettleRepository.ts), SQL 로그·원자성은 [settle-sql.integration.test.ts](../scripts/settle-sql.integration.test.ts), 조회/저장 사이 경합은 [concurrency.integration.test.ts](../scripts/concurrency.integration.test.ts), 알림까지 포함한 요청 SQL 수·재생 시 알림 없음은 [realtime.integration.test.mjs](../scripts/realtime.integration.test.mjs)로 검증한다.
+
+검증(2026-10-04): `npm test` **96개**, 전용 로컬 테스트 DB·MinIO 버킷과 격리 복사본의 `npm run test:integration` **65개**, `npm run build` 통과. 실제 HTTP 요청의 WebSocket 발행까지 SQL **3회**, 성공 재생은 **2회·알림 0회**, 저장 실패의 원자성·조회 이후 일반/강제 종료 경합·서로 다른 회차의 동일 키 충돌을 확인했다.
 
 ### S19. POST /api/rounds/{roundId}/expenses/{expenseId}/receipts — 영수증 추가
 
