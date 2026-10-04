@@ -2,7 +2,7 @@ import 'server-only'
 import type { Database } from '../../../../Global/Util/Backend'
 import { roundCreationCandidatesSql } from '../../../Group/Backend'
 import type { Currency, Expense, MutationResult, finalizeSettlement } from '../../Shared'
-import type { RoundRow, RoundDetailRow, RoundConfirmationRow, RoundCompletionRow, RoundForceCompletionRow, ExpenseUpdateRow, ExpenseDeletionRow, MemberExclusionRow, MemberRow, ExpenseRow, ShareRow, ReceiptContentRow, ReceiptCreationRow, SettlementExpenseRow, SettlementCheckRow, SettlementRow } from '../DAO/SettleDAO'
+import type { RoundRow, RoundDetailRow, RoundConfirmationRow, RoundCompletionRow, RoundForceCompletionRow, ExpenseUpdateRow, ExpenseDeletionRow, MemberExclusionRow, MemberRow, ExpenseRow, ShareRow, ReceiptContentRow, ReceiptCreationRow, ReceiptDeletionRow, SettlementExpenseRow, SettlementCheckRow, SettlementRow } from '../DAO/SettleDAO'
 
 export function findRound(client: Database, id: string, userId: string) {
   return client.query<RoundRow>(`SELECT r.*,g.name AS group_name,g.creator_id AS group_creator_id,
@@ -91,14 +91,6 @@ export async function insertRound(client: Database, id: string, groupId: string,
   ) SELECT EXISTS(SELECT 1 FROM actor) AS actor_active,
     COALESCE((SELECT is_member FROM actor),false) AS is_member,
     EXISTS(SELECT 1 FROM members) AS created`, [groupId, ids, id, userId, name, currency, now])).rows[0]
-}
-
-export function findExpense(client: Database, expenseId: string, roundId: string) {
-  return client.query<ExpenseRow>('SELECT * FROM expenses WHERE id=$1 AND round_id=$2', [expenseId, roundId])
-}
-
-export function findActiveMember(client: Database, roundId: string, userId: string) {
-  return client.query('SELECT 1 FROM round_members WHERE round_id=$1 AND user_id=$2 AND excluded_at IS NULL', [roundId, userId])
 }
 
 export function findExpenseUpdate(client: Database, roundId: string, expenseId: string, userId: string, key: string) {
@@ -565,8 +557,44 @@ export async function insertReceipt(client: Database, roundId: string, expenseId
   [roundId, expenseId, userId, key, digest, expectedVersion, id, mimeType, byteSize, sha256, objectKey, now])).rows[0]
 }
 
-export function deleteReceipt(client: Database, receiptId: string, expenseId: string) {
-  return client.query<{ object_key: string | null }>('DELETE FROM expense_receipts WHERE id=$1 AND expense_id=$2 RETURNING object_key', [receiptId, expenseId])
+const receiptDeletionContextSql = `context AS MATERIALIZED (
+  SELECT r.*,(r.creator_id=$4) AS is_creator,e.id AS expense_id,e.author_id,viewer.excluded_at AS viewer_excluded_at,
+    rc.id AS receipt_id,ARRAY(SELECT user_id FROM round_members WHERE round_id=r.id ORDER BY user_id) AS user_ids
+  FROM rounds r JOIN round_members viewer ON viewer.round_id=r.id AND viewer.user_id=$4
+  LEFT JOIN expenses e ON e.round_id=r.id AND e.id=$2
+  LEFT JOIN expense_receipts rc ON rc.expense_id=e.id AND rc.id=$3 WHERE r.id=$1
+), saved AS MATERIALIZED (
+  SELECT request_digest,response_metadata FROM mutation_requests WHERE actor_id=$4 AND operation='receipt.delete' AND request_key=$5
+), actor AS (
+  SELECT EXISTS(SELECT 1 FROM users WHERE id=$4 AND deleted_at IS NULL AND onboarding_completed_at IS NOT NULL) AS active
+)`
+
+export function findReceiptDeletion(client: Database, roundId: string, expenseId: string, receiptId: string, userId: string, key: string) {
+  return client.query<ReceiptDeletionRow>(`WITH ${receiptDeletionContextSql}
+    SELECT context.*,actor.active AS actor_active,saved.request_digest,saved.response_metadata FROM actor
+    LEFT JOIN context ON true LEFT JOIN saved ON true`, [roundId, expenseId, receiptId, userId, key])
+}
+
+export async function deleteReceipt(client: Database, roundId: string, expenseId: string, receiptId: string, userId: string, key: string, digest: string, expectedVersion: number, now: number) {
+  return (await client.query<ReceiptDeletionRow>(`WITH ${receiptDeletionContextSql}, bumped AS (
+    UPDATE rounds r SET version=r.version+1 WHERE r.id=$1 AND r.version=$7 AND r.status='RECORDING' AND r.completed_at IS NULL
+      AND (SELECT active FROM actor) AND NOT EXISTS(SELECT 1 FROM saved)
+      AND EXISTS(SELECT 1 FROM expenses e JOIN expense_receipts rc ON rc.expense_id=e.id AND rc.id=$3
+        JOIN round_members viewer ON viewer.round_id=e.round_id AND viewer.user_id=$4
+        WHERE e.round_id=r.id AND e.id=$2 AND (r.creator_id=$4 OR (viewer.excluded_at IS NULL AND e.author_id=$4)))
+    RETURNING id,status,version
+  ), deleted AS (
+    DELETE FROM expense_receipts WHERE id=$3 AND expense_id=$2 AND EXISTS(SELECT 1 FROM bumped) RETURNING id,object_key
+  ), recorded AS (
+    INSERT INTO mutation_requests(actor_id,operation,request_key,request_digest,resource_id,response_metadata,created_at)
+    SELECT $4,'receipt.delete',$5,$6,deleted.id,
+      jsonb_build_object('id',deleted.id,'roundId',bumped.id,'status',bumped.status,'version',bumped.version),$8
+    FROM deleted CROSS JOIN bumped RETURNING request_digest,response_metadata
+  ) SELECT context.*,actor.active AS actor_active,COALESCE(recorded.request_digest,saved.request_digest) AS request_digest,
+    COALESCE(recorded.response_metadata,saved.response_metadata) AS response_metadata,
+    EXISTS(SELECT 1 FROM deleted) AS deleted,(SELECT object_key FROM deleted) AS object_key
+    FROM actor LEFT JOIN context ON true LEFT JOIN saved ON true LEFT JOIN recorded ON true`,
+  [roundId, expenseId, receiptId, userId, key, digest, expectedVersion, now])).rows[0]
 }
 
 export function findReceipt(client: Database, receiptId: string, userId: string) {

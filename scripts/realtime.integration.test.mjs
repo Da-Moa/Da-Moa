@@ -294,7 +294,40 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     const inactiveUpload = await fetch(receiptPath, { method: 'POST', headers: { origin, authorization: `Bearer ${createAccessToken(randomUUID(), 'session', secret)}` }, body: '{invalid form' })
     assert.equal(inactiveUpload.status, 401, 'account lookup precedes multipart validation')
     assert.equal((output.slice(authOutput).match(/SQL:/g) ?? []).length, 1)
-    let expenseVersion = savedReceipt.version
+    const receiptDeleteTicket = randomUUID()
+    const receiptDeleteHeaders = { ...expenseHeaders, 'idempotency-key': receiptDeleteTicket }
+    const receiptDeleteBody = JSON.stringify({ expectedVersion: savedReceipt.version })
+    const receiptDeleteMessages = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
+    const receiptDeleteOutput = output.length
+    const receiptDeletedResponse = await fetch(`${receiptPath}/${savedReceipt.id}`, { method: 'DELETE', headers: receiptDeleteHeaders, body: receiptDeleteBody })
+    assert.equal(receiptDeletedResponse.status, 200, await receiptDeletedResponse.clone().text())
+    const deletedReceipt = (await receiptDeletedResponse.json()).data
+    for (const [bytes] of await Promise.all(receiptDeleteMessages)) assert.deepEqual(JSON.parse(bytes.toString()), {
+      type: 'invalidate', keys: ['rounds', `group-rounds:${groupId}`, `round:${expenseRoundId}`, `settlement:${expenseRoundId}`],
+    })
+    const receiptDeleteSql = output.slice(receiptDeleteOutput).split('SQL:').slice(1).map(sql => sql.trim())
+    assert.equal(receiptDeleteSql.length, 3, 'receipt deletion including WebSocket publication uses three SQL calls')
+    assert.match(receiptDeleteSql[0], /FROM\s+users/)
+    assert.match(receiptDeleteSql[1], /LEFT JOIN\s+expense_receipts[\s\S]*operation\s*=\s*'receipt.delete'/)
+    assert.match(receiptDeleteSql[2], /UPDATE\s+rounds[\s\S]*DELETE FROM\s+expense_receipts[\s\S]*INSERT INTO\s+mutation_requests/)
+    assert.ok(receiptDeleteSql.every(sql => !/\b(BEGIN|COMMIT|ROLLBACK)\b|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
+    let deleteReplayPublished = false
+    const onDeleteReplay = () => { deleteReplayPublished = true }
+    mine.socket.on('message', onDeleteReplay)
+    other.socket.on('message', onDeleteReplay)
+    try {
+      const replayOutput = output.length
+      const replay = await fetch(`${receiptPath}/${savedReceipt.id}`, { method: 'DELETE', headers: receiptDeleteHeaders, body: receiptDeleteBody })
+      assert.equal(replay.status, 200)
+      assert.deepEqual((await replay.json()).data, deletedReceipt)
+      await new Promise(resolve => setTimeout(resolve, 250))
+      assert.equal(deleteReplayPublished, false)
+      assert.equal((output.slice(replayOutput).match(/SQL:/g) ?? []).length, 2)
+    } finally {
+      mine.socket.off('message', onDeleteReplay)
+      other.socket.off('message', onDeleteReplay)
+    }
+    let expenseVersion = deletedReceipt.version
     const confirmHeaders = { ...roundHeaders, 'idempotency-key': randomUUID() }
     const confirmBody = JSON.stringify({ expectedVersion: expenseVersion })
     const confirmMessages = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))

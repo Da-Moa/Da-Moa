@@ -137,19 +137,6 @@ export async function createRound(access: Identity, key: string, groupId: string
   }))
 }
 
-async function expenseFor(client: Database, roundId: string, expenseId: string): Promise<ExpenseRow> {
-  const { rows } = await repository.findExpense(client, expenseId, roundId)
-  if (!rows[0]) throw missing()
-  return rows[0]
-}
-
-async function editable(client: Database, round: RoundRow, userId: string, expense?: ExpenseRow) {
-  state(round, 'RECORDING')
-  if (round.is_creator) return
-  const { rows } = await repository.findActiveMember(client, round.id, userId)
-  if (!rows.length || (expense && expense.author_id !== userId)) throw new AppError(403, 'forbidden', '지출 작성자 또는 회차 생성자만 수정할 수 있어요')
-}
-
 function expenseFields(body: ExpenseRequestDTO | Record<string, unknown>, currency?: Currency, previous?: ExpenseRow): { description: string; amount: string; payerId: string; splitMode: Expense['splitMode'] } {
   onlyKeys(body, ['description', 'amount', 'payerId', 'splitMode', 'participantIds', 'customShares', 'expectedVersion'])
   const description = textInput(body.description === undefined ? previous?.description : body.description, 500)
@@ -674,20 +661,45 @@ export async function addReceipt(access: Identity, key: string, roundId: string,
   }
 }
 
-export async function removeReceipt(access: Identity, key: string, roundId: string, expenseId: string, receiptId: string, body: VersionRequestDTO | Record<string, unknown>) {
-  onlyKeys(body, ['expectedVersion'])
+export async function removeReceipt(access: Identity, key: string, roundId: string, expenseId: string, receiptId: string, body: VersionRequestDTO | Record<string, unknown>, captureAudience?: ReceiptAudience) {
   let objectKey: string | null = null
-  const result = await domainMutation(access, key, 'receipt.delete', { roundId, expenseId, receiptId, ...body }, async (client, userId) => {
-    const round = await roundFor(client, roundId, userId), expense = await expenseFor(client, roundId, expenseId)
-    await editable(client, round, userId, expense)
-    version(round, body.expectedVersion)
-    const result = await bump(client, roundId, round.version)
-    const { rows, rowCount } = await repository.deleteReceipt(client, receiptId, expenseId)
-    if (!rowCount) throw missing()
-    objectKey = rows[0].object_key
-    return { ...result, id: receiptId }
+  let audience: Parameters<ReceiptAudience>[0] | undefined
+  const result = await withDatabaseConnection(async client => {
+    const account = await requireAccount(client, access)
+    onlyKeys(body, ['expectedVersion'])
+    const digest = mutationDigest(key, { roundId, expenseId, receiptId, ...body })
+    const round = (await repository.findReceiptDeletion(client, roundId, expenseId, receiptId, account.id, key)).rows[0]
+    const replay = mutationResult<MutationResult>(round, digest)
+    if (replay) return replay
+    validateEditableExpense(round, account.id, body.expectedVersion)
+    if (!round.receipt_id) throw missing()
+    const current = await repository.deleteReceipt(client, roundId, expenseId, receiptId, account.id, key, digest, round.version, nowSeconds()).catch(error => {
+      if (error && typeof error === 'object' && error.code === '23505') {
+        throw new AppError(409, 'idempotency_conflict', '같은 요청 키로 다른 내용을 저장할 수 없어요')
+      }
+      throw error
+    })
+    if (!current.actor_active) throw new AppError(401, 'unauthorized', '로그인이 필요합니다')
+    let result = mutationResult<MutationResult>(current, digest)
+    if (!result) {
+      // A competing autocommit may finish after this statement's snapshot was taken.
+      const latest = (await repository.findReceiptDeletion(client, roundId, expenseId, receiptId, account.id, key)).rows[0]
+      if (!latest.actor_active) throw new AppError(401, 'unauthorized', '로그인이 필요합니다')
+      result = mutationResult<MutationResult>(latest, digest)
+      if (!result) {
+        validateEditableExpense(latest, account.id, body.expectedVersion)
+        if (!latest.receipt_id) throw missing()
+        throw new AppError(409, 'stale_round', '다른 변경이 먼저 저장됐어요. 최신 내역을 확인해 주세요')
+      }
+    }
+    if (current.deleted) {
+      objectKey = current.object_key
+      audience = { groupId: current.group_id, userIds: current.user_ids }
+    }
+    return result
   })
   if (objectKey) await cleanupReceiptObjects([objectKey])
+  if (audience) captureAudience?.(audience)
   return result
 }
 

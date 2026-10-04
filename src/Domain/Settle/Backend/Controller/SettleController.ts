@@ -62,7 +62,10 @@ export async function getSettleResponse(request: NextRequest, path: string[]): P
         if (!(file instanceof File) || form.getAll('file').length !== 1 || form.getAll('expectedVersion').length !== 1 || [...form.keys()].some(k => !['file', 'expectedVersion'].includes(k))) throw new AppError(400, 'invalid_input', '이미지를 한 개씩 올려 주세요')
         return { expectedVersion: Number(form.get('expectedVersion')), bytes: new Uint8Array(await file.arrayBuffer()), type: file.type, name: file.name }
       }, audience => { affectedAudience = audience })
-    } else if (path[0] === 'rounds' && path.length === 6 && path[2] === 'expenses' && path[4] === 'receipts' && method === 'DELETE') data = await removeReceipt(access, key, path[1], path[3], path[5], await jsonBody(request))
+    } else if (path[0] === 'rounds' && path.length === 6 && path[2] === 'expenses' && path[4] === 'receipts' && method === 'DELETE') {
+      affectedAudience = null
+      data = await removeReceipt(access, key, path[1], path[3], path[5], await jsonBody(request), audience => { affectedAudience = audience })
+    }
     else if (path[0] === 'receipts' && path.length === 2 && method === 'GET') {
       const receipt = await getReceipt(access, path[1])
       return new Response(new Uint8Array(receipt.content).buffer, { headers: { 'Content-Type': receipt.mimeType, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, no-store' } })

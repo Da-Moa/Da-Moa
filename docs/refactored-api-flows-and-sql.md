@@ -1171,20 +1171,23 @@ ReceiptImage.view() → GET(blob) → Node Proxy → JWT Guard → API Route Set
 
 ### S21. DELETE /api/rounds/{roundId}/expenses/{expenseId}/receipts/{receiptId} — 영수증 삭제
 
-ExpenseCard.removeReceipt()의 확인 → DELETE → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.removeReceipt(VersionRequestDTO) → W → MutationResult → 상세 재조회.
+ExpenseCard.removeReceipt()의 확인 → DELETE → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.removeReceipt(VersionRequestDTO) → MutationResult → WebSocket invalidation 후 상세 재조회.
 
-1. expectedVersion만 허용. W → S-ROUND → S-EXPENSE → [S-ACTIVE-MEMBER] → 작성자/회차 생성자·RECORDING·버전 확인.
-2. S-BUMP로 버전 확보 → S-RECEIPT-DELETE는 receiptId와 expenseId를 함께 제한하고 Object Key를 RETURNING한다. 삭제 행이 없으면 404 not_found·ROLLBACK이다.
-3. IDEM-SAVE → COMMIT → Object Key가 있으면 MinIO 삭제 → 응답·알림 예약. 지출 원본은 유지한다.
-4. 같은 키 성공 재생은 DB 삭제·객체 삭제를 반복하지 않으며 BYTEA 영수증은 외부 객체 삭제 없이 처리한다.
+1. 공용 풀 연결에서 AUTH 회원 상태를 먼저 조회한다. expectedVersion만 허용하고 Idempotency-Key와 본문 digest를 검증한다. 미인증은 SQL 0회, 없는 회원·입력/키 오류는 AUTH 1회로 종료한다.
+2. `findReceiptDeletion()` 단일 SQL로 회차 참여 이력·지출 원작성자·본인 제외 여부·회차 생성자·RECORDING·버전·영수증 소속·기존 성공 기록·알림 대상 ID를 함께 읽는다. 모임 생성자라는 이유만으로 허용하지 않는다. 성공 재생은 기존 결과를 반환하고 다른 본문은 409 idempotency_conflict다. 권한·상태·버전·없는 영수증 거절 및 순차 성공 재생은 총 2회다.
+3. `deleteReceipt()`의 조건부 `UPDATE rounds` → `DELETE expense_receipts RETURNING object_key` → `INSERT mutation_requests` CTE 한 문장으로 삭제·버전 증가·성공 기록을 함께 자동 커밋한다. 저장 SQL에서도 활성 회원·회차 참여·작성자/회차 생성자·제외·상태·버전·roundId/expenseId/receiptId 소속을 다시 검사한다. 영수증이 없는 경우 버전도 증가하지 않고 저장 중 오류는 문장 전체를 취소한다. 명시적 BEGIN/COMMIT·advisory lock·FOR UPDATE는 없다. UPDATE의 PostgreSQL 행 잠금 대기 후 최신 상태/버전을 재검사한다.
+4. 경합으로 저장 결과가 없으면 같은 통합 조회를 한 번 더 실행한다(총 4회). 동시 동일 키의 성공 기록은 재생하고 변경된 상태·버전·권한은 거절한다. 다른 회차에 같은 키가 동시에 저장되어 고유 제약 충돌이 나면 해당 문장 전체가 취소되고 409 idempotency_conflict다.
+5. DB 연결 반환 후 실제 삭제한 Object Key만 MinIO에서 삭제한다. 객체 정리 실패도 이미 저장한 DB 결과를 유지한다. BYTEA 영수증은 외부 객체 삭제 없이 처리한다. 성공 재생은 DB 삭제·객체 삭제·알림을 반복하지 않는다. 삭제 SQL에서 확보한 audience로 WebSocket invalidation을 발행하므로 추가 SQL은 없고 지출 원본은 유지한다.
 
-SQL: W 6회 + S-ROUND → S-EXPENSE → [S-ACTIVE-MEMBER] → S-BUMP → S-RECEIPT-DELETE = **10 + A회**.
+정상 SQL: **AUTH 내 정보 조회 (+1) → 내가 지출 기록자 또는 회차 생성자인지 확인 (+1) → 영수증 삭제 (+1) = 총 3회**. 기존 10 + A회와 알림 수신자 별도 4회를 제거했다. MinIO 삭제는 별도 외부 작업이다.
+
+검증(2026-10-04): `npm test` **96개**, 격리 복사본의 `npm run test:integration` **73개**, `npm run build` 통과. [receipt-delete.integration.test.ts](../scripts/receipt-delete.integration.test.ts)는 실제 PostgreSQL SQL 로그와 MinIO 명령으로 AUTH → 권한 조회 → 단일 삭제 SQL → DB 연결 반환 → 객체 삭제 → 알림 순서, 작성자/회차 생성자 권한과 모임 생성자·제외된 작성자 거절, 상태/버전/입력/소속 검사, 성공 기록 실패 시 삭제·버전 전체 취소, 객체 정리 실패 시 DB 성공 유지, 동시 동일 키 단일 삭제·알림, 확정 행 잠금 대기 후 거절, 서로 다른 회차의 같은 키 경합 시 패자 삭제·버전 취소를 확인한다. [realtime.integration.test.mjs](../scripts/realtime.integration.test.mjs)는 실제 HTTP DELETE와 WebSocket 발행까지 SQL 3회, 성공 재생 SQL 2회·알림 0회를 검증한다. 기존 BYTEA 삭제는 영수증 마이그레이션 통합 테스트에서 함께 확인했다.
 
 ### Settle 실시간·검증 경계
 
-회차 생성·지출 생성·지출 수정·지출 삭제·참여자 제외·정산 확정·일반 정산 종료 알림은 저장/통합 조회에서 확보한 참여자 ID를 전달받아 수신자 SQL 0회다. 나머지 일반 변경 후 알림 수신자 조회는 BEGIN → 회차 group_id → round_members → COMMIT = **별도 4회**다. 취소는 S5의 기록 확인 SQL에서 삭제 전 허가된 수신자를 함께 읽으므로 삭제 전후 추가 조회 **0회**이며 성공 재생 시 재발행하지 않는다. 실시간 비활성화 시 모두 SQL 0회다. after() 알림 실패는 이미 저장한 변경을 롤백하지 않는다. 메시지에는 rounds·group-rounds·round·settlement와 필요한 groups/group 키만 넣고 금액·계좌·영수증·초대 토큰은 넣지 않는다.
+회차 생성·지출 생성·지출 수정·지출 삭제·참여자 제외·정산 확정·일반 정산 종료·영수증 삭제 알림은 저장/통합 조회에서 확보한 참여자 ID를 전달받아 수신자 SQL 0회다. 나머지 일반 변경 후 알림 수신자 조회는 BEGIN → 회차 group_id → round_members → COMMIT = **별도 4회**다. 취소는 S5의 기록 확인 SQL에서 삭제 전 허가된 수신자를 함께 읽으므로 삭제 전후 추가 조회 **0회**이며 성공 재생 시 재발행하지 않는다. 실시간 비활성화 시 모두 SQL 0회다. after() 알림 실패는 이미 저장한 변경을 롤백하지 않는다. 메시지에는 rounds·group-rounds·round·settlement와 필요한 groups/group 키만 넣고 금액·계좌·영수증·초대 토큰은 넣지 않는다.
 
-[scripts/settle-sql.integration.test.ts](../scripts/settle-sql.integration.test.ts)는 실제 PostgreSQL SQL 로그로 생성 4회·UUIDv7 PK·중복 409·동시 중복 단일 성공·세션 락 획득/해제·참여자 저장 실패 원자성·목록 4회·상세 10/11회·지출 생성 6회·생성 입력 오류 AUTH 1회·생성 성공 재생 5회·생성 실패 전체 롤백·같은 키 동시 생성 단일 저장·수정 5회/거절 및 재생 2회/경합 후 재조회 6회·삭제 12회·제외 검토 3회·제외 3회/거절 2회/중복 404·확정 6회/조회 거절 4회/성공 재생 5회·재오픈 10회·나머지 있는 전송 12회·없는 전송 20회·추첨 17회/재추첨 방지 7회·최종 전/후 안내 2회·AUTH/참여 권한 거절 0/1/2회·수취 확인 후 송금 제외·완료 회차/외화 안내 2회·수취 확인 8회·일반 종료·미확인 거절·성공 재생 2회·강제 종료 9회·취소 9회·영수증 생성/조회/삭제 2/2/10회·일반 성공 재생 5회·영수증 재생 2회·종료 후 편집 거절 ROLLBACK을 검증한다. 숫자는 해당 테스트의 참여자·분담금·송금 행 수 기준이며 위 계산식이 일반 규칙이다.
+[scripts/settle-sql.integration.test.ts](../scripts/settle-sql.integration.test.ts)는 실제 PostgreSQL SQL 로그로 생성 4회·UUIDv7 PK·중복 409·동시 중복 단일 성공·세션 락 획득/해제·참여자 저장 실패 원자성·목록 4회·상세 10/11회·지출 생성 6회·생성 입력 오류 AUTH 1회·생성 성공 재생 5회·생성 실패 전체 롤백·같은 키 동시 생성 단일 저장·수정 5회/거절 및 재생 2회/경합 후 재조회 6회·삭제 12회·제외 검토 3회·제외 3회/거절 2회/중복 404·확정 6회/조회 거절 4회/성공 재생 5회·재오픈 10회·나머지 있는 전송 12회·없는 전송 20회·추첨 17회/재추첨 방지 7회·최종 전/후 안내 2회·AUTH/참여 권한 거절 0/1/2회·수취 확인 후 송금 제외·완료 회차/외화 안내 2회·수취 확인 8회·일반 종료·미확인 거절·성공 재생 2회·강제 종료 9회·취소 9회·영수증 생성/조회/삭제 2/2/3회·일반 성공 재생 5회·영수증 재생 2회·종료 후 편집 거절 ROLLBACK을 검증한다. 숫자는 해당 테스트의 참여자·분담금·송금 행 수 기준이며 위 계산식이 일반 규칙이다.
 
 기존 [settlement.integration.test.ts](../scripts/settlement.integration.test.ts)·[concurrency.integration.test.ts](../scripts/concurrency.integration.test.ts)·[receipt-migration.integration.test.ts](../scripts/receipt-migration.integration.test.ts)·[routes.integration.test.ts](../scripts/routes.integration.test.ts)는 Settle 공개 진입점을 통해 권한·과거 조회·정확한 통화/금액·CUSTOM 합계·멱등성·버전 충돌·추첨 중간 실패 취소·상태 전이 경합·사전 검사 후 업로드 경합·최신 수취 계좌 제한·기존 BYTEA 영수증을 검증한다. [domain-boundaries.test.ts](../src/lib/domain-boundaries.test.ts)는 Frontend/Shared→Backend 금지, 서버 전용 표시, 다른 도메인 내부 import 금지와 Controller/Service의 SQL 미포함을 검사한다. [settle.test.ts](../src/lib/settle.test.ts)는 경로 분배·출처·JSON/multipart 오류를 검사한다.
 
