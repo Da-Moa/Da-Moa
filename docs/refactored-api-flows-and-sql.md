@@ -1157,15 +1157,17 @@ ExpenseCard.upload() → Nginx 본문 제한 → POST multipart → Node Proxy/J
 
 ### S20. GET /api/receipts/{receiptId} — 인증된 영수증 이미지 조회
 
-ReceiptImage.view() → GET(blob) → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController → SettleService.getReceipt() → R·MinIO 읽기 → 이미지 바이트 → 브라우저 Object URL·미리보기.
+ReceiptImage.view() → GET(blob) → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController → SettleService.getReceipt() → AUTH → 회차·영수증·본인 참여 통합 조회 → DB 연결 반환 → MinIO 읽기 → 이미지 바이트 → 브라우저 Object URL·미리보기.
 
-1. BEGIN → AUTH → S-RECEIPT. 영수증 → 지출 → round_members JOIN의 본인 참여 이력으로 조회 권한을 제한한다. 다른 회차 영수증은 404다.
-2. Object Key가 있으면 MIME·키만 읽고 COMMIT 후 MinIO GET으로 바이트를 가져온다. DB 읽기 트랜잭션을 잡고 객체 네트워크 작업을 기다리지 않는다.
-3. 과거 BYTEA 영수증이면 같은 스냅샷에서 S-LEGACY-CONTENT 1회를 추가하고 COMMIT한다. 기존 JPEG/PNG/WebP 등 저장 MIME을 유지한다.
+1. withDatabaseConnection()으로 공용 풀 연결 확보 → AUTH 내 정보 조회(+1). 회원의 가입·탈퇴·JWT 목적을 먼저 검사한다. 명시적 트랜잭션·락·SET은 사용하지 않는다.
+2. findReceipt()의 단일 JOIN(+1)으로 영수증 → 지출 → 회차 → 본인 round_members 참여 이력을 확인하고 저장된 Object Key와 MIME을 가져온다. 없는 영수증·회차 미참여자는 404이며 MinIO에 접근하지 않는다. 모임 참여만으로 허용하지 않으며 제외·이탈 후의 과거 회차 참여 이력은 유지한다.
+3. 성공·실패 모두 DB 연결을 반환한다. Object Key가 있으면 그 키로 MinIO GET하여 바이트를 가져온다. 과거 BYTEA 영수증은 같은 조회에서 content를 가져와 기존 JPEG/PNG/WebP 등 저장 MIME과 원본 바이트로 응답한다. SELECT rc.*는 content 컬럼이 없는 신규 DB와 컬럼을 보존한 업그레이드 DB를 모두 지원하며 추가 SQL은 없다.
 4. Controller는 실제 MIME·X-Content-Type-Options:nosniff·Cache-Control:private,no-store로 바이너리 응답한다. JSON data envelope를 쓰지 않는다.
 5. 브라우저가 미리보기를 접거나 컴포넌트를 해제할 때 Object URL을 폐기한다.
 
-Object Key SQL: BEGIN → AUTH → S-RECEIPT → COMMIT = **4회**, BYTEA는 S-LEGACY-CONTENT 추가로 **5회**다. MinIO GET은 별도 외부 작업이다.
+정상 SQL: **AUTH 내 정보 조회 (+1) → 회차·영수증 Object Key·본인 참여 확인 (+1) = 2회**. Object Key는 기존 4회, BYTEA는 기존 5회에서 모두 2회로 줄었다. AUTH 거절은 0/1회, 없는 영수증·참여 권한 거절은 2회이며 MinIO GET은 실행하지 않는다. MinIO GET은 별도 외부 작업이다.
+
+검증(2026-10-04): `npm test` **96개**, 격리 복사본의 `npm run test:integration` **69개**, `npm run build` 통과. [receipt-read.integration.test.ts](../scripts/receipt-read.integration.test.ts)는 실제 SQL 로그·MinIO 명령으로 AUTH → 단일 JOIN → DB 연결 반환 → 저장된 키의 GET 순서, 생성자/참여자 조회, 미인증·없는 회원·모임만 참여한 회원·외부인·없는 영수증의 GET 미실행, 제외·모임 이탈 후 과거 조회를 확인한다. [receipt-migration.integration.test.ts](../scripts/receipt-migration.integration.test.ts)는 BYTEA 원본·업그레이드 DB의 Object Key 모두 2회를 확인한다. 실제 HTTP GET에서도 SQL 2회·AVIF 바이트·기존 MIME/캐시/보안 헤더를 [realtime.integration.test.mjs](../scripts/realtime.integration.test.mjs)로 검증했다.
 
 ### S21. DELETE /api/rounds/{roundId}/expenses/{expenseId}/receipts/{receiptId} — 영수증 삭제
 
@@ -1182,7 +1184,7 @@ SQL: W 6회 + S-ROUND → S-EXPENSE → [S-ACTIVE-MEMBER] → S-BUMP → S-RECEI
 
 회차 생성·지출 생성·지출 수정·지출 삭제·참여자 제외·정산 확정·일반 정산 종료 알림은 저장/통합 조회에서 확보한 참여자 ID를 전달받아 수신자 SQL 0회다. 나머지 일반 변경 후 알림 수신자 조회는 BEGIN → 회차 group_id → round_members → COMMIT = **별도 4회**다. 취소는 S5의 기록 확인 SQL에서 삭제 전 허가된 수신자를 함께 읽으므로 삭제 전후 추가 조회 **0회**이며 성공 재생 시 재발행하지 않는다. 실시간 비활성화 시 모두 SQL 0회다. after() 알림 실패는 이미 저장한 변경을 롤백하지 않는다. 메시지에는 rounds·group-rounds·round·settlement와 필요한 groups/group 키만 넣고 금액·계좌·영수증·초대 토큰은 넣지 않는다.
 
-[scripts/settle-sql.integration.test.ts](../scripts/settle-sql.integration.test.ts)는 실제 PostgreSQL SQL 로그로 생성 4회·UUIDv7 PK·중복 409·동시 중복 단일 성공·세션 락 획득/해제·참여자 저장 실패 원자성·목록 4회·상세 10/11회·지출 생성 6회·생성 입력 오류 AUTH 1회·생성 성공 재생 5회·생성 실패 전체 롤백·같은 키 동시 생성 단일 저장·수정 5회/거절 및 재생 2회/경합 후 재조회 6회·삭제 12회·제외 검토 3회·제외 3회/거절 2회/중복 404·확정 6회/조회 거절 4회/성공 재생 5회·재오픈 10회·나머지 있는 전송 12회·없는 전송 20회·추첨 17회/재추첨 방지 7회·최종 전/후 안내 2회·AUTH/참여 권한 거절 0/1/2회·수취 확인 후 송금 제외·완료 회차/외화 안내 2회·수취 확인 8회·일반 종료·미확인 거절·성공 재생 2회·강제 종료 9회·취소 9회·영수증 생성/조회/삭제 2/4/10회·일반 성공 재생 5회·영수증 재생 2회·종료 후 편집 거절 ROLLBACK을 검증한다. 숫자는 해당 테스트의 참여자·분담금·송금 행 수 기준이며 위 계산식이 일반 규칙이다.
+[scripts/settle-sql.integration.test.ts](../scripts/settle-sql.integration.test.ts)는 실제 PostgreSQL SQL 로그로 생성 4회·UUIDv7 PK·중복 409·동시 중복 단일 성공·세션 락 획득/해제·참여자 저장 실패 원자성·목록 4회·상세 10/11회·지출 생성 6회·생성 입력 오류 AUTH 1회·생성 성공 재생 5회·생성 실패 전체 롤백·같은 키 동시 생성 단일 저장·수정 5회/거절 및 재생 2회/경합 후 재조회 6회·삭제 12회·제외 검토 3회·제외 3회/거절 2회/중복 404·확정 6회/조회 거절 4회/성공 재생 5회·재오픈 10회·나머지 있는 전송 12회·없는 전송 20회·추첨 17회/재추첨 방지 7회·최종 전/후 안내 2회·AUTH/참여 권한 거절 0/1/2회·수취 확인 후 송금 제외·완료 회차/외화 안내 2회·수취 확인 8회·일반 종료·미확인 거절·성공 재생 2회·강제 종료 9회·취소 9회·영수증 생성/조회/삭제 2/2/10회·일반 성공 재생 5회·영수증 재생 2회·종료 후 편집 거절 ROLLBACK을 검증한다. 숫자는 해당 테스트의 참여자·분담금·송금 행 수 기준이며 위 계산식이 일반 규칙이다.
 
 기존 [settlement.integration.test.ts](../scripts/settlement.integration.test.ts)·[concurrency.integration.test.ts](../scripts/concurrency.integration.test.ts)·[receipt-migration.integration.test.ts](../scripts/receipt-migration.integration.test.ts)·[routes.integration.test.ts](../scripts/routes.integration.test.ts)는 Settle 공개 진입점을 통해 권한·과거 조회·정확한 통화/금액·CUSTOM 합계·멱등성·버전 충돌·추첨 중간 실패 취소·상태 전이 경합·사전 검사 후 업로드 경합·최신 수취 계좌 제한·기존 BYTEA 영수증을 검증한다. [domain-boundaries.test.ts](../src/lib/domain-boundaries.test.ts)는 Frontend/Shared→Backend 금지, 서버 전용 표시, 다른 도메인 내부 import 금지와 Controller/Service의 SQL 미포함을 검사한다. [settle.test.ts](../src/lib/settle.test.ts)는 경로 분배·출처·JSON/multipart 오류를 검사한다.
 

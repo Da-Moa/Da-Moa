@@ -35,11 +35,15 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
     process.env.DB_QUERY_LOG = 'true'
     let statements: string[] = []
     const logger = t.mock.method(console, 'info', (message: string) => { statements.push(message.replace(/^SQL:\s*/, '').replace(/\s+/g, ' ').trim()) })
-    const trace = async <T>(count: number, write: boolean | 'receipt' | 'session' | 'connection' | 'cancel' | 'expense' | 'patch' | 'delete' | 'exclude' | 'confirm' | 'reopen' | 'draw' | 'settlement' | 'check' | 'complete' | 'force-complete', work: () => Promise<T>) => {
+    const trace = async <T>(count: number, write: boolean | 'receipt' | 'receipt-read' | 'session' | 'connection' | 'cancel' | 'expense' | 'patch' | 'delete' | 'exclude' | 'confirm' | 'reopen' | 'draw' | 'settlement' | 'check' | 'complete' | 'force-complete', work: () => Promise<T>) => {
       statements = []
       const result = await work()
       assert.equal(statements.length, count, statements.join('\n'))
-      if (write === 'receipt') {
+      if (write === 'receipt-read') {
+        assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
+        assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
+        assert.match(statements[1], /FROM expense_receipts rc JOIN expenses e.*JOIN rounds r.*JOIN round_members viewer/)
+      } else if (write === 'receipt') {
         assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
         if (count) assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
         if (count > 1) assert.match(statements[1], /UPDATE rounds.*INSERT INTO expense_receipts.*INSERT INTO mutation_requests/)
@@ -455,7 +459,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       const receipt = await trace(2, 'receipt', () => addReceipt(a, receiptKey, round.id, expense.id, receiptVersion, bytes, 'image/png'))
       version = receipt.version!
       await trace(2, 'receipt', () => addReceipt(a, receiptKey, round.id, expense.id, receiptVersion, bytes, 'image/png'))
-      const stored = await trace(4, false, () => getReceipt(b, receipt.id))
+      const stored = await trace(2, 'receipt-read', () => getReceipt(b, receipt.id))
       assert.equal(stored.mimeType, 'image/avif')
       const removed = await trace(10, true, () => removeReceipt(a, key(), round.id, expense.id, receipt.id, { expectedVersion: version }))
       version = removed.version!

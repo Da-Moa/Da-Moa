@@ -2,7 +2,7 @@ import 'server-only'
 import type { Database } from '../../../../Global/Util/Backend'
 import { roundCreationCandidatesSql } from '../../../Group/Backend'
 import type { Currency, Expense, MutationResult, finalizeSettlement } from '../../Shared'
-import type { RoundRow, RoundDetailRow, RoundConfirmationRow, RoundCompletionRow, RoundForceCompletionRow, ExpenseUpdateRow, ExpenseDeletionRow, MemberExclusionRow, MemberRow, ExpenseRow, ShareRow, ReceiptRow, ReceiptCreationRow, SettlementExpenseRow, SettlementCheckRow, SettlementRow } from '../DAO/SettleDAO'
+import type { RoundRow, RoundDetailRow, RoundConfirmationRow, RoundCompletionRow, RoundForceCompletionRow, ExpenseUpdateRow, ExpenseDeletionRow, MemberExclusionRow, MemberRow, ExpenseRow, ShareRow, ReceiptContentRow, ReceiptCreationRow, SettlementExpenseRow, SettlementCheckRow, SettlementRow } from '../DAO/SettleDAO'
 
 export function findRound(client: Database, id: string, userId: string) {
   return client.query<RoundRow>(`SELECT r.*,g.name AS group_name,g.creator_id AS group_creator_id,
@@ -570,10 +570,8 @@ export function deleteReceipt(client: Database, receiptId: string, expenseId: st
 }
 
 export function findReceipt(client: Database, receiptId: string, userId: string) {
-  return client.query<Pick<ReceiptRow, 'mime_type' | 'object_key'>>(`SELECT r.mime_type,r.object_key FROM expense_receipts r JOIN expenses e ON e.id=r.expense_id
-      JOIN round_members m ON m.round_id=e.round_id AND m.user_id=$2 WHERE r.id=$1`, [receiptId, userId])
-}
-
-export function findLegacyReceipt(client: Database, receiptId: string) {
-  return client.query<{ content: Uint8Array }>('SELECT content FROM expense_receipts WHERE id=$1', [receiptId])
+  // Upgraded databases retain BYTEA content; fresh databases have only object_key.
+  return client.query<ReceiptContentRow>(`SELECT rc.* FROM expense_receipts rc JOIN expenses e ON e.id=rc.expense_id
+    JOIN rounds r ON r.id=e.round_id JOIN round_members viewer ON viewer.round_id=r.id AND viewer.user_id=$2
+    WHERE rc.id=$1`, [receiptId, userId])
 }

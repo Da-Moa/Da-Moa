@@ -29,6 +29,7 @@ export type ExpenseDeletionRow = RoundRow & {
 }
 export type ReceiptCreationRow = Omit<ExpenseDeletionRow, 'object_keys' | 'deleted'> & { inserted: boolean }
 export type ReceiptRow = { id: string; expense_id: string; mime_type: string; byte_size: number; object_key: string | null }
+export type ReceiptContentRow = ReceiptRow & { content?: Uint8Array | null }
 export type SettlementExpenseRow = Pick<ExpenseRow, 'id' | 'payer_id' | 'amount_minor' | 'split_mode'> & {
   participant_ids: string[]; shares: { userId: string; assignedAmountMinor: string | null }[] | null
 }

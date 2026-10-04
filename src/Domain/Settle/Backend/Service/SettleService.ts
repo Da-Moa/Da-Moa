@@ -2,7 +2,7 @@ import 'server-only'
 import { createHash, randomInt, randomUUID } from 'node:crypto'
 import { requireAccount } from '../../../../Global/Auth/Backend'
 import { MAX_GROUP_MEMBERS } from '../../../Group/Shared'
-import { AppError, badInput, withDatabaseConnection, withWriteLock, withWriteTransaction, withReadTransaction, mutationDigest, mutationResult, deleteReceiptObject, putReceipt, readReceipt, convertReceipt, type Database, domainMutation, idsInput, nowSeconds, onlyKeys, pageOf, pagination, textInput, type Identity } from '../../../../Global/Util/Backend'
+import { AppError, badInput, withDatabaseConnection, withWriteLock, withWriteTransaction, mutationDigest, mutationResult, deleteReceiptObject, putReceipt, readReceipt, convertReceipt, type Database, domainMutation, idsInput, nowSeconds, onlyKeys, pageOf, pagination, textInput, type Identity } from '../../../../Global/Util/Backend'
 import { CURRENCIES, formatMoney, MAX_EXPENSE_MAJOR, MAX_ROUND_TOTAL_MAJOR, minorLimit, parseAmount, requireCurrency, type Currency, type CreateRoundRequestDTO, type ExpenseRequestDTO, type VersionRequestDTO, type SettlementCheckRequestDTO } from '../../Shared'
 import { calculateBase, finalizeSettlement, previewSettlement, validateCustomShares } from '../../Shared'
 import type { ExclusionCheck, Expense, MutationResult, RoundDetail, RoundMember, RoundStatus, RoundSummary, SettlementDTO, SettlementTransfer } from '../../Shared'
@@ -692,14 +692,13 @@ export async function removeReceipt(access: Identity, key: string, roundId: stri
 }
 
 export async function getReceipt(access: Identity, receiptId: string) {
-  const stored = await withReadTransaction(async client => {
+  const receipt = await withDatabaseConnection(async client => {
     const account = await requireAccount(client, access)
     const { rows } = await repository.findReceipt(client, receiptId, account.id)
     if (!rows[0]) throw missing()
-    const mimeType = rows[0].mime_type as string
-    if (rows[0].object_key) return { mimeType, objectKey: rows[0].object_key as string, content: null }
-    const { rows: legacy } = await repository.findLegacyReceipt(client, receiptId)
-    return { mimeType, objectKey: null, content: legacy[0].content as Uint8Array }
+    return rows[0]
   })
-  return { mimeType: stored.mimeType, content: stored.content ?? await readReceipt(stored.objectKey!) }
+  const content = receipt.object_key ? await readReceipt(receipt.object_key) : receipt.content
+  if (!content) throw missing()
+  return { mimeType: receipt.mime_type, content }
 }

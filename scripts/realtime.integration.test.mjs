@@ -262,6 +262,18 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     assert.match(receiptSql[0], /FROM\s+users/)
     assert.match(receiptSql[1], /UPDATE\s+rounds[\s\S]*INSERT INTO\s+expense_receipts[\s\S]*INSERT INTO\s+mutation_requests/)
     assert.ok(receiptSql.every(sql => !/\b(BEGIN|COMMIT|ROLLBACK)\b|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
+    const receiptReadOutput = output.length
+    const receiptImage = await fetch(`${origin}/api/receipts/${savedReceipt.id}`, { headers: { authorization: `Bearer ${other.accessToken}` } })
+    assert.equal(receiptImage.status, 200)
+    assert.equal(receiptImage.headers.get('content-type'), 'image/avif')
+    assert.equal(receiptImage.headers.get('x-content-type-options'), 'nosniff')
+    assert.equal(receiptImage.headers.get('cache-control'), 'private, no-store')
+    assert.equal((await sharp(Buffer.from(await receiptImage.arrayBuffer())).metadata()).compression, 'av1')
+    const receiptReadSql = output.slice(receiptReadOutput).split('SQL:').slice(1).map(sql => sql.trim())
+    assert.equal(receiptReadSql.length, 2, 'receipt GET uses account lookup and a single authorized storage lookup')
+    assert.match(receiptReadSql[0], /FROM\s+users/)
+    assert.match(receiptReadSql[1], /FROM\s+expense_receipts[\s\S]*JOIN\s+expenses[\s\S]*JOIN\s+rounds[\s\S]*JOIN\s+round_members/)
+    assert.ok(receiptReadSql.every(sql => !/\b(BEGIN|COMMIT|ROLLBACK)\b|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
     let receiptReplayPublished = false
     const onReceiptReplay = () => { receiptReplayPublished = true }
     mine.socket.on('message', onReceiptReplay)

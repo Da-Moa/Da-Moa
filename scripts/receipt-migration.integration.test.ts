@@ -16,10 +16,11 @@ if (!testUrl || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(testUrl).h
 process.env.AUTH_JWT_SECRET ||= 'integration-only-not-a-production-secret-0123456789'
 const key = () => randomUUID()
 
-test('legacy receipt migration preserves images and restores expense deletion and object uploads', async () => {
+test('legacy receipt migration preserves images and restores expense deletion and object uploads', async t => {
   const client = createDatabaseClient(testUrl)
   const schema = `receipt_upgrade_${key().replaceAll('-', '')}`
   const previousUrl = process.env.DATABASE_URL
+  const previousLog = process.env.DB_QUERY_LOG
   const scopedUrl = new URL(testUrl)
   scopedUrl.searchParams.set('options', `-csearch_path=${schema}`)
   await client.connect()
@@ -62,10 +63,25 @@ test('legacy receipt migration preserves images and restores expense deletion an
     await applyMigrations(client)
     await applyMigrations(client)
     assert.deepEqual((await client.query('SELECT content,object_key FROM expense_receipts WHERE id=$1', [receiptId])).rows[0], { content: bytes, object_key: null })
-    const legacy = await getReceipt(a, receiptId)
+    let statements: string[] = []
+    const logger = t.mock.method(console, 'info', (message: string) => { statements.push(message.replace(/^SQL:\s*/, '').replace(/\s+/g, ' ').trim()) })
+    const read = async (actor: typeof a, id: string) => {
+      statements = []
+      process.env.DB_QUERY_LOG = 'true'
+      try { return await getReceipt(actor, id) }
+      finally {
+        assert.equal(statements.length, 2, statements.join('\n'))
+        assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
+        assert.match(statements[1], /FROM expense_receipts rc JOIN expenses e.*JOIN rounds r.*JOIN round_members viewer/)
+        assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory/.test(sql)))
+        if (previousLog === undefined) delete process.env.DB_QUERY_LOG
+        else process.env.DB_QUERY_LOG = previousLog
+      }
+    }
+    const legacy = await read(a, receiptId)
     assert.equal(legacy.mimeType, 'image/png')
     assert.deepEqual(Buffer.from(legacy.content), bytes)
-    await assert.rejects(getReceipt(outsider, receiptId), (error: unknown) => (error as { code: string }).code === 'not_found')
+    await assert.rejects(read(outsider, receiptId), (error: unknown) => (error as { code: string }).code === 'not_found')
     await deleteExpense(a, deleteKey, round.id, empty.id!, deleteBody)
 
     await removeReceipt(a, key(), round.id, original.id!, receiptId, await version())
@@ -78,9 +94,10 @@ test('legacy receipt migration preserves images and restores expense deletion an
     const stored = (await client.query('SELECT content,object_key FROM expense_receipts WHERE id=$1', [uploaded.id])).rows[0]
     assert.equal(stored.content, null)
     assert.ok(stored.object_key)
-    const image = await getReceipt(a, uploaded.id!)
+    const image = await read(a, uploaded.id!)
     assert.equal(image.mimeType, 'image/avif')
     assert.equal((await sharp(image.content).metadata()).compression, 'av1')
+    logger.mock.restore()
     await seed(uploadedExpense.id!)
     await assert.rejects(roundCommand(a, key(), round.id, 'cancel', await version()), (error: { code: string }) => error.code === 'round_has_expenses')
     await deleteExpense(a, key(), round.id, uploadedExpense.id!, await version())
@@ -89,6 +106,9 @@ test('legacy receipt migration preserves images and restores expense deletion an
   } finally {
     if (previousUrl === undefined) delete process.env.DATABASE_URL
     else process.env.DATABASE_URL = previousUrl
+    if (previousLog === undefined) delete process.env.DB_QUERY_LOG
+    else process.env.DB_QUERY_LOG = previousLog
+    t.mock.restoreAll()
     await client.query('SET search_path TO public')
     await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`)
     await client.end()
