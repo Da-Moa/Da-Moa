@@ -1,3 +1,3 @@
 export type * from './DTO/SettleDTO'
 export * from './money'
-export { calculateBase, finalizeSettlement, previewSettlement, validateCustomShares } from './split'
+export { calculateBase, finalizeCurrencySettlement, previewCurrencySettlement, finalizeSettlement, previewSettlement, validateCustomShares } from './split'

@@ -898,7 +898,7 @@ RoundClient·SettlementClient·CreateRoundForm·RoundList는 Settle Frontend에 
 - `W`: BEGIN → pg_advisory_xact_lock(1684106607) → AUTH → IDEM-READ → 업무 처리 → IDEM-SAVE → COMMIT. 업무 외 **6회**다. 성공 기록은 같은 트랜잭션에서 저장한다.
 - `A`: 지출 편집자가 회차 생성자이면 0, 그 외 활성 참여 확인 SELECT이면 1.
 - `C`: PATCH에서 SELECTED의 participantIds 또는 CUSTOM의 customShares를 생략해 기존 부담금을 조회하면 1, 그 외 0.
-- `E`: 확정 시 기본 몫을 저장하는 균등 분배 지출 수(CUSTOM 제외). `S`: 최종 분담금 행 수. `M`: 제외 이력까지 포함한 회차 참여자 수. `T`: 최종 송금 행 수. `F = S + M + T`.
+- `E`: 확정 시 기본 몫을 저장하는 균등 분배 지출 수(CUSTOM 제외). `S`: 최종 분담금 행 수. `M`: 제외 이력까지 포함한 회차 참여자 수. `C`: 지출에 기록된 통화 종류 수(최대 5). `T`: 통화를 포함한 최종 송금 행 수. `F = S + (M × C) + T`.
 - 일반 쓰기 성공 재생: BEGIN → 락 → AUTH → IDEM-READ → COMMIT = **5회**. 업무 SQL·버전 증가·IDEM-SAVE를 반복하지 않는다. 같은 키의 다른 payload는 409 idempotency_conflict·ROLLBACK이다.
 
 ### S1. POST /api/groups/{groupId}/rounds — 회차 생성
@@ -907,7 +907,7 @@ CreateRoundForm.start() → POST → Node Proxy → JWT Guard(Access JWT 검사)
 
 1. 공용 풀 연결에서 pg_advisory_lock(1684106607)을 획득한다(+1). 모임 이탈·닫기·회원 탈퇴의 transaction lock 및 초대 수락의 session lock과 같은 키다.
 2. 락 획득 후 AUTH 내 정보 조회(+1). 없는/탈퇴한 회원은 401 unauthorized, 가입 전 회원은 403 onboarding_required다. 락 대기 중 변경된 상태도 조회한다.
-3. onlyKeys(['name','currency','participantIds'])·textInput(name,100)·idsInput()·requireCurrency(). 요청자를 포함한 최소 2명의 활성 모임 멤버를 요구한다. Idempotency-Key의 UUIDv7 형식을 검증하고 소문자로 정규화한 ticket을 회차 ID로 사용한다.
+3. onlyKeys(['name','participantIds'])·textInput(name,100)·idsInput(). 요청자를 포함한 최소 2명의 활성 모임 멤버를 요구한다. Idempotency-Key의 UUIDv7 형식을 검증하고 소문자로 정규화한 ticket을 회차 ID로 사용한다.
 4. 단일 SQL(+1)의 actor·candidates CTE가 활성 회원·모임 멤버십·선택 참여자를 확인하고 created·members CTE가 회차와 참여자 이름 스냅샷을 원자적으로 저장한다. actor 부재는 401, 비멤버·없는 모임은 404, 후보 누락은 400 invalid_participants다. rounds_pkey 중복은 409 round_already_exists로 반환하며 저장 실패는 같은 SQL 전체를 취소한다.
 5. 성공·실패 모두 finally에서 같은 연결로 pg_advisory_unlock(1684106607)을 실행한다(+1). 획득/해제 결과가 불확실하면 연결을 풀에 반환하지 않고 폐기한다. 연결 반환 후 응답하며 검증한 참여자 ID를 realtime 수신자로 전달해 추가 수신자 SQL을 실행하지 않는다.
 
@@ -930,7 +930,7 @@ HomeClient/정산 기록의 RoundList → GET → Node Proxy → JWT Guard → A
 
 1. S2와 같은 AUTH → limit·cursor·q·status 검사. status=active는 COMPLETED 제외, COMPLETED는 종료 기록만 조회한다.
 2. S-ROUND-LIST. groupId는 NULL이며 본인이 참여한 모든 모임의 회차를 같은 조회로 검색한다.
-3. 회차마다 자신의 통화·잔액·지출 합계를 반환한다. 서로 다른 회차/통화를 하나의 금액으로 합산하지 않는다.
+3. 회차마다 totals 배열로 통화별 자신의 잔액·지출 합계를 반환한다. 서로 다른 회차/통화를 하나의 금액으로 합산하지 않는다.
 4. pageOf() → 연결 반환. 과거 참여 이력의 조회 권한을 유지한다.
 
 SQL 순서: **AUTH(+1) → 입력 검증 → S-ROUND-LIST(+1) = 2회**, 빈 결과도 2회다. 공통 listRounds()에서 트랜잭션 없이 처리하며 회원 상태·입력 거절은 AUTH 1회다.
@@ -965,12 +965,12 @@ RoundClient.ExpenseForm.save() → POST → Node Proxy → JWT Guard → API Rou
 
 1. 공용 풀의 한 연결에서 AUTH 회원 조회(+1). 가입 완료·미탈퇴 회원을 확인한 뒤 Service에서 요청 키·허용 필드·description·양의 금액 형식/1건 한도·결제자 ID·분배 방식·expectedVersion 형식을 검증한다. SELECTED는 중복 없는 부담자 ID, CUSTOM은 양의 개별 금액·중복 없는 ID·정확한 합계를 확인한다. ALL 부담자는 서버가 결정한다. 이 단계의 입력 오류는 BEGIN·락 없이 AUTH 1회로 종료한다.
 2. 같은 연결에서 BEGIN(+1) → SELECT pg_advisory_xact_lock(1684106607)(+1). 기존 회차 변경·모임 이탈·회원 탈퇴와 같은 락을 사용한다.
-3. Repository.insertExpenseCreation()의 조건부 INSERT(+1). CTE로 본인의 회차 참여·현재 회원 상태·RECORDING·expectedVersion·제외 여부·활성 결제자/부담자·회차 통화·전체 지출 한도·같은 키 성공 기록을 함께 조회한다. 허용된 새 요청만 expenses에 삽입하며 현재 회차 정보·전체 참여자 알림 대상도 반환한다. Service는 반환한 현재 정보로 권한/버전/통화별 오류를 판별한다. 통화별 소수점 허용 여부는 DB 정보가 필요하므로 이 단계에서 검사하며 별도 SELECT를 추가하지 않는다. 금액은 BigInt와 PostgreSQL numeric으로 정확히 변환하고 정수 최소 단위로 저장한다.
+3. Repository.insertExpenseCreation()의 조건부 INSERT(+1). CTE로 본인의 회차 참여·현재 회원 상태·RECORDING·expectedVersion·제외 여부·활성 결제자/부담자·통화별 지출 한도·최대 5개 통화·같은 키 성공 기록을 함께 조회한다. 허용된 새 요청만 expenses에 삽입하며 현재 회차 정보·전체 참여자 알림 대상도 반환한다. Service는 반환한 현재 정보로 권한/버전/통화별 오류를 판별한다. 지원 통화·자릿수·한 건 한도는 요청 currency로 AUTH 직후 검사한다. DB 저장 SQL은 같은 통화의 누적 한도와 종류 수를 재검사하며 별도 SELECT를 추가하지 않는다. 금액은 BigInt와 PostgreSQL numeric으로 정확히 변환하고 정수 최소 단위로 저장한다.
 4. Repository.finishExpenseCreation()의 CTE SQL(+1). expense_shares를 unnest로 일괄 삽입하고 rounds.version 증가·mutation_requests 성공 응답 저장을 묶는다. 기록 중 전체 합계는 expenses의 SUM, 예상 송금은 expenses·expense_shares의 previewSettlement로 계산한다. 별도 합계/예상 송금 캐시를 만들지 않으며 최종 settlement_balances/transfers 저장은 기존 전송/추첨 단계에서 수행한다.
 5. COMMIT(+1)이 transaction advisory lock을 자동 해제한다. 실패는 ROLLBACK(+1)으로 지출·부담금·버전·성공 기록을 전부 취소하고 락도 해제한다. 롤백 실패 연결은 폐기한다.
 6. 성공 응답 뒤 after()는 INSERT에서 확보한 알림 대상에 invalidation 키만 발행하여 대상 조회 SQL을 실행하지 않는다. 같은 키·본문 성공 재생은 INSERT/부담금/버전 증가를 반복하지 않고 저장 응답을 반환하며 알림도 다시 발행하지 않는다. 다른 본문은 409 idempotency_conflict. stale_round 복구는 기존처럼 최신 상세를 조회하고 버전을 바꿔 한 번 재저장한다.
 
-SQL 순서: **AUTH → 요청 검증(SQL 0회) → BEGIN → transaction lock → 조건부 지출 INSERT → 부담금·버전·성공 기록 저장 → COMMIT/락 자동 해제 = 6회**. 생성자·일반 참여자·ALL/SELECTED/CUSTOM 모두 동일하며 WebSocket 발행까지 포함한다. 성공 직후 프론트에서 직접 GET을 보내지 않고 WebSocket invalidation을 받은 useResource만 상세를 조회한다. 버전 충돌 복구·수동 새로고침 GET은 유지하며 후속 GET의 SQL은 별도로 센다. 성공 재생·권한/상태/버전/통화/전체 한도 거절은 마지막 저장 SQL 없이 **5회**다. 실제 SQL은 [SettleRepository.ts](../src/Domain/Settle/Backend/Repository/SettleRepository.ts)의 insertExpenseCreation()/finishExpenseCreation()에 있다.
+SQL 순서: **AUTH → 요청 검증(SQL 0회) → BEGIN → transaction lock → 조건부 지출 INSERT → 부담금·버전·성공 기록 저장 → COMMIT/락 자동 해제 = 6회**. 생성자·일반 참여자·ALL/SELECTED/CUSTOM 모두 동일하며 WebSocket 발행까지 포함한다. 성공 직후 프론트에서 직접 GET을 보내지 않고 WebSocket invalidation을 받은 useResource만 상세를 조회한다. 버전 충돌 복구·수동 새로고침 GET은 유지하며 후속 GET의 SQL은 별도로 센다. 성공 재생·권한/상태/버전/통화별 누적 한도·종류 수 거절은 마지막 저장 SQL 없이 **5회**다. 실제 SQL은 [SettleRepository.ts](../src/Domain/Settle/Backend/Repository/SettleRepository.ts)의 insertExpenseCreation()/finishExpenseCreation()에 있다.
 
 ### S7. PATCH /api/rounds/{roundId}/expenses/{expenseId} — 지출 수정
 
@@ -978,7 +978,7 @@ ExpenseForm.save() → PATCH → Node Proxy → JWT Guard → API Route Settle �
 
 1. withDatabaseConnection에서 AUTH 내 정보 조회(+1). JWT·활성 회원·가입 완료를 확인하고 요청 키·본문 digest를 검증한다. BEGIN/COMMIT/ROLLBACK·FOR UPDATE/SHARE·SET을 사용하지 않는다.
 2. Repository.findExpenseUpdate() 한 SQL(+1)에서 본인의 회차 참여 이력·생성자·상태·버전·통화·대상 지출·활성 부담자·기존 부담금·회차 합계·멱등 성공 기록·알림 대상 ID를 함께 읽는다. 같은 키/본문 성공은 재생하고 다른 본문은 409 idempotency_conflict다. 성공 재생은 지출이 나중에 삭제되어도 가능하다.
-3. RECORDING 상태에서 지출 작성자(제외되지 않은 참여자) 또는 회차 생성자만 허용한다. 결제자/모임 생성자라는 이유만으로 수정할 수 없다. expectedVersion·통화별 금액·결제자·부담자·CUSTOM 합계·기존 금액을 대체한 회차 한도를 검사한다. 생략 필드는 기존 값·SELECTED 부담자·CUSTOM 부담금으로 유지한다. 권한/입력 거절은 추가 SQL 없이 끝난다.
+3. RECORDING 상태에서 지출 작성자(제외되지 않은 참여자) 또는 회차 생성자만 허용한다. 결제자/모임 생성자라는 이유만으로 수정할 수 없다. expectedVersion·통화별 금액·결제자·부담자·CUSTOM 합계·기존 금액을 대체한 회차 한도를 검사한다. 생략 필드는 기존 값·SELECTED 부담자·CUSTOM 부담금으로 유지한다. 통화 변경 시 amount와 CUSTOM 유지 시 customShares를 다시 입력하고 이전 통화의 기존 금액을 뺀 뒤 새 합계와 최대 5종을 검사한다. 권한/입력 거절은 추가 SQL 없이 끝난다.
 4. withWriteLock()으로 지출 생성·확정과 같은 pg_advisory_lock(1684106607)을 획득(+1)한 뒤 Repository.updateExpense() 단일 CTE SQL(+1)을 실행한다. 현재 권한·참여자·회차 한도를 재검사하고 rounds의 RECORDING·미종료·expectedVersion 조건부 UPDATE로 버전을 증가시킨 요청만 지출을 수정한다. 기존 기본 몫·나머지를 초기화하고, 빠진 부담자는 DELETE, 유지/추가된 부담자는 UPSERT하며 최종 부담금을 초기화한다. 성공 응답을 mutation_requests에 함께 저장한다. 어느 쓰기든 실패하면 SQL 전체가 취소되어 지출·부담금·버전·성공 기록이 부분 저장되지 않는다.
 5. 같은 연결에서 pg_advisory_unlock(+1)을 finally로 실행한다. 실패해도 락을 해제하며 해제 실패 연결은 폐기한다. 성공 시 2번에서 확보한 대상에게 재조회 키만 발행한다. 수신자 조회 SQL·성공 직후 프론트의 직접 GET은 없다. 조건부 UPDATE가 경합으로 실패하면 통합 조회 1회를 추가해 같은 키 성공을 재생하거나 최신 상태/버전 오류를 반환한다. 버전 충돌 복구는 S6과 같다.
 
@@ -1060,7 +1060,7 @@ RoundClient.command('send')의 확인 → POST → Node Proxy → JWT Guard → 
 1. expectedVersion만 허용. W → S-ROUND → 생성자·버전·CONFIRMED 검사 → S-MEMBERS → S-SETTLEMENT-EXPENSES로 지출 재검증.
 2. S-LOCK으로 LOCKED·locked_at 저장 → S-REMAINDER로 미배분 나머지 존재 여부 조회.
 3. 나머지가 있으면 최종 저장을 추첨까지 미룬다. 나머지가 없으면 finalize()에 이미 검증한 멤버·지출을 전달하여 확정 계산한다. 같은 트랜잭션·락 안에서 재조회하지 않는다.
-4. 최종 저장은 S-FINAL-SHARE × S → S-BALANCE-INSERT × M → S-TRANSFER-INSERT × T → S-FINALIZE 1회다. 분담금·잔액·송금·최종 시각은 같은 트랜잭션에 저장한다.
+4. 최종 저장은 S-FINAL-SHARE × S → S-BALANCE-INSERT × (M × C) → S-TRANSFER-INSERT × T → S-FINALIZE 1회다. 분담금·잔액·송금·최종 시각은 같은 트랜잭션에 저장한다.
 5. S-BUMP → IDEM-SAVE → COMMIT → 정산 화면 이동·알림. 앞서 읽은 멤버와 회차에서 알림 대상을 확보하여 추가 SQL 없이 발행한다. 실제 송금/카카오 전송은 없으며 링크만 직접 공유한다.
 
 나머지 있음: W 6회 + S-ROUND → S-MEMBERS → S-SETTLEMENT-EXPENSES → S-LOCK → S-REMAINDER → S-BUMP = **12회**. 나머지 없음: 여기에 최종 저장 F회·최종 시각 1회가 추가되어 **13 + F회**다. 2명·분담금 2행·송금 1행이면 F=5로 **18회**다. 멤버 SELECT와 전체 지출 SELECT는 각각 1회이며 알림 추가 SQL은 0회다.
@@ -1087,9 +1087,9 @@ SettlementClient.useResource()·reload()·화면 복귀 갱신 → GET → Node 
 
 1. AUTH로 내 회원 상태를 조회한다. JWT 누락/오류는 Guard에서 SQL 없이 401, 가입 전·탈퇴 회원은 AUTH에서 거절한다.
 2. S-SETTLEMENT 단일 SQL로 회차·모임·조회자 round_members 참여 이력·본인 잔액·보낼/받을 송금·수취인별 확인 현황을 함께 조회한다. 회차가 없거나 참여 이력이 없으면 404다. 회차 제외·모임 이탈 이후의 과거 조회 권한은 유지한다.
-3. outgoing은 본인이 보내며 아직 확인되지 않은 송금, incoming은 본인이 받는 모든 송금과 received_at이다. 각각 수취인/송금자 ID순으로 반환하고 확인 현황은 수취인별 bool_and(received_at IS NOT NULL)·마지막 확인 시각·프로필을 포함한다. LATERAL 집계로 목록 사이의 중복을 막고 한 문장의 동일 스냅샷으로 읽는다.
+3. outgoing은 본인이 보내며 아직 확인되지 않은 송금, incoming은 본인이 받는 모든 송금과 received_at이다. 각각 통화·수취인/송금자 ID순으로 반환하고 확인 현황은 수취인별 bool_and(received_at IS NOT NULL)·마지막 확인 시각·프로필을 포함한다. LATERAL 집계로 목록 사이의 중복을 막고 한 문장의 동일 스냅샷으로 읽는다.
 4. 계좌 필드는 outgoing의 **조회자 자신의 실제 KRW 수취인**에게만 포함한다. KRW 이외 통화는 SQL 결과의 계좌 필드와 응답의 account 속성을 생략한다. 생성자도 다른 참여자의 수취 계좌를 추가로 조회할 수 없다. 탈퇴 회원의 프로필은 숨기고 이름은 회차 스냅샷을 유지한다.
-5. finalized_at이 없으면 balanceMinor·sharePath는 null, outgoing·incoming은 빈 배열인 대기 DTO를 반환한다. 최종 저장 후에는 부담액−결제액 부호·최신 계좌·수취 확인 현황·sharePath를 기존 DTO로 변환한다. 금액은 SQL JSON에서도 문자열을 유지한다. verifiedAt이 없으면 화면에서 정확히 `확인되지 않은 계좌입니다.`를 표시한다.
+5. finalized_at이 없으면 sharePath는 null, balances·outgoing·incoming은 빈 배열인 대기 DTO를 반환한다. 최종 저장 후에는 부담액−결제액 부호·최신 계좌·수취 확인 현황·sharePath를 기존 DTO로 변환한다. 금액은 SQL JSON에서도 문자열을 유지한다. verifiedAt이 없으면 화면에서 정확히 `확인되지 않은 계좌입니다.`를 표시한다.
 
 SQL: AUTH **1회** → S-SETTLEMENT **1회** = **2회**. 최종 저장 전·후·완료 회차 모두 같으며 BEGIN/COMMIT/ROLLBACK·명시적 락은 없다. JWT 거절은 0회, AUTH 거절은 1회, 회차/참여 권한 거절은 2회다. 금액·계좌를 실시간 메시지나 성공 재생 기록에 저장하지 않는다.
 
@@ -1097,13 +1097,13 @@ SQL: AUTH **1회** → S-SETTLEMENT **1회** = **2회**. 최종 저장 전·후�
 
 ### S16. POST /api/rounds/{roundId}/settlement-check — 수취 수동 확인·해제
 
-SettlementClient.setChecked(checked,senderId?) → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.setSettlementCheck(SettlementCheckRequestDTO) → 공용 연결 → MutationResult → WebSocket invalidation → useResource 정산 안내 GET 1회. POST 성공 콜백에서는 GET/reload를 호출하지 않는다.
+SettlementClient.setChecked(checked,senderId?,currency?) → POST → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController JSON → SettleService.setSettlementCheck(SettlementCheckRequestDTO) → 공용 연결 → MutationResult → WebSocket invalidation → useResource 정산 안내 GET 1회. POST 성공 콜백에서는 GET/reload를 호출하지 않는다.
 
-1. AUTH 회원 조회(+1)로 활성 가입 회원을 확인한 뒤 onlyKeys(['expectedVersion','checked','senderId'])·checked boolean·공백 없는 1~128자 senderId·요청 키 형식을 검사한다. 입력 오류는 AUTH 1회로 끝난다.
-2. findSettlementCheck() 통합 조회(+1)로 회차 참여 권한·상태·버전·최종 저장 여부·본인이 받는 송금자/확인 시각·알림 대상을 읽는다. 버전·LOCKED·최종 저장 완료를 검사하고 요청 senderId가 본인의 수취 목록에 있는지 비교한다. senderId 생략은 본인의 전체 수취 목록이다.
+1. AUTH 회원 조회(+1)로 활성 가입 회원을 확인한 뒤 onlyKeys(['expectedVersion','checked','senderId','currency'])·checked boolean·공백 없는 1~128자 senderId·지원 currency·요청 키 형식을 검사한다. senderId를 지정한 개별 확인에는 currency가 필수다. 입력 오류는 AUTH 1회로 끝난다.
+2. findSettlementCheck() 통합 조회(+1)로 회차 참여 권한·상태·버전·최종 저장 여부·본인이 받는 송금자/확인 시각·알림 대상을 읽는다. 버전·LOCKED·최종 저장 완료를 검사하고 요청 senderId+currency가 본인의 수취 목록에 있는지 비교한다. senderId 생략은 본인의 전체 수취 목록이다.
 3. 대상 수취 내역이 없으면 403 forbidden, 이미 요청한 확인 상태라 변경할 기록이 없으면 404 not_found다. 같은 키·새 키 재시도 모두 현재 기록으로 판단하며 성공 응답을 재생하거나 mutation_requests를 저장하지 않는다.
-4. setReceived() 단일 조건부 UPDATE(+1)는 receiver_id=본인·선택 sender_id·현재 확인 상태가 요청과 다른 행에만 적용한다. 저장 문장에서도 활성 회원·LOCKED·미종료·최종 저장·버전을 검사한다. checked=true는 미확인 행에 시각을 기록하고 false는 확인된 행을 NULL로 해제한다. 조회 뒤 선행 확인/종료 때문에 변경 행이 없어져도 404 not_found이며 알림을 발행하지 않는다. 회차 버전은 증가시키지 않는다.
-5. 받을 잔액은 원본 settlement_balances를 보존하고 확인된 incoming 합계만큼 화면에서 차감한다. 보내는 안내의 outgoing도 같은 received_at을 기준으로 제외되므로 별도 금액 UPDATE가 필요 없다. 확인 해제는 양쪽 표시를 복원하고 전체 확인도 SQL 문장 하나로 저장한다.
+4. setReceived() 단일 조건부 UPDATE(+1)는 receiver_id=본인·선택 sender_id·선택 currency·현재 확인 상태가 요청과 다른 행에만 적용한다. 저장 문장에서도 활성 회원·LOCKED·미종료·최종 저장·버전을 검사한다. checked=true는 미확인 행에 시각을 기록하고 false는 확인된 행을 NULL로 해제한다. 조회 뒤 선행 확인/종료 때문에 변경 행이 없어져도 404 not_found이며 알림을 발행하지 않는다. 회차 버전은 증가시키지 않는다.
+5. 받을 잔액은 원본 settlement_balances를 보존하고 같은 통화의 확인된 incoming 합계만큼 화면에서 차감한다. 보내는 안내의 outgoing도 같은 received_at을 기준으로 제외되므로 별도 금액 UPDATE가 필요 없다. 확인 해제는 양쪽 표시를 복원하고 전체 확인도 SQL 문장 하나로 저장한다.
 6. 자동 커밋 뒤 조회에 포함된 알림 대상으로 WebSocket invalidation을 발행하며 발행에 추가 SQL은 없다. 명시적 트랜잭션·advisory lock·FOR UPDATE/FOR SHARE·멱등 성공 기록은 없다. 은행 입금 자동 조회는 없다.
 
 SQL: **AUTH 1 + 수취 목록/권한 1 + 확인 저장 1 = 3회**. 이미 같은 상태인 재요청·수취 대상 불일치·상태/버전 오류는 2회다. `scripts/settle-sql.integration.test.ts`가 실제 SQL 로그의 횟수·순서·락/트랜잭션 부재·알림 대상·원본 잔액 보존을, 정산/Route/경합 통합 테스트가 건별/전체 확인·해제·404 재요청·조회 뒤 선행 확인/종료를 검증한다.

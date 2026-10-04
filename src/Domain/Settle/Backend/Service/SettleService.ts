@@ -3,8 +3,8 @@ import { createHash, randomInt, randomUUID } from 'node:crypto'
 import { requireAccount } from '../../../../Global/Auth/Backend'
 import { MAX_GROUP_MEMBERS } from '../../../Group/Shared'
 import { AppError, badInput, withDatabaseConnection, withWriteLock, withWriteTransaction, mutationDigest, mutationResult, deleteReceiptObject, putReceipt, readReceipt, convertReceipt, type Database, domainMutation, idsInput, nowSeconds, onlyKeys, pageOf, pagination, textInput, type Identity } from '../../../../Global/Util/Backend'
-import { CURRENCIES, formatMoney, MAX_EXPENSE_MAJOR, MAX_ROUND_TOTAL_MAJOR, minorLimit, parseAmount, requireCurrency, type Currency, type CreateRoundRequestDTO, type ExpenseRequestDTO, type VersionRequestDTO, type SettlementCheckRequestDTO } from '../../Shared'
-import { calculateBase, finalizeSettlement, previewSettlement, validateCustomShares } from '../../Shared'
+import { MAX_ROUND_CURRENCIES, formatMoney, MAX_EXPENSE_MAJOR, MAX_ROUND_TOTAL_MAJOR, minorLimit, parseAmount, requireCurrency, type Currency, type CreateRoundRequestDTO, type ExpenseRequestDTO, type VersionRequestDTO, type SettlementCheckRequestDTO } from '../../Shared'
+import { calculateBase, finalizeCurrencySettlement, previewCurrencySettlement, validateCustomShares } from '../../Shared'
 import type { ExclusionCheck, Expense, MutationResult, RoundDetail, RoundMember, RoundStatus, RoundSummary, SettlementDTO, SettlementTransfer } from '../../Shared'
 
 import type { RoundRow, RoundConfirmationRow, MemberRow, ExpenseRow, ShareRow, ReceiptRow, SettlementExpenseRow, ExpenseUpdateRow, ExpenseDeletionRow, MemberExclusionRow } from '../DAO/SettleDAO'
@@ -50,7 +50,7 @@ async function membersFor(client: Database, roundId: string): Promise<RoundMembe
 function expenseDetails(row: ExpenseRow, part: Omit<ShareRow, 'expense_id'>[], receipts: Pick<ReceiptRow, 'id' | 'mime_type' | 'byte_size'>[]): Expense {
   const base = row.split_mode === 'CUSTOM' ? null : calculateBase(BigInt(row.amount_minor), part.length)
   return {
-    id: row.id, authorId: row.author_id, payerId: row.payer_id, description: row.description, amountMinor: row.amount_minor,
+    id: row.id, authorId: row.author_id, payerId: row.payer_id, description: row.description, currency: row.currency, amountMinor: row.amount_minor,
     splitMode: row.split_mode, participantIds: part.map(s => s.user_id), baseShareMinor: base ? row.base_share_minor ?? base.base.toString() : null, remainderUnits: base ? row.remainder_units ?? base.remainder : 0,
     shares: part.map(s => ({ userId: s.user_id, assignedAmountMinor: s.assigned_amount_minor, amountMinor: s.final_amount_minor, receivedRemainder: s.received_remainder })),
     receipts: receipts.map(r => ({ id: r.id, mimeType: r.mime_type, byteSize: r.byte_size })),
@@ -58,21 +58,21 @@ function expenseDetails(row: ExpenseRow, part: Omit<ShareRow, 'expense_id'>[], r
   }
 }
 
-async function settlementExpensesFor(client: Database, roundId: string): Promise<(Pick<Expense, 'id' | 'payerId' | 'amountMinor' | 'splitMode' | 'participantIds'> & { shares: Pick<Expense['shares'][number], 'userId' | 'assignedAmountMinor'>[] })[]> {
+async function settlementExpensesFor(client: Database, roundId: string): Promise<(Pick<Expense, 'id' | 'payerId' | 'amountMinor' | 'splitMode' | 'currency' | 'participantIds'> & { shares: Pick<Expense['shares'][number], 'userId' | 'assignedAmountMinor'>[] })[]> {
   const { rows } = await repository.findSettlementExpenses(client, roundId)
   return rows.map(settlementExpenseDetails)
 }
 
 function settlementExpenseDetails(row: SettlementExpenseRow) {
-  return { id: row.id, payerId: row.payer_id, amountMinor: row.amount_minor, splitMode: row.split_mode, participantIds: row.participant_ids, shares: row.shares ?? [] }
+  return { id: row.id, payerId: row.payer_id, currency: row.currency, amountMinor: row.amount_minor, splitMode: row.split_mode, participantIds: row.participant_ids, shares: row.shares ?? [] }
 }
 
 function summary(row: RoundRow): RoundSummary {
   return {
-    id: row.id, groupId: row.group_id, groupName: row.group_name, name: row.name, currency: row.currency,
+    id: row.id, groupId: row.group_id, groupName: row.group_name, name: row.name,
     status: row.status, version: row.version, createdAt: Number(row.created_at),
     finalizedAt: row.finalized_at === null ? null : Number(row.finalized_at), completedAt: row.completed_at === null ? null : Number(row.completed_at),
-    balanceMinor: row.balance_minor ?? null, totalMinor: row.total_minor ?? '0', memberCount: Number(row.member_count ?? 0),
+    totals: row.totals ?? [], memberCount: Number(row.member_count ?? 0),
   }
 }
 
@@ -97,18 +97,18 @@ export async function getRound(access: Identity, roundId: string, query: URLSear
     if (!round) throw missing()
     const members = round.members.map(memberDetails)
     const expenses = pageOf(round.expenses.map(row => expenseDetails(row, row.shares, row.receipts)), limit, row => row)
-    let transfers: SettlementTransfer[] = [], pendingRemainderMinor = '0'
+    let transfers: SettlementTransfer[] = [], pendingRemainders: RoundDetail['pendingRemainders'] = []
     if (round.finalized_at === null) {
       const allExpenses = round.settlement_expenses.map(settlementExpenseDetails)
-      if (allExpenses.length) ({ transfers, pendingRemainderMinor } = previewSettlement(allExpenses, members.map(member => member.userId)))
+      if (allExpenses.length) ({ transfers, pendingRemainders } = previewCurrencySettlement(allExpenses, members.map(member => member.userId)))
     } else {
-      transfers = round.transfers.map(row => ({ senderId: row.sender_id, receiverId: row.receiver_id, amountMinor: row.amount_minor }))
+      transfers = round.transfers.map(row => ({ currency: row.currency, senderId: row.sender_id, receiverId: row.receiver_id, amountMinor: row.amount_minor }))
     }
     transfers = transfers.filter(transfer => transfer.senderId === account.id || transfer.receiverId === account.id)
     return {
       ...summary({ ...round, member_count: members.filter(m => m.excludedAt === null).length }),
       creatorId: round.creator_id, groupCreatorId: round.group_creator_id, isCreator: round.is_creator, members, expenses: expenses.items, expensesNextCursor: expenses.nextCursor,
-      transfers, pendingRemainderMinor,
+      transfers, pendingRemainders,
     }
   })
 }
@@ -116,15 +116,13 @@ export async function getRound(access: Identity, roundId: string, query: URLSear
 export async function createRound(access: Identity, key: string, groupId: string, body: CreateRoundRequestDTO | Record<string, unknown>, captureAudience?: (userIds: string[]) => void) {
   return withDatabaseConnection((client, discardConnection) => withWriteLock(client, discardConnection, async () => {
     const account = await requireAccount(client, access)
-    onlyKeys(body, ['name', 'currency', 'participantIds'])
+    onlyKeys(body, ['name', 'participantIds'])
     const name = textInput(body.name, 100), ids = idsInput(body.participantIds)
-    let currency: Currency
-    try { currency = requireCurrency(body.currency) } catch { badInput('unsupported_currency', '지원하는 회차 통화를 선택해 주세요') }
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(key)) badInput('invalid_request_key', 'UUIDv7 회차 생성 ticket이 필요합니다')
     if (ids.length < 2 || !ids.includes(account.id)) throw new AppError(409, 'minimum_participants', '회차 생성자를 포함해 최소 2명을 선택해 주세요')
     const id = key.toLowerCase()
     try {
-      const result = await repository.insertRound(client, id, groupId, account.id, name, currency, nowSeconds(), ids)
+      const result = await repository.insertRound(client, id, groupId, account.id, name, nowSeconds(), ids)
       if (!result.actor_active) throw new AppError(401, 'unauthorized', '로그인이 필요합니다')
       if (!result.is_member) throw missing()
       if (!result.created) badInput('invalid_participants', '현재 모임 참여자만 선택할 수 있어요')
@@ -137,34 +135,37 @@ export async function createRound(access: Identity, key: string, groupId: string
   }))
 }
 
-function expenseFields(body: ExpenseRequestDTO | Record<string, unknown>, currency?: Currency, previous?: ExpenseRow): { description: string; amount: string; payerId: string; splitMode: Expense['splitMode'] } {
-  onlyKeys(body, ['description', 'amount', 'payerId', 'splitMode', 'participantIds', 'customShares', 'expectedVersion'])
+function expenseFields(body: ExpenseRequestDTO | Record<string, unknown>, previous?: ExpenseRow): { currency: Currency; description: string; amount: string; payerId: string; splitMode: Expense['splitMode'] } {
+  onlyKeys(body, ['currency', 'description', 'amount', 'payerId', 'splitMode', 'participantIds', 'customShares', 'expectedVersion'])
+  let currency: Currency
+  try { currency = requireCurrency(body.currency === undefined ? previous?.currency : body.currency) } catch { badInput('unsupported_currency', '지원하는 지출 통화를 선택해 주세요') }
+  if (previous && currency !== previous.currency && body.amount === undefined) badInput('invalid_amount', '통화를 변경할 때 금액을 다시 입력해 주세요')
+  if (previous?.split_mode === 'CUSTOM' && (body.splitMode ?? previous.split_mode) === 'CUSTOM' && currency !== previous.currency && body.customShares === undefined) badInput('invalid_amount', '통화를 변경할 때 개별 부담금을 다시 입력해 주세요')
   const description = textInput(body.description === undefined ? previous?.description : body.description, 500)
   let amount: bigint
-  // ponytail: currencies use 0/2 decimals; widen this parser if the catalog adds another precision.
-  try { amount = body.amount === undefined && previous ? BigInt(previous.amount_minor) : parseAmount(body.amount, currency ?? 'USD') } catch { badInput('invalid_amount', '통화에 맞는 양의 금액을 정확히 입력해 주세요') }
-  const maximum = minorLimit(MAX_EXPENSE_MAJOR, currency ?? 'USD')
-  if (amount > maximum) badInput('expense_amount_limit_exceeded', currency ? `지출 금액은 ${formatMoney(maximum.toString(), currency)} 이하여야 해요` : '지출 금액은 회차 통화 기준 100,000,000 이하여야 해요')
+  try { amount = body.amount === undefined && previous ? BigInt(previous.amount_minor) : parseAmount(body.amount, currency) } catch { badInput('invalid_amount', '통화에 맞는 양의 금액을 정확히 입력해 주세요') }
+  const maximum = minorLimit(MAX_EXPENSE_MAJOR, currency)
+  if (amount > maximum) badInput('expense_amount_limit_exceeded', `지출 금액은 ${formatMoney(maximum.toString(), currency)} 이하여야 해요`)
   const payerId = textInput(body.payerId === undefined ? previous?.payer_id : body.payerId, 128)
   const splitMode = body.splitMode === undefined ? previous?.split_mode : body.splitMode
   if (splitMode !== 'ALL' && splitMode !== 'SELECTED' && splitMode !== 'CUSTOM') badInput('invalid_participants', '분배 방식을 선택해 주세요')
   if (splitMode !== 'CUSTOM' && body.customShares !== undefined) badInput('invalid_input', '개별 부담금은 개별 항목 분배에서만 입력해 주세요')
-  return { description, amount: amount.toString(), payerId, splitMode }
+  return { currency, description, amount: amount.toString(), payerId, splitMode }
 }
 
-function customSharesInput(value: unknown, currency?: Currency) {
+function customSharesInput(value: unknown, currency: Currency) {
   if (!Array.isArray(value) || !value.length || value.length > MAX_GROUP_MEMBERS) badInput('invalid_participants', '부담자와 부담금을 선택해 주세요')
   return value.map(share => {
     if (!share || typeof share !== 'object' || Array.isArray(share)) badInput('invalid_participants', '부담자와 부담금을 선택해 주세요')
     onlyKeys(share, ['userId', 'amount'])
     let assignedAmount: bigint
-    try { assignedAmount = parseAmount(share.amount, currency ?? 'USD') } catch { badInput('invalid_amount', '통화에 맞는 양의 부담금을 정확히 입력해 주세요') }
+    try { assignedAmount = parseAmount(share.amount, currency) } catch { badInput('invalid_amount', '통화에 맞는 양의 부담금을 정확히 입력해 주세요') }
     return { userId: share.userId as string, assignedAmountMinor: assignedAmount.toString() }
   })
 }
 
 function expenseInput(round: ExpenseUpdateRow, body: ExpenseRequestDTO | Record<string, unknown>, previous: ExpenseRow) {
-  const input = expenseFields(body, round.currency, previous)
+  const input = expenseFields(body, previous)
   const { payerId, splitMode } = input
   const active = round.active_ids
   if (!active.includes(payerId) && payerId !== previous?.payer_id) badInput('invalid_participants', '결제자는 이번 회차 참여자여야 합니다')
@@ -178,7 +179,7 @@ function expenseInput(round: ExpenseUpdateRow, body: ExpenseRequestDTO | Record<
     if (body.customShares === undefined && previous?.split_mode === 'CUSTOM') {
       assignedShares = round.shares.map(share => ({ userId: share.user_id, assignedAmountMinor: share.assigned_amount_minor }))
     } else {
-      assignedShares = customSharesInput(body.customShares, round.currency)
+      assignedShares = customSharesInput(body.customShares, input.currency)
     }
     participantIds = idsInput(assignedShares.map(share => share.userId))
     if (participantIds.some(id => !active.includes(id))) badInput('invalid_participants', '부담자는 제외되지 않은 회차 참여자여야 합니다')
@@ -189,6 +190,15 @@ function expenseInput(round: ExpenseUpdateRow, body: ExpenseRequestDTO | Record<
   }
   if (!participantIds.length) badInput('invalid_participants', '부담자가 필요합니다')
   return { ...input, participantIds, assignedShares }
+}
+
+function validateCurrencyTotals(totals: RoundSummary['totals'], input: { currency: Currency; amount: string }, previous?: ExpenseRow) {
+  const next = new Map(totals.map(total => [total.currency, BigInt(total.totalMinor)]))
+  if (previous) next.set(previous.currency, (next.get(previous.currency) ?? 0n) - BigInt(previous.amount_minor))
+  next.set(input.currency, (next.get(input.currency) ?? 0n) + BigInt(input.amount))
+  if ([...next.values()].filter(amount => amount > 0n).length > MAX_ROUND_CURRENCIES) badInput('round_currency_limit_exceeded', '한 회차에는 최대 5개 통화를 기록할 수 있어요')
+  const maximum = minorLimit(MAX_ROUND_TOTAL_MAJOR, input.currency)
+  if (next.get(input.currency)! > maximum) badInput('round_total_limit_exceeded', `통화별 전체 지출은 ${formatMoney(maximum.toString(), input.currency)} 이하여야 해요`)
 }
 
 function checkCustomShares(amount: bigint, participantIds: string[], shares: { userId: string; assignedAmountMinor: string | null }[]) {
@@ -204,10 +214,8 @@ async function createExpense(access: Identity, key: string, roundId: string, bod
   let participantIds: string[] = [], assignedShares: ReturnType<typeof customSharesInput> = []
   return withWriteTransaction(async client => {
     const id = randomUUID(), now = nowSeconds()
-    const scales = Object.fromEntries(Object.entries(CURRENCIES).map(([code, info]) => [code, (10n ** BigInt(info.decimals)).toString()]))
-    const hasDecimal = (body.amount as string).includes('.') || (input.splitMode === 'CUSTOM' && (body.customShares as { amount: string }[]).some(share => share.amount.includes('.')))
     const round = await repository.insertExpenseCreation(client, id, roundId, userId, key, { ...input, participantIds }, body.expectedVersion as number,
-      hasDecimal, scales, MAX_EXPENSE_MAJOR.toString(), MAX_ROUND_TOTAL_MAJOR.toString(), now)
+      minorLimit(MAX_ROUND_TOTAL_MAJOR, input.currency).toString(), now)
     if (!round.actor_active) throw new AppError(401, 'unauthorized', '로그인이 필요합니다')
     const replay = mutationResult<MutationResult>(round, digest)
     if (replay) return replay
@@ -215,13 +223,12 @@ async function createExpense(access: Identity, key: string, roundId: string, bod
     state(round, 'RECORDING')
     if (!round.is_creator && !round.active_ids.includes(userId)) throw new AppError(403, 'forbidden', '지출 작성자 또는 회차 생성자만 수정할 수 있어요')
     version(round, body.expectedVersion)
-    const actual = expenseFields(body, round.currency)
+    const actual = input
     if (!round.active_ids.includes(actual.payerId)) badInput('invalid_participants', '결제자는 이번 회차 참여자여야 합니다')
     if (actual.splitMode === 'ALL') participantIds = round.active_ids
     if (!participantIds.length || participantIds.some(id => !round.active_ids.includes(id))) badInput('invalid_participants', '부담자는 제외되지 않은 회차 참여자여야 합니다')
-    if (actual.splitMode === 'CUSTOM') assignedShares = customSharesInput(body.customShares, round.currency)
-    const maximum = minorLimit(MAX_ROUND_TOTAL_MAJOR, round.currency)
-    if (BigInt(round.total_minor) + BigInt(actual.amount) > maximum) badInput('round_total_limit_exceeded', `회차 전체 지출은 ${formatMoney(maximum.toString(), round.currency)} 이하여야 해요`)
+    if (actual.splitMode === 'CUSTOM') assignedShares = customSharesInput(body.customShares, input.currency)
+    validateCurrencyTotals(round.totals, input)
     if (!round.created) throw new Error('Validated expense was not inserted')
     const amounts = participantIds.map(id => assignedShares.find(share => share.userId === id)?.assignedAmountMinor ?? null)
     const result = await repository.finishExpenseCreation(client, id, roundId, userId, key, digest, participantIds, amounts, now, round.version)
@@ -237,7 +244,7 @@ async function createExpense(access: Identity, key: string, roundId: string, bod
       if (body.participantIds !== undefined) badInput('invalid_participants', '전체 분배의 참여자는 서버에서 결정합니다')
     } else if (input.splitMode === 'CUSTOM') {
       if (body.participantIds !== undefined) badInput('invalid_input', '개별 항목 분배의 부담자는 부담금과 함께 선택해 주세요')
-      assignedShares = customSharesInput(body.customShares)
+      assignedShares = customSharesInput(body.customShares, input.currency)
       participantIds = idsInput(assignedShares.map(share => share.userId))
       checkCustomShares(BigInt(input.amount), participantIds, assignedShares)
     } else participantIds = idsInput(body.participantIds)
@@ -264,9 +271,8 @@ export async function saveExpense(access: Identity, key: string, roundId: string
     validateExpenseUpdate(round, userId, body.expectedVersion)
     const previous = round.expense!
     const input = expenseInput(round, body, previous)
-    const nextTotal = BigInt(round.total_minor) - BigInt(previous.amount_minor) + BigInt(input.amount)
-    const maximum = minorLimit(MAX_ROUND_TOTAL_MAJOR, round.currency)
-    if (nextTotal > maximum) badInput('round_total_limit_exceeded', `회차 전체 지출은 ${formatMoney(maximum.toString(), round.currency)} 이하여야 해요`)
+    validateCurrencyTotals(round.totals, input, previous)
+    const maximum = minorLimit(MAX_ROUND_TOTAL_MAJOR, input.currency)
     const amounts = input.participantIds.map(id => input.assignedShares.find(share => share.userId === id)?.assignedAmountMinor ?? null)
     return withWriteLock(client, discardConnection, async () => {
       const result = await repository.updateExpense(client, expenseId, roundId, userId, key, digest, input, amounts, round.version, maximum.toString(), nowSeconds())
@@ -340,7 +346,7 @@ async function exclusions(client: Database, round: RoundRow, targetId: string): 
 function exclusionCheck(round: RoundRow, targetId: string, member: Pick<MemberExclusionRow, 'excluded_at' | 'member_count' | 'expenses'>): ExclusionCheck {
   const rows = member.expenses
   const reason = round.creator_id === targetId ? 'round_creator_cannot_leave' : member.excluded_at !== null ? 'already_excluded' : !['RECORDING', 'CONFIRMED'].includes(round.status) ? 'invalid_round_state' : rows.length ? 'member_exclusion_blocked' : Number(member.member_count) <= 2 ? 'minimum_participants' : null
-  return { allowed: reason === null, reason, expenses: rows.map(e => ({ id: e.id, description: e.description, amountMinor: e.amount_minor, authorId: e.author_id, authorName: e.author_name, reason: e.reason })) }
+  return { allowed: reason === null, reason, expenses: rows.map(e => ({ id: e.id, description: e.description, currency: e.currency, amountMinor: e.amount_minor, authorId: e.author_id, authorName: e.author_name, reason: e.reason })) }
 }
 
 export async function checkExclusion(access: Identity, roundId: string, userId: string) {
@@ -371,35 +377,37 @@ export async function excludeMember(access: Identity, key: string, roundId: stri
   })
 }
 
-async function validatedExpenses(client: Database, roundId: string, currency: Currency) {
+async function validatedExpenses(client: Database, roundId: string) {
   const members = await membersFor(client, roundId), items = await settlementExpensesFor(client, roundId)
-  return validateExpenses(items, members, currency)
+  return validateExpenses(items, members)
 }
 
-function validateExpenses(items: Awaited<ReturnType<typeof settlementExpensesFor>>, members: RoundMember[], currency: Currency) {
+function validateExpenses(items: Awaited<ReturnType<typeof settlementExpensesFor>>, members: RoundMember[]) {
   const active = members.filter(m => m.excludedAt === null).map(m => m.userId).sort()
   if (active.length < 2) throw new AppError(409, 'minimum_participants', '회차는 최소 2명이어야 합니다')
   if (!items.length) throw new AppError(409, 'empty_expenses', '지출 내역이 없습니다')
-  let total = 0n
+  const totals = new Map<Currency, bigint>()
   for (const expense of items) {
     if (!expense.participantIds.length || expense.participantIds.some(id => !active.includes(id)) || !members.some(m => m.userId === expense.payerId) || (expense.splitMode === 'ALL' && JSON.stringify(expense.participantIds.slice().sort()) !== JSON.stringify(active))) {
       badInput('invalid_participants', '지출 참여 내역을 다시 확인해 주세요')
     }
+    const currency = requireCurrency(expense.currency)
     const amount = BigInt(expense.amountMinor)
     if (amount <= 0n) badInput('invalid_amount')
     if (expense.splitMode === 'CUSTOM') checkCustomShares(amount, expense.participantIds, expense.shares)
     if (amount > minorLimit(MAX_EXPENSE_MAJOR, currency)) badInput('expense_amount_limit_exceeded', `지출 금액은 ${formatMoney(minorLimit(MAX_EXPENSE_MAJOR, currency).toString(), currency)} 이하여야 해요`)
-    total += amount
+    totals.set(currency, (totals.get(currency) ?? 0n) + amount)
   }
-  if (total > minorLimit(MAX_ROUND_TOTAL_MAJOR, currency)) badInput('round_total_limit_exceeded', `회차 전체 지출은 ${formatMoney(minorLimit(MAX_ROUND_TOTAL_MAJOR, currency).toString(), currency)} 이하여야 해요`)
+  if (totals.size > MAX_ROUND_CURRENCIES) badInput('round_currency_limit_exceeded', '한 회차에는 최대 5개 통화를 기록할 수 있어요')
+  for (const [currency, total] of totals) if (total > minorLimit(MAX_ROUND_TOTAL_MAJOR, currency)) badInput('round_total_limit_exceeded', `통화별 전체 지출은 ${formatMoney(minorLimit(MAX_ROUND_TOTAL_MAJOR, currency).toString(), currency)} 이하여야 해요`)
   return { items, members }
 }
 
 async function finalize(client: Database, roundId: string, { items, members }: Awaited<ReturnType<typeof validatedExpenses>>) {
-  const result = finalizeSettlement(items, members.map(m => m.userId))
+  const result = finalizeCurrencySettlement(items, members.map(m => m.userId))
   for (const share of result.shares) await repository.saveFinalShare(client, share.expenseId, share.userId, share.amountMinor, share.receivedRemainder)
-  for (const balance of result.balances) await repository.insertBalance(client, roundId, balance.userId, balance.paidMinor, balance.burdenMinor, balance.balanceMinor)
-  for (const transfer of result.transfers) await repository.insertTransfer(client, roundId, transfer.senderId, transfer.receiverId, transfer.amountMinor)
+  for (const balance of result.balances) await repository.insertBalance(client, roundId, balance.userId, balance.paidMinor, balance.burdenMinor, balance.balanceMinor, balance.currency)
+  for (const transfer of result.transfers) await repository.insertTransfer(client, roundId, transfer.senderId, transfer.receiverId, transfer.amountMinor, transfer.currency)
   await repository.finalizeRound(client, roundId, nowSeconds())
 }
 
@@ -408,7 +416,7 @@ function validateRoundConfirmation(round: RoundConfirmationRow, expectedVersion:
   creator(round)
   version(round, expectedVersion)
   state(round, 'RECORDING')
-  validateExpenses(round.expenses.map(settlementExpenseDetails), round.members.map(memberDetails), round.currency)
+  validateExpenses(round.expenses.map(settlementExpenseDetails), round.members.map(memberDetails))
 }
 
 async function confirmRound(access: Identity, key: string, roundId: string, body: VersionRequestDTO | Record<string, unknown>, captureAudience?: (audience: { groupId: string; userIds: string[] }) => void): Promise<MutationResult> {
@@ -498,12 +506,12 @@ export async function roundCommand(access: Identity, key: string, roundId: strin
     if (replay) return replay
     if (!round.id) throw missing()
     creator(round)
-    let settlement: ReturnType<typeof finalizeSettlement> | null = null
+    let settlement: ReturnType<typeof finalizeCurrencySettlement> | null = null
     if (round.finalized_at === null) {
       version(round, body.expectedVersion)
       state(round, 'LOCKED')
-      const { items, members } = validateExpenses(round.expenses.map(settlementExpenseDetails), round.members.map(memberDetails), round.currency)
-      settlement = finalizeSettlement(items, members.map(member => member.userId), max => randomInt(max))
+      const { items, members } = validateExpenses(round.expenses.map(settlementExpenseDetails), round.members.map(memberDetails))
+      settlement = finalizeCurrencySettlement(items, members.map(member => member.userId), max => randomInt(max))
     }
     const current = await repository.drawRound(client, roundId, account.id, key, digest, round.version, nowSeconds(), settlement)
     if (!current.actor_active) throw new AppError(401, 'unauthorized', '로그인이 필요합니다')
@@ -560,7 +568,7 @@ export async function roundCommand(access: Identity, key: string, roundId: strin
     const now = nowSeconds()
     if (action === 'send') {
       state(round, 'CONFIRMED')
-      const expenses = await validatedExpenses(client, roundId, round.currency as Currency)
+      const expenses = await validatedExpenses(client, roundId)
       const { rowCount } = await repository.lockRound(client, roundId, now, round.version)
       if (!rowCount) throw new AppError(409, 'stale_round', '다른 변경이 먼저 저장됐어요. 최신 내역을 확인해 주세요')
       const { rows } = await repository.findRemainder(client, roundId)
@@ -574,20 +582,25 @@ export async function roundCommand(access: Identity, key: string, roundId: strin
 export async function setSettlementCheck(access: Identity, key: string, roundId: string, body: SettlementCheckRequestDTO | Record<string, unknown>, captureAudience?: (audience: { groupId: string; userIds: string[] }) => void) {
   return withDatabaseConnection(async client => {
     const account = await requireAccount(client, access)
-    onlyKeys(body, ['expectedVersion', 'checked', 'senderId'])
+    onlyKeys(body, ['expectedVersion', 'checked', 'senderId', 'currency'])
     if (typeof body.checked !== 'boolean') badInput('invalid_input', '정산 확인 여부를 선택해 주세요')
     if (body.senderId !== undefined && (typeof body.senderId !== 'string' || body.senderId !== body.senderId.trim() || !/^[\w-]{1,128}$/.test(body.senderId))) badInput('invalid_input', '확인할 송금자를 다시 선택해 주세요')
     mutationDigest(key, { roundId, ...body })
+    let currency: Currency | undefined
+    if (body.currency !== undefined) {
+      try { currency = requireCurrency(body.currency) } catch { badInput('unsupported_currency', '지원하는 통화를 선택해 주세요') }
+    }
+    if (body.senderId !== undefined && !currency) badInput('unsupported_currency', '개별 수취 확인에는 통화가 필요합니다')
     const senderId = body.senderId as string | undefined
     const { rows: [round] } = await repository.findSettlementCheck(client, roundId, account.id)
     if (!round) throw missing()
     version(round, body.expectedVersion)
     state(round, 'LOCKED')
     if (round.finalized_at === null) throw new AppError(409, 'invalid_round_state', '최종 금액이 정해진 뒤 확인할 수 있어요')
-    const incoming = round.incoming.filter(transfer => senderId === undefined || transfer.sender_id === senderId)
+    const incoming = round.incoming.filter(transfer => (senderId === undefined || transfer.sender_id === senderId) && (currency === undefined || transfer.currency === currency))
     if (!incoming.length) throw new AppError(403, 'forbidden', '확인할 수 있는 수취 내역이 없어요')
     if (!incoming.some(transfer => (transfer.received_at !== null) !== body.checked)) throw new AppError(404, 'not_found', '변경할 수취 내역이 없어요')
-    const { rowCount } = await repository.setReceived(client, roundId, account.id, senderId ?? null, body.checked, nowSeconds(), round.version)
+    const { rowCount } = await repository.setReceived(client, roundId, account.id, senderId ?? null, body.checked, nowSeconds(), round.version, currency ?? null)
     if (!rowCount) throw new AppError(404, 'not_found', '변경할 수취 내역이 없어요')
     captureAudience?.({ groupId: round.group_id, userIds: round.user_ids })
     return { id: roundId, roundId, status: round.status, version: round.version }
@@ -603,16 +616,16 @@ export async function getSettlement(access: Identity, roundId: string): Promise<
       checkedAt: row.checked_at === null ? null : Number(row.checked_at) }))
     const viewerCheck = checks.find(member => member.userId === account.id)
     const checkedCount = checks.filter(member => member.checkedAt !== null).length
-    const result: SettlementDTO = { roundId, name: round.name, groupName: round.group_name, status: round.status, version: round.version, isCreator: round.is_creator, finalized: round.finalized_at !== null, currency: round.currency, balanceMinor: null,
+    const result: SettlementDTO = { roundId, name: round.name, groupName: round.group_name, status: round.status, version: round.version, isCreator: round.is_creator, finalized: round.finalized_at !== null, balances: [],
       checkedAt: viewerCheck?.checkedAt ?? null, checkRequired: Boolean(viewerCheck), checkedCount, requiredCount: checks.length, allChecked: checkedCount === checks.length,
       confirmations: checks, outgoing: [], incoming: [], sharePath: null }
     if (!result.finalized) return result
-    result.balanceMinor = round.balance_minor ?? '0'
+    result.balances = round.balances ?? []
     result.sharePath = `/settlements/${roundId}`
-    result.outgoing = round.outgoing.map(row => ({ receiverId: row.receiver_id, displayName: row.display_name_snapshot, profileImageUrl: row.profile_image_url, amountMinor: row.amount_minor,
-      ...(round.currency === 'KRW' ? { account: { bankName: row.bank_name, accountNumber: row.account_number, formattedAccountNumber: row.account_number_formatted, accountHolder: row.account_holder,
+    result.outgoing = round.outgoing.map(row => ({ currency: row.currency, receiverId: row.receiver_id, displayName: row.display_name_snapshot, profileImageUrl: row.profile_image_url, amountMinor: row.amount_minor,
+      ...(row.currency === 'KRW' ? { account: { bankName: row.bank_name, accountNumber: row.account_number, formattedAccountNumber: row.account_number_formatted, accountHolder: row.account_holder,
         verifiedAt: row.bank_verified_at === null ? null : Number(row.bank_verified_at) } } : {}) }))
-    result.incoming = round.incoming.map(row => ({ senderId: row.sender_id, displayName: row.display_name_snapshot, profileImageUrl: row.profile_image_url, amountMinor: row.amount_minor,
+    result.incoming = round.incoming.map(row => ({ currency: row.currency, senderId: row.sender_id, displayName: row.display_name_snapshot, profileImageUrl: row.profile_image_url, amountMinor: row.amount_minor,
       receivedAt: row.received_at === null ? null : Number(row.received_at) }))
     return result
   })

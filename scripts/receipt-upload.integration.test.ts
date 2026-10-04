@@ -37,8 +37,8 @@ test('receipt upload authenticates before reading, saves in two SQL calls and cl
     const group = await createGroup(owner, uuidV7(), { name: '영수증 검증 모임' })
     const invite = await createInvite(owner, key(), group.id, {})
     for (const actor of [author, other]) await acceptInvite(actor, key(), invite.sharePath!.split('/').at(-1)!)
-    const round = await createRound(owner, uuidV7(), group.id, { name: '영수증 검증 회차', currency: 'KRW', participantIds: [owner.userId, author.userId, other.userId] })
-    const expense = await saveExpense(author, key(), round.id, { description: '영수증 검증 지출', amount: '10', payerId: author.userId, splitMode: 'ALL', expectedVersion: round.version })
+    const round = await createRound(owner, uuidV7(), group.id, { name: '영수증 검증 회차', participantIds: [owner.userId, author.userId, other.userId] })
+    const expense = await saveExpense(author, key(), round.id, { currency: 'KRW', description: '영수증 검증 지출', amount: '10', payerId: author.userId, splitMode: 'ALL', expectedVersion: round.version })
     const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#fff' } }).png().toBuffer()
     let version = expense.version!
     process.env.DB_QUERY_LOG = 'true'
@@ -136,8 +136,8 @@ test('receipt upload authenticates before reading, saves in two SQL calls and cl
       version = saved.version!
     })
     await t.test('same key on different rounds rolls back the losing upload and version', async () => {
-      const second = await createRound(owner, uuidV7(), group.id, { name: '영수증 키 경합', currency: 'KRW', participantIds: [owner.userId, author.userId] })
-      const secondExpense = await saveExpense(author, key(), second.id, { description: '다른 회차 지출', amount: '10', payerId: author.userId, splitMode: 'ALL', expectedVersion: second.version })
+      const second = await createRound(owner, uuidV7(), group.id, { name: '영수증 키 경합', participantIds: [owner.userId, author.userId] })
+      const secondExpense = await saveExpense(author, key(), second.id, { currency: 'KRW', description: '다른 회차 지출', amount: '10', payerId: author.userId, splitMode: 'ALL', expectedVersion: second.version })
       reset()
       const ticket = key()
       const candidates = [[round.id, expense.id, version], [second.id, secondExpense.id, secondExpense.version!]] as const

@@ -179,7 +179,7 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     assert.match(output.slice(acceptOutput), /pg_advisory_lock/)
     assert.match(output.slice(acceptOutput), /pg_advisory_unlock/)
     assert.doesNotMatch(output, /GET \/api\/me /, 'WebSocket authentication must not issue internal HTTP me requests')
-    const ticket = uuidV7(), roundBody = { name: 'UUIDv7 회차', currency: 'KRW', participantIds: TEST_ACCOUNTS.slice(0, 2).map(account => account.id) }
+    const ticket = uuidV7(), roundBody = { name: 'UUIDv7 회차', participantIds: TEST_ACCOUNTS.slice(0, 2).map(account => account.id) }
     const roundHeaders = { origin, authorization: `Bearer ${mine.accessToken}`, 'content-type': 'application/json', 'idempotency-key': ticket }
     const roundMessages = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
     const roundOutput = output.length
@@ -220,7 +220,7 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     assert.equal((await fetch(`${origin}/api/groups/${groupId}/rounds`, { method: 'POST', headers: { ...roundHeaders, 'idempotency-key': expenseRoundId }, body: JSON.stringify(roundBody) })).status, 200)
     await Promise.all(expenseRoundMessages)
     const expenseHeaders = { ...roundHeaders, 'idempotency-key': randomUUID() }
-    const expenseBody = JSON.stringify({ description: '지출 SQL 검증', amount: '100', payerId: memberId, splitMode: 'ALL', expectedVersion: 1 })
+    const expenseBody = JSON.stringify({ currency: 'KRW', description: '지출 SQL 검증', amount: '100', payerId: memberId, splitMode: 'ALL', expectedVersion: 1 })
     const expenseMessages = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
     const expenseOutput = output.length
     const expenseResponse = await fetch(`${origin}/api/rounds/${expenseRoundId}/expenses`, { method: 'POST', headers: expenseHeaders, body: expenseBody })
@@ -382,7 +382,7 @@ test('authenticated WebSocket receives only its own committed invalidations', as
       return (await response.json()).data
     }
     await roundPost(`groups/${groupId}/rounds`, roundBody, drawRoundId)
-    const drawExpense = await roundPost(`rounds/${drawRoundId}/expenses`, { description: '추첨 SQL 검증', amount: '3', payerId: memberId, splitMode: 'ALL', expectedVersion: 1 })
+    const drawExpense = await roundPost(`rounds/${drawRoundId}/expenses`, { currency: 'KRW', description: '추첨 SQL 검증', amount: '3', payerId: memberId, splitMode: 'ALL', expectedVersion: 1 })
     const drawConfirmed = await roundPost(`rounds/${drawRoundId}/confirm`, { expectedVersion: drawExpense.version })
     const drawLocked = await roundPost(`rounds/${drawRoundId}/send`, { expectedVersion: drawConfirmed.version })
     const drawOutput = output.length
@@ -419,7 +419,7 @@ test('authenticated WebSocket receives only its own committed invalidations', as
           [memberId, account.bankCode, account.bankName, account.accountNumber, account.formattedAccountNumber, account.accountHolder, account.verifiedAt, receiverAccount.data.bankVersion])
       } finally { await restoreDb.end() }
     }
-    const checkBody = { expectedVersion: drawResult.version, checked: true, senderId: TEST_ACCOUNTS[0].id }
+    const checkBody = { expectedVersion: drawResult.version, checked: true, currency: 'KRW', senderId: TEST_ACCOUNTS[0].id }
     const checkTicket = randomUUID(), checkOutput = output.length
     const checkResult = await roundPost(`rounds/${drawRoundId}/settlement-check`, checkBody, checkTicket, other)
     assert.equal(checkResult.version, drawResult.version)

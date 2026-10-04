@@ -35,8 +35,8 @@ test('receipt read checks account and round participation in two SQL calls befor
     const group = await createGroup(owner, uuidV7(), { name: '영수증 조회 검증' })
     const invite = await createInvite(owner, key(), group.id, {})
     for (const actor of [participant, groupOnly]) await acceptInvite(actor, key(), invite.sharePath!.split('/').at(-1)!)
-    const round = await createRound(owner, uuidV7(), group.id, { name: '영수증 조회 회차', currency: 'KRW', participantIds: [owner.userId, participant.userId] })
-    const expense = await saveExpense(owner, key(), round.id, { description: '조회 검증 지출', amount: '10', payerId: owner.userId, splitMode: 'ALL', expectedVersion: round.version })
+    const round = await createRound(owner, uuidV7(), group.id, { name: '영수증 조회 회차', participantIds: [owner.userId, participant.userId] })
+    const expense = await saveExpense(owner, key(), round.id, { currency: 'KRW', description: '조회 검증 지출', amount: '10', payerId: owner.userId, splitMode: 'ALL', expectedVersion: round.version })
     const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#fff' } }).png().toBuffer()
     const saved = await addReceipt(owner, key(), round.id, expense.id, expense.version!, bytes, 'image/png')
     const objectKey = (await db.query('SELECT object_key FROM expense_receipts WHERE id=$1', [saved.id])).rows[0].object_key

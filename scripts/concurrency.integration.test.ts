@@ -42,8 +42,8 @@ async function group(join = true) {
 
 async function recordingRound() {
   const fixture = await group()
-  const round = await createRound(fixture.owner, uuidV7(), fixture.groupId, { name: '경합 검증 회차', currency: 'KRW', participantIds: [fixture.owner.userId, fixture.participant.userId] })
-  const expense = await saveExpense(fixture.participant, key(), round.id, { description: '경합 지출', amount: '3', payerId: fixture.owner.userId, splitMode: 'ALL', expectedVersion: round.version })
+  const round = await createRound(fixture.owner, uuidV7(), fixture.groupId, { name: '경합 검증 회차', participantIds: [fixture.owner.userId, fixture.participant.userId] })
+  const expense = await saveExpense(fixture.participant, key(), round.id, { currency: 'KRW', description: '경합 지출', amount: '3', payerId: fixture.owner.userId, splitMode: 'ALL', expectedVersion: round.version })
   return { ...fixture, roundId: round.id, expenseId: expense.id, version: expense.version! }
 }
 
@@ -59,7 +59,7 @@ test('group departure and round creation serialize for participants and creators
     const fixture = await group()
     const actor = creatorDeparture ? fixture.owner : fixture.participant
     const outcomes = await Promise.allSettled([
-      createRound(fixture.owner, uuidV7(), fixture.groupId, { name: '탈퇴 경합 회차', currency: 'KRW', participantIds: [fixture.owner.userId, fixture.participant.userId] }),
+      createRound(fixture.owner, uuidV7(), fixture.groupId, { name: '탈퇴 경합 회차', participantIds: [fixture.owner.userId, fixture.participant.userId] }),
       leaveGroup(actor, key(), fixture.groupId),
     ])
     assert.equal(outcomes.filter(outcome => outcome.status === 'fulfilled').length, 1)
@@ -145,8 +145,8 @@ test('draw rechecks concurrent results and idempotency keys after its round read
     const requestKey = key(), body = { expectedVersion: locked.version }
     let winnerRoundId = fixture.roundId, winnerVersion = locked.version
     if (scenario === 'other-round') {
-      const round = await createRound(fixture.owner, uuidV7(), fixture.groupId, { name: '같은 키 경합', currency: 'KRW', participantIds: [fixture.owner.userId, fixture.participant.userId] })
-      const expense = await saveExpense(fixture.owner, key(), round.id, { description: '다른 회차', amount: '3', payerId: fixture.owner.userId, splitMode: 'ALL', expectedVersion: round.version })
+      const round = await createRound(fixture.owner, uuidV7(), fixture.groupId, { name: '같은 키 경합', participantIds: [fixture.owner.userId, fixture.participant.userId] })
+      const expense = await saveExpense(fixture.owner, key(), round.id, { currency: 'KRW', description: '다른 회차', amount: '3', payerId: fixture.owner.userId, splitMode: 'ALL', expectedVersion: round.version })
       const confirmed = await roundCommand(fixture.owner, key(), round.id, 'confirm', { expectedVersion: expense.version })
       winnerRoundId = round.id
       winnerVersion = (await roundCommand(fixture.owner, key(), round.id, 'send', { expectedVersion: confirmed.version })).version
@@ -196,14 +196,14 @@ test('settlement checks compose concurrently and normal/forced completion cannot
   const simultaneous = await group()
   const third = await member()
   await acceptInvite(third, key(), simultaneous.token)
-  const round = await createRound(simultaneous.owner, uuidV7(), simultaneous.groupId, { name: '복수 수취 경합', currency: 'KRW', participantIds: [simultaneous.owner.userId, simultaneous.participant.userId, third.userId] })
-  const expense = await saveExpense(simultaneous.owner, key(), round.id, { description: '복수 송금', amount: '6', payerId: simultaneous.owner.userId, splitMode: 'ALL', expectedVersion: round.version })
+  const round = await createRound(simultaneous.owner, uuidV7(), simultaneous.groupId, { name: '복수 수취 경합', participantIds: [simultaneous.owner.userId, simultaneous.participant.userId, third.userId] })
+  const expense = await saveExpense(simultaneous.owner, key(), round.id, { currency: 'KRW', description: '복수 송금', amount: '6', payerId: simultaneous.owner.userId, splitMode: 'ALL', expectedVersion: round.version })
   const confirmed = await roundCommand(simultaneous.owner, key(), round.id, 'confirm', { expectedVersion: expense.version })
   const locked = await roundCommand(simultaneous.owner, key(), round.id, 'send', { expectedVersion: confirmed.version })
   const incoming = (await getSettlement(simultaneous.owner, round.id)).incoming
   assert.equal(incoming.length, 2)
   const checks = await Promise.all(incoming.map(transfer => setSettlementCheck(simultaneous.owner, key(), round.id, {
-    expectedVersion: locked.version, checked: true, senderId: transfer.senderId,
+    expectedVersion: locked.version, checked: true, currency: 'KRW', senderId: transfer.senderId,
   })))
   assert.ok(checks.every(result => result.version === locked.version))
   const checked = await getSettlement(simultaneous.owner, round.id)
@@ -274,8 +274,8 @@ test('force completion with the same key on different rounds commits one and pre
   const fixture = await group()
   const rounds = []
   for (let index = 0; index < 2; index++) {
-    const round = await createRound(fixture.owner, uuidV7(), fixture.groupId, { name: '강제 종료 멱등 경합', currency: 'KRW', participantIds: [fixture.owner.userId, fixture.participant.userId] })
-    const expense = await saveExpense(fixture.owner, key(), round.id, { description: '지출', amount: '4', payerId: fixture.owner.userId, splitMode: 'ALL', expectedVersion: round.version })
+    const round = await createRound(fixture.owner, uuidV7(), fixture.groupId, { name: '강제 종료 멱등 경합', participantIds: [fixture.owner.userId, fixture.participant.userId] })
+    const expense = await saveExpense(fixture.owner, key(), round.id, { currency: 'KRW', description: '지출', amount: '4', payerId: fixture.owner.userId, splitMode: 'ALL', expectedVersion: round.version })
     const confirmed = await roundCommand(fixture.owner, key(), round.id, 'confirm', { expectedVersion: expense.version })
     const locked = await roundCommand(fixture.owner, key(), round.id, 'send', { expectedVersion: confirmed.version })
     rounds.push({ id: round.id, version: locked.version! })
@@ -357,7 +357,7 @@ test('settlement check rechecks a duplicate or completed round after its incomin
 test('round creation racing participant withdrawal never creates unfinished participation for a deleted member', async () => {
   const fixture = await group()
   const outcomes = await Promise.allSettled([
-    createRound(fixture.owner, uuidV7(), fixture.groupId, { name: '탈퇴와 경합', currency: 'KRW', participantIds: [fixture.owner.userId, fixture.participant.userId] }),
+    createRound(fixture.owner, uuidV7(), fixture.groupId, { name: '탈퇴와 경합', participantIds: [fixture.owner.userId, fixture.participant.userId] }),
     withdrawAccount(fixture.participant),
   ])
   assert.equal(outcomes.filter(outcome => outcome.status === 'fulfilled').length, 1)
@@ -401,8 +401,8 @@ test('withdrawal checks unfinished participation after waiting for a round creat
     }
     // Commit a new round while withdrawal waits: its unfinished check must run after the lock.
     const now = currentTimestamp()
-    await gate.query(`INSERT INTO rounds(id,group_id,creator_id,name,currency,status,version,created_at)
-      VALUES($1,$2,$3,'락 대기 중 생성','KRW','RECORDING',1,$4)`, [roundId, fixture.groupId, fixture.owner.userId, now])
+    await gate.query(`INSERT INTO rounds(id,group_id,creator_id,name,status,version,created_at)
+      VALUES($1,$2,$3,'락 대기 중 생성','RECORDING',1,$4)`, [roundId, fixture.groupId, fixture.owner.userId, now])
     for (const actor of [fixture.owner, fixture.participant]) await gate.query(`
       INSERT INTO round_members(round_id,user_id,display_name_snapshot,joined_at) VALUES($1,$2,'경합 검증',$3)`, [roundId, actor.userId, now])
     await gate.query('COMMIT')
@@ -433,7 +433,7 @@ test('round creation waits for the common lock and validates committed departure
       held = true
       await gate.query('SELECT pg_advisory_xact_lock(1684106607)')
       creation = createRound(fixture.owner, uuidV7(), fixture.groupId, {
-        name: '락 대기 후 상태 확인', currency: 'KRW', participantIds: [fixture.owner.userId, fixture.participant.userId],
+        name: '락 대기 후 상태 확인', participantIds: [fixture.owner.userId, fixture.participant.userId],
       }).then(result => ({ result }), error => ({ error }))
       const deadline = Date.now() + 4000
       while (true) {
@@ -650,7 +650,7 @@ test('expense PATCH invalidates already-read writes and rechecks a losing condit
       assert.equal(current.version, edited.version)
       assert.equal(current.expenses.length, 1)
       assert.equal(current.expenses[0].description, '먼저 저장한 수정')
-      assert.equal(current.totalMinor, '4')
+      assert.equal(current.totals[0]?.totalMinor, '4')
       assert.ok(current.expenses[0].shares.every(share => share.amountMinor === null))
       assert.equal((await inspect(client => client.query('SELECT 1 FROM mutation_requests WHERE request_key=$1', [olderKey]))).rowCount, 0)
     } finally { resume(); connectionMock.mock.restore(); await older; restoreQuery?.() }
@@ -685,7 +685,7 @@ test('confirm holds the shared lock until commit and blocks expense creation/upd
   try {
     await paused
     competing = Promise.allSettled([
-      saveExpense(fixture.owner, key(), fixture.roundId, { description: '대기 중 추가', amount: '5', payerId: fixture.owner.userId, splitMode: 'ALL', ...body }),
+      saveExpense(fixture.owner, key(), fixture.roundId, { currency: 'KRW', description: '대기 중 추가', amount: '5', payerId: fixture.owner.userId, splitMode: 'ALL', ...body }),
       saveExpense(fixture.participant, key(), fixture.roundId, { description: '대기 중 수정', ...body }, fixture.expenseId),
       roundCommand(fixture.owner, requestKey, fixture.roundId, 'confirm', body),
     ])

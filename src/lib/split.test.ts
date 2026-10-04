@@ -169,3 +169,34 @@ test('invalid inputs cannot create incomplete or duplicate ledgers', () => {
     assert.throws(() => finalizeSettlement([expense('A', '1', ['A', 'B'])], ['A', 'B'], draw), /invalid_draw/)
   }
 })
+
+test('multiple currencies never offset balances, transfers or pending remainder units', async () => {
+  const { finalizeCurrencySettlement, previewCurrencySettlement } = await import('../Domain/Settle/Shared/split.ts')
+  const expenses = [
+    { id: 'krw', currency: 'KRW' as const, payerId: 'B', amountMinor: '1001', participantIds: ['A', 'B'] },
+    { id: 'jpy', currency: 'JPY' as const, payerId: 'A', amountMinor: '201', participantIds: ['A', 'B'] },
+    { id: 'usd', currency: 'USD' as const, payerId: 'B', amountMinor: '31', participantIds: ['A', 'B'] },
+  ]
+  const preview = previewCurrencySettlement(expenses, ['A', 'B'])
+  assert.deepEqual(preview.pendingRemainders, [
+    { currency: 'JPY', amountMinor: '1' }, { currency: 'KRW', amountMinor: '1' }, { currency: 'USD', amountMinor: '1' },
+  ])
+  assert.deepEqual(preview.transfers, [
+    { currency: 'JPY', senderId: 'B', receiverId: 'A', amountMinor: '100' },
+    { currency: 'KRW', senderId: 'A', receiverId: 'B', amountMinor: '500' },
+    { currency: 'USD', senderId: 'A', receiverId: 'B', amountMinor: '15' },
+  ])
+  const final = finalizeCurrencySettlement(expenses, ['A', 'B'], () => 0)
+  for (const currency of ['KRW', 'JPY', 'USD']) {
+    const balances = final.balances.filter(balance => balance.currency === currency)
+    assert.equal(balances.reduce((sum, balance) => sum + BigInt(balance.balanceMinor), 0n), 0n)
+    for (const balance of balances) {
+      const transfers = final.transfers.filter(transfer => transfer.currency === currency)
+      const sent = transfers.filter(transfer => transfer.senderId === balance.userId).reduce((sum, transfer) => sum + BigInt(transfer.amountMinor), 0n)
+      const received = transfers.filter(transfer => transfer.receiverId === balance.userId).reduce((sum, transfer) => sum + BigInt(transfer.amountMinor), 0n)
+      assert.equal(sent - received, BigInt(balance.balanceMinor))
+    }
+  }
+  assert.throws(() => finalizeCurrencySettlement([...expenses, ...expenses], ['A', 'B']), /invalid_expenses/)
+  assert.throws(() => finalizeCurrencySettlement(['KRW', 'JPY', 'USD', 'EUR', 'CNY', 'THB'].map((currency, index) => ({ ...expenses[0], id: String(index), currency: currency as 'KRW' })), ['A', 'B']), /round_currency_limit_exceeded/)
+})

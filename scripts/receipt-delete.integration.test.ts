@@ -39,8 +39,8 @@ test('receipt deletion uses AUTH, authorized context and one atomic deletion wit
     for (const actor of [owner, author]) await acceptInvite(actor, key(), invite.sharePath!.split('/').at(-1)!)
     const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#fff' } }).png().toBuffer()
     const fixture = async () => {
-      const round = await createRound(owner, uuidV7(), group.id, { name: '삭제 검증 회차', currency: 'KRW', participantIds: [owner.userId, author.userId, groupOwner.userId] })
-      const expense = await saveExpense(author, key(), round.id, { description: '삭제 검증 지출', amount: '10', payerId: author.userId, splitMode: 'ALL', expectedVersion: round.version })
+      const round = await createRound(owner, uuidV7(), group.id, { name: '삭제 검증 회차', participantIds: [owner.userId, author.userId, groupOwner.userId] })
+      const expense = await saveExpense(author, key(), round.id, { currency: 'KRW', description: '삭제 검증 지출', amount: '10', payerId: author.userId, splitMode: 'ALL', expectedVersion: round.version })
       const receipt = await addReceipt(author, key(), round.id, expense.id, expense.version!, bytes, 'image/png')
       const objectKey = (await db.query('SELECT object_key FROM expense_receipts WHERE id=$1', [receipt.id])).rows[0].object_key
       return { round, expense, receipt, objectKey }

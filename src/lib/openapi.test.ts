@@ -120,18 +120,21 @@ test('OpenAPI component references resolve and financial privacy rules remain ex
   assert.deepEqual(openApiDocument.components.schemas.Currency.enum, CURRENCY_CODES)
 })
 
-test('currency is required on round creation and absent from groups and invitation previews', () => {
+test('currency is required on expenses and absent on round creation and absent from groups and invitation previews', () => {
   const groupInput = paths['/api/groups'].post.requestBody!.content['application/json'].schema as DocumentedSchema
   assert.deepEqual(groupInput.required, ['name'])
   assert.deepEqual(Object.keys(groupInput.properties!), ['name'])
   assert.equal(groupInput.additionalProperties, false)
 
   const roundInput = paths['/api/groups/{groupId}/rounds'].post.requestBody!.content['application/json'].schema as DocumentedSchema
-  assert.deepEqual(roundInput.required, ['name', 'currency', 'participantIds'])
-  assert.deepEqual(roundInput.properties!.currency.enum, CURRENCY_CODES)
+  assert.deepEqual(roundInput.required, ['name', 'participantIds'])
+  assert.equal('currency' in roundInput.properties!, false)
+  const expenseInput = paths['/api/rounds/{roundId}/expenses'].post.requestBody!.content['application/json'].schema as DocumentedSchema
+  assert.ok(expenseInput.required?.includes('currency'))
+  assert.deepEqual(expenseInput.properties!.currency.enum, CURRENCY_CODES)
   assert.equal(roundInput.additionalProperties, false)
-  assert.match(paths['/api/groups/{groupId}/rounds'].post.description, /같은 모임에서도 회차마다 다른 통화/)
-  assert.match(paths['/api/groups/{groupId}/rounds'].post.description, /생성 후 통화는 변경할 수 없고 과거 회차의 통화는 보존/)
+  assert.match(paths['/api/groups/{groupId}/rounds'].post.description, /각 지출에서 지원 통화를 선택/)
+  assert.match(paths['/api/groups/{groupId}/rounds'].post.description, /한 회차에 최대 5개 통화/)
 
   for (const name of ['Group', 'GroupDetail'] as const) {
     const schema = openApiDocument.components.schemas[name] as DocumentedSchema
@@ -144,7 +147,8 @@ test('currency is required on round creation and absent from groups and invitati
   assert.equal(roundInput.properties!.participantIds.maxItems, 10)
   assert.match(paths['/api/invites/{token}/accept'].post.description, /group_member_limit_exceeded/)
   const round = openApiDocument.components.schemas.Round as DocumentedSchema
-  assert.deepEqual(round.properties!.currency.enum, CURRENCY_CODES)
+  assert.equal('currency' in round.properties!, false)
+  assert.equal(round.properties!.totals.maxItems, 5)
 })
 
 test('round lists document group and round name search', () => {
