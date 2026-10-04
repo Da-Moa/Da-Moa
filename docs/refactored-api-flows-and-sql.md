@@ -1223,7 +1223,7 @@ Settle 분리 검증 결과(2026-10-03): `npm test` **93개**, 격리된 로컬 
 
 ### Auth HTTP·native 경계
 
-기존 카카오 로그인/콜백·access-token·refresh·logout·test-login URL은 Auth 공개 Controller에 위임한다. JWT/OIDC 구현은 auth-util, 회원 상태 인증은 AuthorizationService, 갱신 목적·만료 정책은 AuthService, 쿠키 발급/삭제는 AuthCookies가 소유한다. User 온보딩·탈퇴는 공개 Auth 쿠키 어댑터를 호출한다. 기존 상태 없는 JWT 계약과 SQL 수는 유지한다.
+기존 카카오 로그인/콜백·access-token·refresh·logout·test-login URL은 Auth 공개 Controller에 위임한다. JWT/OIDC 구현은 auth-util, 회원 상태 인증은 AuthorizationService, 갱신 목적·만료 정책은 AuthService, 쿠키 발급/삭제는 AuthCookies가 소유한다. User 온보딩·탈퇴는 공개 Auth 쿠키 어댑터를 호출한다. 기존 상태 없는 JWT 계약은 유지하며, 이후 카카오 회원 생성/조회 SQL 개선은 10절에 기록한다.
 
 별도 Node WebSocket 서버는 Auth `Backend/native.ts`로 JWT/회원 상태를 확인하고 User `Backend/native.ts`를 통해 User Repository의 SELECT를 실행한다. 이 네이티브 모듈은 Next 전용 런타임에 의존하지 않으며 경계 테스트는 공개 진입점과 클라이언트 접근 금지를 함께 검사한다.
 
@@ -1238,3 +1238,20 @@ Settle 분리 검증 결과(2026-10-03): `npm test` **93개**, 격리된 로컬 
 `npm test`, 격리된 로컬 test DB·MinIO의 `npm run test:integration`, `npm run build`를 실행한다. `scripts/browser-check.mjs --refresh-only`는 초대 폐기 직접 GET 0/웹소켓 GET 1, 닫힌 dialog GET 0/재개방 GET 1, 수취 확인의 무관한 목록 GET 0, 복귀 이벤트 정산 GET 1, 실패한 이탈 뒤 구독 복구, DELETE 응답 1초 지연 중 모임/회차 상세 GET 0을 검증한다.
 
 검증 결과(2026-10-05): `npm test` **98개**, 전용 로컬 테스트 PostgreSQL·MinIO의 `npm run test:integration` **73개**, `npm run build`가 통과했다. 실제 Chrome의 전체 회귀 검사와 `--refresh-only` **6개**, `--expenses-only` **12개**, `--account-only` **1개** 시나리오도 통과했다. 전송은 나머지 없는 2명·지출 1건에서 **18 SQL**, 멤버/전체 지출 SELECT 각각 **1회**, 알림 대상 추가 SQL **0회**다. 계좌 변경은 본인 me와 해당 KRW 송금자의 settlement 키만 발행하며 AUTH·UPDATE·대상 SELECT까지 **3 SQL**이다. 전용 테스트 서버·Chrome은 종료했으며 실제 카카오 외부 인증은 이번 검증 대상이 아니다.
+
+## 10. 카카오 회원 생성·조회 SQL 1회 (2026-10-05)
+
+GET /api/auth/kakao → 카카오 인증 → GET /auth/v1/kakao → KakaoCallbackController의 state·PKCE·OIDC 검증 → AuthService.signInKakao() → User 공개 findOrCreateKakaoUser() → 토큰 발급·쿠키 설정 → /auth/complete.
+
+1. 인증한 카카오 UID를 받아 공용 풀 연결만 확보한다. 명시적 BEGIN·COMMIT·ROLLBACK·SET·advisory lock·FOR UPDATE/SHARE는 실행하지 않는다.
+2. 단일 CTE에서 existing은 `provider='kakao' AND provider_subject=$2`로 기존 회원의 id·deleted_at·onboarding_completed_at을 읽는다. inserted는 `INSERT … SELECT … WHERE NOT EXISTS (SELECT 1 FROM existing)`로 없을 때만 생성하고 같은 세 컬럼을 RETURNING한다. existing과 inserted를 UNION ALL하여 로그인에 필요한 회원 상태를 SQL 1회에 반환한다.
+3. 기존 `UNIQUE(provider, provider_subject)`와 `ON CONFLICT … DO NOTHING`으로 동시 첫 가입의 중복 생성을 막는다. 다른 provider의 같은 UID는 별도 회원이다. 기존 회원은 프로필·updated_at·계좌·가입/탈퇴 상태를 갱신하지 않는다.
+4. 반환한 상태로 신규/가입 전/탈퇴 회원은 onboarding, 가입 완료·미탈퇴 회원은 app JWT를 발급한다. 토큰 발급은 DB 세션을 생성하거나 조회하지 않는다. 실제 API 접근 시 기존 회원 상태 인증을 유지하여 로그인과 탈퇴가 경합해도 탈퇴 회원은 앱 API를 사용할 수 없다.
+5. 동시 INSERT가 스냅샷 밖에서 먼저 커밋되면 DO NOTHING으로 반환 행이 없을 수 있다. 이 경우 추가 SELECT·자동 SQL 재시도 없이 `sign_in_conflict`로 종료하고 기존 콜백의 `error=failed` 로그인 재시도 안내로 돌아간다. 다시 로그인하면 같은 회원을 SQL 1회로 반환한다. [PostgreSQL Read Committed 문서](https://www.postgresql.org/docs/17/transaction-iso.html#XACT-READ-COMMITTED)의 DO NOTHING 스냅샷 동작을 따른다.
+6. 성공·실패 모두 finally에서 DB 연결을 풀에 반환한다. 기존 테스트 계정 로그인 경로는 별도 구현이다.
+
+카카오 회원 생성/조회 SQL: 기존 **BEGIN → advisory transaction lock → UPSERT → COMMIT = 4회**에서 **조건부 INSERT와 기존 회원 조회 CTE = 1회**로 변경했다. 신규·기존·탈퇴 회원·동시 첫 가입 충돌 모두 1회이고, 빈 UID는 SQL 0회다. 카카오 HTTP 호출, 로그인 완료 후 `/api/me` 조회와 WebSocket 회원 인증은 별도로 센다. DB 내부 문장 원자성과 UNIQUE 충돌 대기는 존재하며 애플리케이션이 명시적으로 트랜잭션이나 락을 획득하지 않는다.
+
+[scripts/kakao-signin.integration.test.ts](../scripts/kakao-signin.integration.test.ts)는 실제 DB SQL 로그로 신규/기존/탈퇴 회원의 SQL 1회, 프로필·시각 보존, provider와 UID 조합 구분, 공통 advisory lock 보유 중 로그인 진행, 기존 회원 동시 로그인, 동시 첫 가입 충돌의 단일 생성·재시도 및 연결 반환을 검증한다. 기존 auth 통합 테스트는 온보딩·재가입·탈퇴 경합·JWT 계약을 검증한다. 실제 카카오 외부 인증은 자동 테스트의 검증 범위에 포함하지 않는다.
+
+검증 결과(2026-10-05): `npm test` **98개**, 전용 로컬 test DB·MinIO 및 개발 서버 복사본의 `npm run test:integration` **74개**, `npm run build` 통과. 신규/기존/탈퇴 회원·동시 첫 가입 충돌의 SQL **1회**, 명시적 트랜잭션·락 미실행, 기존 회원 행 보존, 공통 락과 무관한 로그인 진행을 실제 PostgreSQL에서 확인했다.

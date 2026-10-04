@@ -75,8 +75,10 @@ export function getMe(access: AccessToken | null): Promise<Account> {
   })
 }
 
-export async function upsertKakaoUser(client: Database, providerSubject: string, profile: KakaoProfile, now: number): Promise<SignInUserDTO> {
-  const row = await repository.upsertKakaoUser(client, providerSubject, profile, now)
+export async function findOrCreateKakaoUser(client: Database, providerSubject: string, profile: KakaoProfile, now: number): Promise<SignInUserDTO> {
+  const row = await repository.findOrCreateKakaoUser(client, providerSubject, profile, now)
+  // A concurrent first INSERT can win outside this statement's read snapshot.
+  if (!row) throw new AppError(409, 'sign_in_conflict', '같은 계정의 가입이 처리 중이에요. 로그인을 다시 시도해 주세요')
   return { id: row.id, deletedAt: row.deleted_at === null ? null : Number(row.deleted_at), onboardingCompletedAt: row.onboarding_completed_at === null ? null : Number(row.onboarding_completed_at) }
 }
 
