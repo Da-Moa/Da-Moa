@@ -1141,15 +1141,19 @@ SQL: AUTH **1회** + 미완료 수취인/권한/알림/멱등 통합 조회 **1�
 
 ### S19. POST /api/rounds/{roundId}/expenses/{expenseId}/receipts — 영수증 추가
 
-ExpenseCard.upload() → POST multipart → Node Proxy → JWT Guard → API Route Settle 분배 → SettleController의 file·expectedVersion → SettleService.addReceipt() → 사전 읽기·AVIF 변환·MinIO 저장·W 재검증 → MutationResult → 영수증 대화상자 종료·상세 재조회.
+ExpenseCard.upload() → Nginx 본문 제한 → POST multipart → Node Proxy/JWT Guard → SettleController → SettleService.addReceipt() → AUTH → 입력·확장자 확인 → AVIF 변환 → MinIO PUT → 조건부 저장 단일 SQL → MutationResult → 대화상자 종료 → WebSocket invalidation으로 상세 재조회.
 
-1. Controller는 동일 출처·file 한 개·허용 폼 키(file,expectedVersion)를 확인한다. 파일 원본 SHA-256·경로·버전·claimed type을 멱등 payload로 사용한다.
-2. 사전 읽기: BEGIN → AUTH → IDEM-READ → S-ROUND → S-EXPENSE → [S-ACTIVE-MEMBER] → COMMIT. 편집 권한·RECORDING·expectedVersion을 확인한다. 기존 성공이면 즉시 재생하여 변환/업로드를 반복하지 않는다.
-3. Global FileCompressor가 실제 JPEG/PNG/WebP 포맷과 claimed type을 비교하고 autoOrient().avif()로 변환한다. Global MinIOUtil이 비공개 버킷의 `receipts/{userId}/{key}.avif`에 저장한다. 이미지 작업은 DB 쓰기 락 밖에서 수행한다.
-4. W → S-ROUND → S-EXPENSE → [S-ACTIVE-MEMBER]로 현재 상태·권한·버전을 다시 검사 → S-BUMP로 버전 확보 → S-RECEIPT-INSERT로 Object Key·MIME·크기·해시 저장 → IDEM-SAVE → COMMIT.
-5. 변환 타입 오류는 415, 변환/저장 불가는 503, 사전 검증 이후 잠긴 회차는 DB 재검사에서 거절한다. 객체 저장 후 DB 실패로 남는 객체의 자동 정리는 현재 제공하지 않는다(기존 ponytail 한계 유지).
+1. 운영 Nginx는 영수증 경로에 `client_max_body_size 10m`과 `proxy_request_buffering on`을 적용한다. 파일·폼 필드를 포함한 요청 본문 전체가 10 MiB를 초과하면 앱에 전달하기 전에 413으로 거절한다. 앱에 별도 바이트 제한은 없다.
+2. Service는 공용 연결에서 `requireAccount()`로 **AUTH 회원 조회 1회**를 수행한다. Controller의 multipart reader는 그 뒤에 실행하므로 탈퇴/미가입 사용자에게는 파일을 해석하지 않는다. 파일·expectedVersion 각 한 개와 허용 폼 키, 버전 형식, 요청 키를 검사한다.
+3. Global FileCompressor는 JPEG/JPG·PNG·WebP 확장자(대소문자 무관)와 claimed MIME·실제 포맷 일치를 확인한다. 픽셀 수 안전장치를 유지하며 `autoOrient().avif()`로 변환한다. 원본 SHA-256·경로·버전·claimed type을 기존 멱등 digest로 사용한다.
+4. Global MinIOUtil은 시도마다 다른 `receipts/{userId}/{receiptId}.avif` 키로 비공개 버킷에 저장하고 **PUT 성공 뒤 객체 키를 반환**한다. 같은 요청의 동시 시도·재시도도 저장된 객체를 덮어쓰지 않는다.
+5. `insertReceipt()`의 단일 CTE SQL은 활성 사용자·회차 참여 이력·지출 존재·RECORDING·작성자/회차 생성자·expectedVersion·기존 성공을 검사한다. `UPDATE rounds ... WHERE`로 버전·상태를 조건부 변경하고, 성공한 행에서만 객체 키/MIME/크기/해시 INSERT와 멱등 결과 INSERT를 함께 수행한다. 모두 한 문장으로 자동 커밋하며 일부 실패는 문장 전체가 취소된다. 명시적 트랜잭션·advisory lock은 없다. 회차 UPDATE의 행 잠금 대기 후 상태/버전 조건을 다시 검사하여 먼저 확정·잠긴 회차에는 저장하지 않는다.
+6. 알림 대상도 같은 SQL에 포함한다. 저장 성공에만 확보한 audience로 WebSocket invalidation을 발행하므로 추가 SQL이 없고, 성공 재생은 알림을 발행하지 않는다. 같은 키·본문은 이전 결과를 반환하고 다른 본문은 409 idempotency_conflict다. 동시 요청에서 한 요청이 먼저 버전을 바꾸면 나머지는 stale_round로 거절될 수 있으며 같은 키로 재시도하여 저장 결과를 확인한다.
+7. DB가 저장을 거절하거나 성공을 재생하면 이번 시도의 객체를 삭제한다. PostgreSQL의 명확한 문장 오류도 롤백 후 정리한다. 연결 단절 등 저장 여부가 불명확하면 커밋된 영수증을 지우지 않도록 객체를 보존한다. 객체 삭제 실패/불명확한 저장 결과에는 별도 저장소 점검이 필요하다.
 
-사전 SQL **6 + A회**, 저장 SQL **10 + A회**, 합계 **16 + 2A회**(생성자 16회, 일반 작성자 18회). 이미 성공한 업로드는 BEGIN → AUTH → IDEM-READ → COMMIT = **4회**다. MinIO PUT·AVIF 변환은 SQL 횟수에 포함하지 않는다. 앱 파일 크기 제한을 추가하지 않고 변환기의 픽셀 안전장치를 유지한다.
+정상 저장·성공 재생·권한/상태/버전 거절은 **AUTH 1 + 저장 SQL 1 = 총 2회**다. 입력·확장자·실제 이미지 오류 또는 MinIO PUT 실패는 **AUTH 1회**로 끝나며 인증 토큰 누락은 **0회**다. 재생도 요청한 순서대로 AVIF 변환·PUT 후 마지막 SQL에서 판별한다. 변환·MinIO 작업은 SQL 횟수에 포함하지 않는다.
+
+검증(2026-10-04): `npm test` **96개**, 격리 복사본의 `npm run test:integration` **68개**, `npm run build` 통과. 실제 PostgreSQL SQL 로그와 MinIO 명령으로 AUTH → multipart reader → AVIF PUT → 단일 SQL 순서, 총 2회, 권한/버전 거절·재생 시 이번 객체만 정리, 기존 객체 보존, INSERT 실패 시 버전/영수증 전체 롤백, 회차 잠금 대기 후 저장 거절을 확인했다. 운영 Nginx는 백업·`nginx -t`·reload 후 10 MiB 본문의 앱 도달(403), 10 MiB+1바이트의 Nginx 413을 확인했다. 실제 HTTP 요청은 WebSocket 발행까지 SQL 2회이며 재생은 알림 0회다. 별도 모바일 Chrome 시나리오에서 작성자 업로드·AVIF 응답/미리보기와 POST 직후 GET 0회 → WebSocket 후 상세 GET 1회를 확인했다. 전체 `browser-check.mjs`는 영수증 이전 단계의 지출 삭제 409에서 중단되어 전체 UI 통과로 기록하지 않는다.
 
 ### S20. GET /api/receipts/{receiptId} — 인증된 영수증 이미지 조회
 
@@ -1178,7 +1182,7 @@ SQL: W 6회 + S-ROUND → S-EXPENSE → [S-ACTIVE-MEMBER] → S-BUMP → S-RECEI
 
 회차 생성·지출 생성·지출 수정·지출 삭제·참여자 제외·정산 확정·일반 정산 종료 알림은 저장/통합 조회에서 확보한 참여자 ID를 전달받아 수신자 SQL 0회다. 나머지 일반 변경 후 알림 수신자 조회는 BEGIN → 회차 group_id → round_members → COMMIT = **별도 4회**다. 취소는 S5의 기록 확인 SQL에서 삭제 전 허가된 수신자를 함께 읽으므로 삭제 전후 추가 조회 **0회**이며 성공 재생 시 재발행하지 않는다. 실시간 비활성화 시 모두 SQL 0회다. after() 알림 실패는 이미 저장한 변경을 롤백하지 않는다. 메시지에는 rounds·group-rounds·round·settlement와 필요한 groups/group 키만 넣고 금액·계좌·영수증·초대 토큰은 넣지 않는다.
 
-[scripts/settle-sql.integration.test.ts](../scripts/settle-sql.integration.test.ts)는 실제 PostgreSQL SQL 로그로 생성 4회·UUIDv7 PK·중복 409·동시 중복 단일 성공·세션 락 획득/해제·참여자 저장 실패 원자성·목록 4회·상세 10/11회·지출 생성 6회·생성 입력 오류 AUTH 1회·생성 성공 재생 5회·생성 실패 전체 롤백·같은 키 동시 생성 단일 저장·수정 5회/거절 및 재생 2회/경합 후 재조회 6회·삭제 12회·제외 검토 3회·제외 3회/거절 2회/중복 404·확정 6회/조회 거절 4회/성공 재생 5회·재오픈 10회·나머지 있는 전송 12회·없는 전송 20회·추첨 17회/재추첨 방지 7회·최종 전/후 안내 2회·AUTH/참여 권한 거절 0/1/2회·수취 확인 후 송금 제외·완료 회차/외화 안내 2회·수취 확인 8회·일반 종료·미확인 거절·성공 재생 2회·강제 종료 9회·취소 9회·영수증 생성/조회/삭제 16/4/10회·일반 성공 재생 5회·영수증 재생 4회·종료 후 편집 거절 ROLLBACK을 검증한다. 숫자는 해당 테스트의 참여자·분담금·송금 행 수 기준이며 위 계산식이 일반 규칙이다.
+[scripts/settle-sql.integration.test.ts](../scripts/settle-sql.integration.test.ts)는 실제 PostgreSQL SQL 로그로 생성 4회·UUIDv7 PK·중복 409·동시 중복 단일 성공·세션 락 획득/해제·참여자 저장 실패 원자성·목록 4회·상세 10/11회·지출 생성 6회·생성 입력 오류 AUTH 1회·생성 성공 재생 5회·생성 실패 전체 롤백·같은 키 동시 생성 단일 저장·수정 5회/거절 및 재생 2회/경합 후 재조회 6회·삭제 12회·제외 검토 3회·제외 3회/거절 2회/중복 404·확정 6회/조회 거절 4회/성공 재생 5회·재오픈 10회·나머지 있는 전송 12회·없는 전송 20회·추첨 17회/재추첨 방지 7회·최종 전/후 안내 2회·AUTH/참여 권한 거절 0/1/2회·수취 확인 후 송금 제외·완료 회차/외화 안내 2회·수취 확인 8회·일반 종료·미확인 거절·성공 재생 2회·강제 종료 9회·취소 9회·영수증 생성/조회/삭제 2/4/10회·일반 성공 재생 5회·영수증 재생 2회·종료 후 편집 거절 ROLLBACK을 검증한다. 숫자는 해당 테스트의 참여자·분담금·송금 행 수 기준이며 위 계산식이 일반 규칙이다.
 
 기존 [settlement.integration.test.ts](../scripts/settlement.integration.test.ts)·[concurrency.integration.test.ts](../scripts/concurrency.integration.test.ts)·[receipt-migration.integration.test.ts](../scripts/receipt-migration.integration.test.ts)·[routes.integration.test.ts](../scripts/routes.integration.test.ts)는 Settle 공개 진입점을 통해 권한·과거 조회·정확한 통화/금액·CUSTOM 합계·멱등성·버전 충돌·추첨 중간 실패 취소·상태 전이 경합·사전 검사 후 업로드 경합·최신 수취 계좌 제한·기존 BYTEA 영수증을 검증한다. [domain-boundaries.test.ts](../src/lib/domain-boundaries.test.ts)는 Frontend/Shared→Backend 금지, 서버 전용 표시, 다른 도메인 내부 import 금지와 Controller/Service의 SQL 미포함을 검사한다. [settle.test.ts](../src/lib/settle.test.ts)는 경로 분배·출처·JSON/multipart 오류를 검사한다.
 

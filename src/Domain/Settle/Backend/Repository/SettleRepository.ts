@@ -2,7 +2,7 @@ import 'server-only'
 import type { Database } from '../../../../Global/Util/Backend'
 import { roundCreationCandidatesSql } from '../../../Group/Backend'
 import type { Currency, Expense, MutationResult, finalizeSettlement } from '../../Shared'
-import type { RoundRow, RoundDetailRow, RoundConfirmationRow, RoundCompletionRow, RoundForceCompletionRow, ExpenseUpdateRow, ExpenseDeletionRow, MemberExclusionRow, MemberRow, ExpenseRow, ShareRow, ReceiptRow, SettlementExpenseRow, SettlementCheckRow, SettlementRow } from '../DAO/SettleDAO'
+import type { RoundRow, RoundDetailRow, RoundConfirmationRow, RoundCompletionRow, RoundForceCompletionRow, ExpenseUpdateRow, ExpenseDeletionRow, MemberExclusionRow, MemberRow, ExpenseRow, ShareRow, ReceiptRow, ReceiptCreationRow, SettlementExpenseRow, SettlementCheckRow, SettlementRow } from '../DAO/SettleDAO'
 
 export function findRound(client: Database, id: string, userId: string) {
   return client.query<RoundRow>(`SELECT r.*,g.name AS group_name,g.creator_id AS group_creator_id,
@@ -533,8 +533,36 @@ export function findSettlement(client: Database, roundId: string, userId: string
     ) incoming ON true WHERE r.id=$1`, [roundId, userId])
 }
 
-export function insertReceipt(client: Database, id: string, expenseId: string, userId: string, mimeType: string, byteSize: number, sha256: string, objectKey: string, now: number) {
-  return client.query('INSERT INTO expense_receipts(id,expense_id,uploaded_by,mime_type,byte_size,sha256,object_key,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [id, expenseId, userId, mimeType, byteSize, sha256, objectKey, now])
+export async function insertReceipt(client: Database, roundId: string, expenseId: string, userId: string, key: string, digest: string, expectedVersion: number, id: string, mimeType: string, byteSize: number, sha256: string, objectKey: string, now: number) {
+  return (await client.query<ReceiptCreationRow>(`WITH actor AS (
+    SELECT EXISTS(SELECT 1 FROM users WHERE id=$3 AND deleted_at IS NULL AND onboarding_completed_at IS NOT NULL) AS active
+  ), context AS MATERIALIZED (
+    SELECT r.*,(r.creator_id=$3) AS is_creator,e.id AS expense_id,e.author_id,viewer.excluded_at AS viewer_excluded_at,
+      ARRAY(SELECT user_id FROM round_members WHERE round_id=r.id) AS user_ids
+    FROM rounds r JOIN round_members viewer ON viewer.round_id=r.id AND viewer.user_id=$3
+    LEFT JOIN expenses e ON e.round_id=r.id AND e.id=$2 WHERE r.id=$1
+  ), saved AS (
+    SELECT request_digest,response_metadata FROM mutation_requests WHERE actor_id=$3 AND operation='receipt.create' AND request_key=$4
+  ), changed AS (
+    UPDATE rounds r SET version=r.version+1
+    WHERE r.id=$1 AND r.status='RECORDING' AND r.completed_at IS NULL AND r.version=$6
+      AND (SELECT active FROM actor) AND NOT EXISTS(SELECT 1 FROM saved)
+      AND EXISTS(SELECT 1 FROM expenses e JOIN round_members viewer ON viewer.round_id=e.round_id AND viewer.user_id=$3
+        WHERE e.id=$2 AND e.round_id=r.id AND (r.creator_id=$3 OR (viewer.excluded_at IS NULL AND e.author_id=$3)))
+    RETURNING r.id,r.status,r.version
+  ), inserted AS (
+    INSERT INTO expense_receipts(id,expense_id,uploaded_by,mime_type,byte_size,sha256,object_key,created_at)
+    SELECT $7,$2,$3,$8,$9,$10,$11,$12 FROM changed RETURNING id
+  ), recorded AS (
+    INSERT INTO mutation_requests(actor_id,operation,request_key,request_digest,resource_id,response_metadata,created_at)
+    SELECT $3,'receipt.create',$4,$5,inserted.id,
+      jsonb_build_object('id',inserted.id,'roundId',changed.id,'status',changed.status,'version',changed.version),$12
+    FROM inserted CROSS JOIN changed RETURNING request_digest,response_metadata
+  ) SELECT context.*,actor.active AS actor_active,
+    COALESCE(recorded.request_digest,saved.request_digest) AS request_digest,
+    COALESCE(recorded.response_metadata,saved.response_metadata) AS response_metadata,EXISTS(SELECT 1 FROM inserted) AS inserted
+    FROM actor LEFT JOIN context ON true LEFT JOIN saved ON true LEFT JOIN recorded ON true`,
+  [roundId, expenseId, userId, key, digest, expectedVersion, id, mimeType, byteSize, sha256, objectKey, now])).rows[0]
 }
 
 export function deleteReceipt(client: Database, receiptId: string, expenseId: string) {

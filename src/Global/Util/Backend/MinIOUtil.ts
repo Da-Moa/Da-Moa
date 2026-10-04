@@ -13,7 +13,10 @@ function config() {
 
 export async function putReceipt(key: string, content: Uint8Array, mimeType: string) {
   const { bucket, client } = config()
-  try { await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: content, ContentType: mimeType })) }
+  try {
+    await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: content, ContentType: mimeType }))
+    return key
+  }
   catch (error) {
     console.error('receipt_upload_failed', error)
     throw new AppError(503, 'storage_unavailable', '영수증을 저장할 수 없어요. 같은 요청 키로 다시 시도해 주세요')

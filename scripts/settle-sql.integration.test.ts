@@ -39,7 +39,11 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       statements = []
       const result = await work()
       assert.equal(statements.length, count, statements.join('\n'))
-      if (write === 'force-complete') {
+      if (write === 'receipt') {
+        assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
+        if (count) assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
+        if (count > 1) assert.match(statements[1], /UPDATE rounds.*INSERT INTO expense_receipts.*INSERT INTO mutation_requests/)
+      } else if (write === 'force-complete') {
         assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
         if (count) assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
         if (count > 1) assert.match(statements[1], /DISTINCT receiver_id.*received_at IS NULL.*AS pending_user_ids.*AS user_ids.*operation = 'round.force-complete'/)
@@ -448,9 +452,9 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       version = deleted.version!
       const receiptKey = key(), receiptVersion = version
       const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#ffffff' } }).png().toBuffer()
-      const receipt = await trace(16, 'receipt', () => addReceipt(a, receiptKey, round.id, expense.id, receiptVersion, bytes, 'image/png'))
+      const receipt = await trace(2, 'receipt', () => addReceipt(a, receiptKey, round.id, expense.id, receiptVersion, bytes, 'image/png'))
       version = receipt.version!
-      await trace(4, false, () => addReceipt(a, receiptKey, round.id, expense.id, receiptVersion, bytes, 'image/png'))
+      await trace(2, 'receipt', () => addReceipt(a, receiptKey, round.id, expense.id, receiptVersion, bytes, 'image/png'))
       const stored = await trace(4, false, () => getReceipt(b, receipt.id))
       assert.equal(stored.mimeType, 'image/avif')
       const removed = await trace(10, true, () => removeReceipt(a, key(), round.id, expense.id, receipt.id, { expectedVersion: version }))

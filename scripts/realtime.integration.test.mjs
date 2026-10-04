@@ -6,6 +6,7 @@ import { once } from 'node:events'
 import { createServer } from 'node:net'
 import { test } from 'node:test'
 import WebSocket from 'ws'
+import sharp from 'sharp'
 import { createDatabaseClient } from '../src/lib/db.ts'
 import { TEST_ACCOUNTS } from '../src/lib/test-accounts.ts'
 import { applyMigrations } from './migrations.mjs'
@@ -241,7 +242,47 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     assert.deepEqual((await expenseReplay.json()).data, savedExpense)
     await new Promise(resolve => setTimeout(resolve, 250))
     assert.equal((output.slice(expenseReplayOutput).match(/SQL:/g) ?? []).length, 5)
-    let expenseVersion = savedExpense.version
+    const receiptTicket = randomUUID()
+    const receiptHeaders = { origin, authorization: `Bearer ${mine.accessToken}`, 'idempotency-key': receiptTicket }
+    const receiptForm = new FormData()
+    const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#fff' } }).png().toBuffer()
+    receiptForm.set('file', new File([png], 'receipt.PNG', { type: 'image/png' }))
+    receiptForm.set('expectedVersion', String(savedExpense.version))
+    const receiptPath = `${origin}/api/rounds/${expenseRoundId}/expenses/${savedExpense.id}/receipts`
+    const receiptMessages = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
+    const receiptOutput = output.length
+    const receiptResponse = await fetch(receiptPath, { method: 'POST', headers: receiptHeaders, body: receiptForm })
+    assert.equal(receiptResponse.status, 200, await receiptResponse.clone().text())
+    const savedReceipt = (await receiptResponse.json()).data
+    for (const [bytes] of await Promise.all(receiptMessages)) assert.deepEqual(JSON.parse(bytes.toString()), {
+      type: 'invalidate', keys: ['rounds', `group-rounds:${groupId}`, `round:${expenseRoundId}`, `settlement:${expenseRoundId}`],
+    })
+    const receiptSql = output.slice(receiptOutput).split('SQL:').slice(1).map(sql => sql.trim())
+    assert.equal(receiptSql.length, 2, 'receipt upload including WebSocket publication uses two SQL calls')
+    assert.match(receiptSql[0], /FROM\s+users/)
+    assert.match(receiptSql[1], /UPDATE\s+rounds[\s\S]*INSERT INTO\s+expense_receipts[\s\S]*INSERT INTO\s+mutation_requests/)
+    assert.ok(receiptSql.every(sql => !/\b(BEGIN|COMMIT|ROLLBACK)\b|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
+    let receiptReplayPublished = false
+    const onReceiptReplay = () => { receiptReplayPublished = true }
+    mine.socket.on('message', onReceiptReplay)
+    other.socket.on('message', onReceiptReplay)
+    try {
+      const replayOutput = output.length
+      const replay = await fetch(receiptPath, { method: 'POST', headers: receiptHeaders, body: receiptForm })
+      assert.equal(replay.status, 200)
+      assert.deepEqual((await replay.json()).data, savedReceipt)
+      await new Promise(resolve => setTimeout(resolve, 250))
+      assert.equal(receiptReplayPublished, false)
+      assert.equal((output.slice(replayOutput).match(/SQL:/g) ?? []).length, 2)
+    } finally {
+      mine.socket.off('message', onReceiptReplay)
+      other.socket.off('message', onReceiptReplay)
+    }
+    const authOutput = output.length
+    const inactiveUpload = await fetch(receiptPath, { method: 'POST', headers: { origin, authorization: `Bearer ${createAccessToken(randomUUID(), 'session', secret)}` }, body: '{invalid form' })
+    assert.equal(inactiveUpload.status, 401, 'account lookup precedes multipart validation')
+    assert.equal((output.slice(authOutput).match(/SQL:/g) ?? []).length, 1)
+    let expenseVersion = savedReceipt.version
     const confirmHeaders = { ...roundHeaders, 'idempotency-key': randomUUID() }
     const confirmBody = JSON.stringify({ expectedVersion: expenseVersion })
     const confirmMessages = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))

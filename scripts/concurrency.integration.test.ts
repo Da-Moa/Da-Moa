@@ -505,7 +505,7 @@ test('simultaneous invite acceptance never exceeds ten active group members', as
   assert.equal(counts.accepted_candidates, 1)
 })
 
-test('an upload already validated before a concurrent round lock is rejected after acquiring the write lock', async () => {
+test('receipt storage rejects a concurrent round lock after its conditional UPDATE waits', async () => {
   const fixture = await recordingRound()
   const gate = createDatabaseClient(testUrl!)
   const requestKey = key()
@@ -515,7 +515,7 @@ test('an upload already validated before a concurrent round lock is rejected aft
     await gate.connect()
     await gate.query('BEGIN')
     gateHeld = true
-    await gate.query('SELECT pg_advisory_xact_lock(1684106607)')
+    await gate.query('SELECT id FROM rounds WHERE id=$1 FOR UPDATE', [fixture.roundId])
     upload = addReceipt(fixture.participant, requestKey, fixture.roundId, fixture.expenseId, fixture.version, png, 'image/png')
       .then(result => ({ result }), error => ({ error }))
 
@@ -524,7 +524,7 @@ test('an upload already validated before a concurrent round lock is rejected aft
     while (true) {
       await gate.query('SELECT pg_stat_clear_snapshot()')
       const waiting = await gate.query(`SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid
-        WHERE l.locktype='advisory' AND NOT l.granted AND a.application_name=$1`, [applicationName])
+        WHERE l.locktype='transactionid' AND NOT l.granted AND a.application_name=$1`, [applicationName])
       if (waiting.rowCount) break
       assert.ok(Date.now() < deadline, 'upload did not reach its PostgreSQL write-lock wait')
       await sleep(20)
@@ -539,7 +539,7 @@ test('an upload already validated before a concurrent round lock is rejected aft
 
     const outcome = await upload
     assert.ok(outcome.error instanceof AppError)
-    assert.equal(outcome.error.code, 'invalid_round_state')
+    assert.equal(outcome.error.code, 'stale_round')
     const persisted = await gate.query(`SELECT
       (SELECT COUNT(*)::int FROM expense_receipts WHERE expense_id=$1) AS receipts,
       (SELECT COUNT(*)::int FROM mutation_requests WHERE request_key=$2) AS successful_requests`, [fixture.expenseId, requestKey])

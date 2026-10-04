@@ -350,7 +350,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
         { mimeType: 'image/png', content: await sharp({ create: { width: 2, height: 2, channels: 3, background: '#3f3' } }).png().toBuffer() },
         { mimeType: 'image/webp', content: await sharp({ create: { width: 2, height: 2, channels: 3, background: '#33f' } }).webp().toBuffer() },
       ]
-      await assert.rejects(addReceipt(c, key(), r.id, e.id, e.version!, Buffer.from('<svg/>'), 'image/svg+xml'), code('forbidden'))
+      await assert.rejects(addReceipt(c, key(), r.id, e.id, e.version!, sources[1].content, 'image/png'), code('forbidden'))
       await assert.rejects(addReceipt(b, key(), r.id, e.id, e.version!, Buffer.from('<svg/>'), 'image/svg+xml'), code('unsupported_receipt_type'))
       await assert.rejects(addReceipt(b, key(), r.id, e.id, e.version!, sources[1].content, 'image/jpeg'), code('unsupported_receipt_type'))
       await assert.rejects(addReceipt(b, key(), r.id, e.id, e.version!, sources[0].content.subarray(0, -2), 'image/jpeg'), code('unsupported_receipt_type'))

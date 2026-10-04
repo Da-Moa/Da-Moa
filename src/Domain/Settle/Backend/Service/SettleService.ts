@@ -2,7 +2,7 @@ import 'server-only'
 import { createHash, randomInt, randomUUID } from 'node:crypto'
 import { requireAccount } from '../../../../Global/Auth/Backend'
 import { MAX_GROUP_MEMBERS } from '../../../Group/Shared'
-import { AppError, badInput, withDatabaseConnection, withWriteLock, withWriteTransaction, withReadTransaction, mutationDigest, mutationResult, replayMutation, deleteReceiptObject, putReceipt, readReceipt, convertReceipt, type Database, domainMutation, idsInput, nowSeconds, onlyKeys, pageOf, pagination, textInput, type Identity } from '../../../../Global/Util/Backend'
+import { AppError, badInput, withDatabaseConnection, withWriteLock, withWriteTransaction, withReadTransaction, mutationDigest, mutationResult, deleteReceiptObject, putReceipt, readReceipt, convertReceipt, type Database, domainMutation, idsInput, nowSeconds, onlyKeys, pageOf, pagination, textInput, type Identity } from '../../../../Global/Util/Backend'
 import { CURRENCIES, formatMoney, MAX_EXPENSE_MAJOR, MAX_ROUND_TOTAL_MAJOR, minorLimit, parseAmount, requireCurrency, type Currency, type CreateRoundRequestDTO, type ExpenseRequestDTO, type VersionRequestDTO, type SettlementCheckRequestDTO } from '../../Shared'
 import { calculateBase, finalizeSettlement, previewSettlement, validateCustomShares } from '../../Shared'
 import type { ExclusionCheck, Expense, MutationResult, RoundDetail, RoundMember, RoundStatus, RoundSummary, SettlementDTO, SettlementTransfer } from '../../Shared'
@@ -297,7 +297,7 @@ export async function saveExpense(access: Identity, key: string, roundId: string
   })
 }
 
-function validateExpenseDeletion(round: ExpenseDeletionRow, userId: string, expectedVersion: unknown) {
+function validateEditableExpense(round: Omit<ExpenseDeletionRow, 'actor_active' | 'user_ids' | 'object_keys' | 'request_digest' | 'response_metadata' | 'deleted'>, userId: string, expectedVersion: unknown) {
   if (!round.id || !round.expense_id) throw missing()
   state(round, 'RECORDING')
   if (!round.is_creator && (round.viewer_excluded_at !== null || round.author_id !== userId)) {
@@ -316,7 +316,7 @@ export async function deleteExpense(access: Identity, key: string, roundId: stri
     if (!current.actor_active) throw new AppError(401, 'unauthorized', '로그인이 필요합니다')
     const result = mutationResult<MutationResult>(current, digest)
     if (!result) {
-      validateExpenseDeletion(current, userId, body.expectedVersion)
+      validateEditableExpense(current, userId, body.expectedVersion)
       throw new AppError(409, 'stale_round', '다른 변경이 먼저 저장됐어요. 최신 내역을 확인해 주세요')
     }
     if (current.deleted) {
@@ -330,7 +330,7 @@ export async function deleteExpense(access: Identity, key: string, roundId: stri
     digest = mutationDigest(key, { roundId, expenseId, ...body })
     round = (await repository.findExpenseDeletion(client, roundId, expenseId, userId, key)).rows[0]
     replay = mutationResult<MutationResult>(round, digest)
-    if (!replay) validateExpenseDeletion(round, userId, body.expectedVersion)
+    if (!replay) validateEditableExpense(round, userId, body.expectedVersion)
   })
   await cleanupReceiptObjects(objectKeys)
   if (audience) captureAudience?.(audience)
@@ -631,32 +631,47 @@ export async function getSettlement(access: Identity, roundId: string): Promise<
   })
 }
 
-export async function addReceipt(access: Identity, key: string, roundId: string, expenseId: string, expectedVersion: number, bytes: Uint8Array, type: string) {
+type ReceiptUpload = { expectedVersion: number; bytes: Uint8Array; type: string; name?: string }
+type ReceiptAudience = (audience: { groupId: string; userIds: string[] }) => void
+
+export async function addReceipt(access: Identity, key: string, roundId: string, expenseId: string, ...input:
+  [expectedVersion: number, bytes: Uint8Array, type: string, captureAudience?: ReceiptAudience] |
+  [readUpload: () => Promise<ReceiptUpload>, captureAudience?: ReceiptAudience]) {
+  if (!access) throw new AppError(401, 'unauthorized', '로그인이 필요합니다')
+  const account = await withDatabaseConnection(client => requireAccount(client, access))
+  const upload: ReceiptUpload = typeof input[0] === 'function' ? await input[0]() : { expectedVersion: input[0], bytes: input[1] as Uint8Array, type: input[2] as string }
+  const captureAudience = typeof input[0] === 'function' ? input[1] as ReceiptAudience | undefined : input[3]
+  const { expectedVersion, bytes, type } = upload
+  if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) badInput('invalid_version', '회차 버전이 필요합니다')
   const sourceSha256 = createHash('sha256').update(bytes).digest('hex')
-  const payload = { roundId, expenseId, expectedVersion, sourceSha256, type }
-  const checked = await withReadTransaction(async client => {
-    const account = await requireAccount(client, access)
-    const replay = await replayMutation<MutationResult>(client, account.id, 'receipt.create', key, payload)
-    if (replay.result) return { replayed: replay.result, userId: account.id }
-    const round = await roundFor(client, roundId, account.id), expense = await expenseFor(client, roundId, expenseId)
-    await editable(client, round, account.id, expense)
-    version(round, expectedVersion)
-    return { replayed: null, userId: account.id }
-  })
-  if (checked.replayed) return checked.replayed
-  const file = await convertReceipt(bytes, type)
-  const objectKey = `receipts/${checked.userId}/${key}.avif`
-  // ponytail: a failed DB commit can leave an orphan; add object reconciliation if orphan growth matters.
-  await putReceipt(objectKey, file.content, file.mimeType)
-  return domainMutation(access, key, 'receipt.create', payload, async (client, userId) => {
-    const round = await roundFor(client, roundId, userId), expense = await expenseFor(client, roundId, expenseId)
-    await editable(client, round, userId, expense)
-    version(round, expectedVersion)
-    const result = await bump(client, roundId, round.version)
-    const id = randomUUID()
-    await repository.insertReceipt(client, id, expenseId, userId, file.mimeType, file.content.length, file.sha256, objectKey, nowSeconds())
-    return { ...result, id }
-  })
+  const digest = mutationDigest(key, { roundId, expenseId, expectedVersion, sourceSha256, type })
+  const file = await convertReceipt(bytes, type, upload.name)
+  const id = randomUUID()
+  // Each attempt owns its object so a rejected retry cannot overwrite or delete a saved receipt.
+  const objectKey = await putReceipt(`receipts/${account.id}/${id}.avif`, file.content, file.mimeType)
+  let retained = false, resolved = false
+  try {
+    const current = await withDatabaseConnection(client => repository.insertReceipt(client, roundId, expenseId, account.id, key, digest, expectedVersion, id, file.mimeType, file.content.length, file.sha256, objectKey, nowSeconds()))
+    resolved = true
+    retained = current.inserted
+    if (!current.actor_active) throw new AppError(401, 'unauthorized', '로그인이 필요합니다')
+    const result = mutationResult<MutationResult>(current, digest)
+    if (!result) {
+      validateEditableExpense(current, account.id, expectedVersion)
+      throw new AppError(409, 'stale_round', '다른 변경이 먼저 저장됐어요. 최신 내역을 확인해 주세요')
+    }
+    if (current.inserted) captureAudience?.({ groupId: current.group_id, userIds: current.user_ids })
+    return result
+  } catch (error) {
+    // A PostgreSQL statement error rolls back every CTE; a lost response may have committed.
+    if (error && typeof error === 'object' && 'code' in error && /^(?:22|23|40|P0)/.test(String(error.code))) resolved = true
+    if (error && typeof error === 'object' && 'code' in error && error.code === '23505') {
+      throw new AppError(409, 'idempotency_conflict', '같은 요청 키로 다른 내용을 저장할 수 없어요')
+    }
+    throw error
+  } finally {
+    if (resolved && !retained) await cleanupReceiptObjects([objectKey])
+  }
 }
 
 export async function removeReceipt(access: Identity, key: string, roundId: string, expenseId: string, receiptId: string, body: VersionRequestDTO | Record<string, unknown>) {

@@ -69,7 +69,7 @@ npm run dev
 
 통화의 주 단위를 기준으로 지출 한 건은 100,000,000 이하, 한 회차의 전체 지출은 1,000,000,000 이하로 제한합니다. 수정할 때는 기존 금액을 제외한 회차 합계를 다시 계산합니다.
 
-영수증은 지출 저장 후 별도로 업로드하는 **증빙 이미지**입니다. JPEG·PNG·WebP를 받으며 AVIF로 변환해 비공개 MinIO 버킷에 저장합니다. PostgreSQL에는 객체 키·형식·크기·해시만 남기고 인증된 API를 통해 AVIF로 응답합니다. 앱 자체 파일 크기 제한은 없으며 이미지 변환기의 픽셀 수 안전장치는 유지합니다. OCR·자동 금액 입력, 환불 기록, 복수 결제자, 환전, 실제 송금·입금 추적, 카카오 메시지 발송은 제공하지 않습니다.
+영수증은 지출 저장 후 별도로 업로드하는 **증빙 이미지**입니다. JPEG·PNG·WebP를 받으며 AVIF로 변환해 비공개 MinIO 버킷에 저장합니다. PostgreSQL에는 객체 키·형식·크기·해시만 남기고 인증된 API를 통해 AVIF로 응답합니다. 앱 자체 파일 크기 제한은 없으며 Nginx가 영수증 multipart 요청 본문 전체를 `10m`(10 MiB)로 제한하고 초과 요청은 앱에 전달하기 전에 413으로 거절합니다. JPEG/JPG·PNG·WebP 확장자와 실제 이미지 포맷을 확인하며 변환기의 픽셀 수 안전장치는 유지합니다. OCR·자동 금액 입력, 환불 기록, 복수 결제자, 환전, 실제 송금·입금 추적, 카카오 메시지 발송은 제공하지 않습니다.
 
 ## 이탈·탈퇴와 개인정보
 
@@ -170,6 +170,13 @@ location = /api/health/minio { return 404; }
 location = /api/health/minio/ { return 404; }
 location = /api/health/dependencies { return 404; }
 location = /api/health/dependencies/ { return 404; }
+location ~ ^/api/rounds/[^/]+/expenses/[^/]+/receipts/?$ {
+    client_max_body_size 10m;
+    proxy_request_buffering on;
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
 location = /realtime {
     proxy_pass http://127.0.0.1:3000;
     proxy_http_version 1.1;
