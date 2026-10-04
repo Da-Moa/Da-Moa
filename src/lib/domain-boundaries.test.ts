@@ -9,6 +9,8 @@ for (const [namespace, domain] of [['Domain', 'Health'], ['Domain', 'Group'], ['
   const backend = resolve(root, `${namespace}/${domain}/Backend`) + '/'
   const shared = resolve(root, `${namespace}/${domain}/Shared`) + '/'
   const entry = backend + 'index.ts'
+  const nativeEntry = backend + 'native.ts'
+  const nativeModules = new Set(['Global/Auth/Backend/native.ts', 'Global/Auth/Backend/auth-util.ts', 'Domain/User/Backend/native.ts', 'Domain/User/Backend/Repository/RealtimeUserRepository.ts'].map(path => resolve(root, path)))
   const files = readdirSync(root, { recursive: true }).map(file => resolve(root, String(file)))
     .filter(file => /\.(?:ts|tsx|mjs)$/.test(file) && !file.includes('.test.') && !file.endsWith('.d.ts'))
   const sources = new Map(files.map(file => [file, ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true)]))
@@ -27,7 +29,7 @@ for (const [namespace, domain] of [['Domain', 'Health'], ['Domain', 'Group'], ['
     visit(source)
     // The native WebSocket server runs outside Next.js; Node imports guard its runtime boundary.
     const nativeWebsocket = namespace === 'Global' && domain === 'Websocket' && file.endsWith('.mjs') && imports.some(specifier => specifier.startsWith('node:'))
-    if (file.startsWith(backend)) assert.ok(imports.includes('server-only') || nativeWebsocket, `Missing server-only marker: ${file}`)
+    if (file.startsWith(backend)) assert.ok(imports.includes('server-only') || nativeWebsocket || nativeModules.has(file), `Missing server-only marker: ${file}`)
     const dependencies = imports.filter(specifier => specifier.startsWith('.')).flatMap(specifier => {
       const path = resolve(dirname(file), specifier)
       const target = [path, path + '.ts', path + '.tsx', path + '.mjs', path + '/index.ts'].find(candidate => sources.has(candidate))
@@ -44,9 +46,9 @@ for (const [namespace, domain] of [['Domain', 'Health'], ['Domain', 'Group'], ['
       }
     }
     for (const target of dependencies) {
-      if (target.startsWith(backend) && !file.startsWith(backend)) assert.equal(target, entry, `${domain} internal import: ${file} -> ${target}`)
+      if (target.startsWith(backend) && !file.startsWith(backend)) assert.ok(target === entry || target === nativeEntry, `${domain} internal import: ${file} -> ${target}`)
       if (file.startsWith(backend) && target.includes('/Domain/') && !target.includes(`/Domain/${domain}/`)) {
-        assert.match(target, /\/(Backend|Shared)\/index\.ts$/, `Other domain internal import: ${file} -> ${target}`)
+        assert.match(target, /\/(Backend|Shared)\/(index|native)\.ts$/, `Other domain internal import: ${file} -> ${target}`)
       }
     }
   }
@@ -60,6 +62,9 @@ for (const [namespace, domain] of [['Domain', 'Health'], ['Domain', 'Group'], ['
     const client = source.statements.some(statement => ts.isExpressionStatement(statement) && ts.isStringLiteral(statement.expression) && statement.expression.text === 'use client')
     if (client || file.startsWith(shared) || file.includes('/Frontend/')) {
       for (const target of reachable(file)) assert.ok(!target.startsWith(backend), `Client/shared reaches ${domain} backend: ${file} -> ${target}`)
+    }
+    if (file.includes('/Global/Util/Frontend/') || file.includes('/Global/Websocket/Frontend/')) {
+      for (const target of reachable(file)) assert.ok(!target.includes('/app/') && !target.includes('/Domain/'), `Global frontend reaches app/domain: ${file} -> ${target}`)
     }
     if (file.startsWith(backend)) {
       for (const target of reachable(file)) {
@@ -98,4 +103,23 @@ test('Settle HTTP and rules delegate SQL and storage to their owners', () => {
   const route = readFileSync('src/app/api/[...path]/route.ts', 'utf8')
   assert.match(route, /Domain\/Settle\/Backend/)
   assert.doesNotMatch(route, /lib\/round-store|\.query\s*\(|formData|publishRoundInvalidation/)
+})
+
+test('domain policy and persistence stay outside transport and common UI', () => {
+  for (const file of ['src/Global/Websocket/Backend/Controller/ws-invalidation-controller.ts', 'src/Global/Websocket/Backend/Controller/ws-controller.mjs']) {
+    assert.doesNotMatch(readFileSync(file, 'utf8'), /\.query\s*\(|FROM (users|rounds|group_members|settlement_transfers)/)
+  }
+  const group = readFileSync('src/Domain/Group/Backend/Repository/GroupRepository.ts', 'utf8')
+  assert.doesNotMatch(group, /\b(rounds|round_members|COMPLETED)\b/)
+  const client = readFileSync('src/lib/api-client.ts', 'utf8')
+  assert.doesNotMatch(client, /uuidV7|\/api\/groups|stale_round|bank_account_conflict/)
+  for (const file of ['src/Global/Util/Frontend/UI.tsx', 'src/Global/Util/Frontend/Hooks.ts']) {
+    assert.doesNotMatch(readFileSync(file, 'utf8'), /stale_round|bank_account_conflict|RoundStatus|onboardingCompletedAt/)
+  }
+  for (const path of ['refresh', 'access-token', 'logout', 'kakao', 'test-login']) {
+    const route = readFileSync(`src/app/api/auth/${path}/route.ts`, 'utf8')
+    assert.match(route, /Global\/Auth\/Backend/)
+    assert.doesNotMatch(route, /lib\/auth|cookies\.set|createAccessToken/)
+  }
+  assert.doesNotMatch(readFileSync('src/Domain/User/Backend/Controller/UserController.ts', 'utf8'), /cookies\.set/)
 })

@@ -18,6 +18,7 @@ export default function GroupClient({ groupId }: { groupId: string }) {
   const group = useResource<GroupDetail>(`/api/groups/${groupId}`)
   const action = useAction()
   const departure = useAction()
+  const [departing, setDeparting] = useState(false)
   const [invite, setInvite] = useState<{ id: string; path: string | null } | null>(null)
   const [roundsDialogOpened, setRoundsDialogOpened] = useState(false)
   const [roundSearch, setRoundSearch] = useState('')
@@ -36,15 +37,18 @@ export default function GroupClient({ groupId }: { groupId: string }) {
   async function revoke(inviteId: string) {
     if (!window.confirm('이 초대 링크를 폐기할까요? 이미 참여한 멤버는 유지돼요.')) return
     const result = await action.run(() => apiRequest(`/api/groups/${groupId}/invites/${inviteId}`, { method: 'DELETE' }))
-    if (result) { if (invite?.id === inviteId) setInvite(null); await group.reload() }
+    if (result) { if (invite?.id === inviteId) setInvite(null) }
   }
   async function leave() {
     const prompt = data!.isCreator
       ? `“${data!.name}” 모임을 없앨까요?\n종료되지 않은 회차가 있으면 없앨 수 없어요. 모임은 목록에서 사라지지만 완료된 정산 기록은 유지돼요.`
       : `“${data!.name}” 모임에서 나갈까요?\n참여 중인 회차가 있으면 나갈 수 없어요. 다시 참여하려면 새 초대 링크가 필요하며 과거 정산 기록은 유지돼요.`
     if (!window.confirm(prompt)) return
+    setDeparting(true)
+    group.suspend()
     const result = await departure.run(() => apiRequest(`/api/groups/${groupId}`, { method: 'DELETE' }))
     if (result) router.replace('/home/groups')
+    else { setDeparting(false); await group.resume() }
   }
   return <>
     <Link aria-label="내 모임으로 돌아가기" className="icon-button back-button back-link" href="/home/groups"><ChevronLeft aria-hidden="true" size={38} strokeWidth={2.5} /></Link>
@@ -63,8 +67,8 @@ export default function GroupClient({ groupId }: { groupId: string }) {
       <ErrorNotice error={action.error} />
       <CreateRoundForm groupId={groupId} members={data.members} userId={account.id} action={action} />
       <h2 className="section-heading">내가 참여한 회차</h2>
-      <RoundList endpoint={`/api/groups/${groupId}/rounds?limit=3`} onMore={() => { setRoundsDialogOpened(true); roundsDialog.current?.showModal() }} />
-      <dialog aria-labelledby="group-rounds-dialog-heading" className="account-dialog" id="group-rounds-dialog" ref={roundsDialog} onClick={event => { if (event.target === event.currentTarget) event.currentTarget.close() }}><div className="account-dialog-content stack"><div className="account-dialog-header"><h2 id="group-rounds-dialog-heading">내가 참여한 회차</h2><button aria-label="참여 회차 목록 닫기" className="icon-button account-dialog-close" onClick={() => roundsDialog.current?.close()} type="button"><X size={20} /></button></div><div className="round-search-bar"><Search aria-hidden="true" size={21} /><input aria-label="내가 참여한 회차 검색어" autoComplete="off" maxLength={100} onChange={event => setRoundSearch(event.target.value)} placeholder="모임명 또는 회차명 검색" type="search" value={roundSearch} /></div><div aria-label="회차 상태" className="round-status-filters" role="group"><button aria-pressed={roundStatus === ''} className="round-status-filter" onClick={() => setRoundStatus('')} type="button">전체</button><button aria-pressed={roundStatus === 'active'} className="round-status-filter" onClick={() => setRoundStatus('active')} type="button">진행 중</button><button aria-pressed={roundStatus === 'COMPLETED'} className="round-status-filter" onClick={() => setRoundStatus('COMPLETED')} type="button">정산 종료</button></div>{roundsDialogOpened && <div aria-label="참여 회차 전체 목록"><RoundList key={roundDialogEndpoint} endpoint={roundDialogEndpoint} empty={roundSearchQuery || roundStatus ? '조건에 맞는 회차가 없어요.' : undefined} /></div>}</div></dialog>
+      {!departing && <RoundList endpoint={`/api/groups/${groupId}/rounds?limit=3`} onMore={() => { setRoundsDialogOpened(true); roundsDialog.current?.showModal() }} />}
+      <dialog aria-labelledby="group-rounds-dialog-heading" className="account-dialog" id="group-rounds-dialog" ref={roundsDialog} onClose={() => setRoundsDialogOpened(false)} onClick={event => { if (event.target === event.currentTarget) event.currentTarget.close() }}><div className="account-dialog-content stack"><div className="account-dialog-header"><h2 id="group-rounds-dialog-heading">내가 참여한 회차</h2><button aria-label="참여 회차 목록 닫기" className="icon-button account-dialog-close" onClick={() => roundsDialog.current?.close()} type="button"><X size={20} /></button></div><div className="round-search-bar"><Search aria-hidden="true" size={21} /><input aria-label="내가 참여한 회차 검색어" autoComplete="off" maxLength={100} onChange={event => setRoundSearch(event.target.value)} placeholder="모임명 또는 회차명 검색" type="search" value={roundSearch} /></div><div aria-label="회차 상태" className="round-status-filters" role="group"><button aria-pressed={roundStatus === ''} className="round-status-filter" onClick={() => setRoundStatus('')} type="button">전체</button><button aria-pressed={roundStatus === 'active'} className="round-status-filter" onClick={() => setRoundStatus('active')} type="button">진행 중</button><button aria-pressed={roundStatus === 'COMPLETED'} className="round-status-filter" onClick={() => setRoundStatus('COMPLETED')} type="button">정산 종료</button></div>{roundsDialogOpened && !departing && <div aria-label="참여 회차 전체 목록"><RoundList key={roundDialogEndpoint} endpoint={roundDialogEndpoint} empty={roundSearchQuery || roundStatus ? '조건에 맞는 회차가 없어요.' : undefined} /></div>}</div></dialog>
       <section className="domain-card stack"><h2>모임 관리</h2><ErrorNotice error={departure.error} /><button className="secondary-button danger-text" disabled={departure.busy} onClick={() => void leave()} type="button">{departure.busy ? '처리 중…' : data.isCreator ? '모임 없애기' : '모임 나가기'}</button></section>
     </div>}
   </>

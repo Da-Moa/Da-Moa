@@ -148,7 +148,7 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     assert.equal(inviteResponse.status, 200)
     const invite = (await inviteResponse.json()).data
     const [inviteBytes] = await inviteMessage
-    assert.deepEqual(JSON.parse(inviteBytes.toString()), { type: 'invalidate', keys: ['groups', `group:${groupId}`] })
+    assert.deepEqual(JSON.parse(inviteBytes.toString()), { type: 'invalidate', keys: [`group:${groupId}`] })
     const detailResponse = await fetch(`${origin}/api/groups/${groupId}`, { headers: { authorization: `Bearer ${mine.accessToken}` } })
     assert.equal(detailResponse.status, 200)
     assert.deepEqual((await detailResponse.json()).data.invites.map(item => item.id), [invite.id], 'invite list reload sees the saved invitation after invalidation')
@@ -158,7 +158,7 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     const revokeResponse = await fetch(`${origin}/api/groups/${groupId}/invites/${invite.id}`, { method: 'DELETE', headers: { origin, authorization: `Bearer ${mine.accessToken}`, 'idempotency-key': randomUUID() } })
     assert.equal(revokeResponse.status, 200)
     const [revokeBytes] = await revokeMessage
-    assert.deepEqual(JSON.parse(revokeBytes.toString()), { type: 'invalidate', keys: ['groups', `group:${groupId}`] })
+    assert.deepEqual(JSON.parse(revokeBytes.toString()), { type: 'invalidate', keys: [`group:${groupId}`] })
     const revokedDetail = await fetch(`${origin}/api/groups/${groupId}`, { headers: { authorization: `Bearer ${mine.accessToken}` } })
     assert.deepEqual((await revokedDetail.json()).data.invites, [])
     await new Promise(resolve => setTimeout(resolve, 250))
@@ -375,7 +375,10 @@ test('authenticated WebSocket receives only its own committed invalidations', as
       const notifications = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
       const response = await fetch(`${origin}/api/${path}`, { method: 'POST', headers: { ...roundHeaders, authorization: `Bearer ${actor.accessToken}`, 'idempotency-key': ticket }, body: JSON.stringify(body) })
       assert.equal(response.status, 200, await response.clone().text())
-      await Promise.all(notifications)
+      const events = await Promise.all(notifications)
+      if (path.endsWith('/settlement-check')) for (const [bytes] of events) {
+        assert.deepEqual(JSON.parse(bytes.toString()).keys, [`settlement:${path.split('/')[1]}`])
+      }
       return (await response.json()).data
     }
     await roundPost(`groups/${groupId}/rounds`, roundBody, drawRoundId)
@@ -389,6 +392,33 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     assert.match(drawSql[0], /FROM\s+users/)
     assert.match(drawSql[1], /operation = 'round.draw'/)
     assert.match(drawSql[2], /FOR UPDATE OF\s+r[\s\S]*INSERT INTO\s+mutation_requests[\s\S]*UPDATE\s+rounds[\s\S]*UPDATE\s+expense_shares[\s\S]*INSERT INTO\s+settlement_balances[\s\S]*INSERT INTO\s+settlement_transfers/)
+    const receiverAccount = await fetch(`${origin}/api/me`, { headers: { authorization: `Bearer ${other.accessToken}` } }).then(response => response.json())
+    try {
+      const bankNotifications = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
+      const bankOutput = output.length
+      const bankResponse = await fetch(`${origin}/api/me/bank-account`, {
+        method: 'PUT', headers: { ...roundHeaders, authorization: `Bearer ${other.accessToken}` },
+        body: JSON.stringify({ bankCode: '004', accountNumber: '12340312345678', accountHolder: TEST_ACCOUNTS[1].displayName, expectedBankVersion: receiverAccount.data.bankVersion }),
+      })
+      assert.equal(bankResponse.status, 200, await bankResponse.clone().text())
+      const [[senderBankBytes], [ownerBankBytes]] = await Promise.all(bankNotifications)
+      const senderBankKeys = JSON.parse(senderBankBytes.toString()).keys
+      assert.ok(senderBankKeys.includes(`settlement:${drawRoundId}`))
+      assert.ok(senderBankKeys.every(key => /^settlement:[0-9a-f-]{36}$/.test(key)))
+      assert.deepEqual(JSON.parse(ownerBankBytes.toString()).keys, ['me'])
+      const bankSql = output.slice(bankOutput).split('SQL:').slice(1).map(sql => sql.trim())
+      assert.equal(bankSql.length, 3, 'bank update uses AUTH + UPDATE + one audience SELECT')
+      assert.ok(bankSql.every(sql => !/\b(BEGIN|COMMIT|ROLLBACK)\b/.test(sql)))
+    } finally {
+      const restoreDb = createDatabaseClient(database)
+      await restoreDb.connect()
+      try {
+        const account = receiverAccount.data.bankAccount
+        await restoreDb.query(`UPDATE users SET bank_code=$2,bank_name=$3,account_number=$4,account_number_formatted=$5,
+          account_holder=$6,bank_verified_at=$7,bank_version=$8 WHERE id=$1`,
+          [memberId, account.bankCode, account.bankName, account.accountNumber, account.formattedAccountNumber, account.accountHolder, account.verifiedAt, receiverAccount.data.bankVersion])
+      } finally { await restoreDb.end() }
+    }
     const checkBody = { expectedVersion: drawResult.version, checked: true, senderId: TEST_ACCOUNTS[0].id }
     const checkTicket = randomUUID(), checkOutput = output.length
     const checkResult = await roundPost(`rounds/${drawRoundId}/settlement-check`, checkBody, checkTicket, other)

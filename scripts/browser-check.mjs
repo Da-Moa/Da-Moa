@@ -30,6 +30,7 @@ const exceptions = []
 const dialogs = []
 const apiReads = []
 let loseNextExpenseResponse = false
+let delayNextDeleteResponse = false
 function cdp(method, params = {}) {
   const id = nextId++
   return new Promise((resolve, reject) => {
@@ -54,6 +55,11 @@ ws.addEventListener('message', event => {
   if (message.method === 'Page.javascriptDialogOpening') { dialogs.push(message.params.message); void cdp('Page.handleJavaScriptDialog', { accept: true }) }
   if (message.method === 'Fetch.requestPaused') {
     const paused = message.params
+    if (delayNextDeleteResponse && paused.request.method === 'DELETE' && paused.responseStatusCode === 200) {
+      delayNextDeleteResponse = false
+      setTimeout(() => void cdp('Fetch.continueResponse', { requestId: paused.requestId }), 1000)
+      return
+    }
     if (loseNextExpenseResponse && paused.request.method === 'POST' && paused.responseStatusCode === 200) {
       loseNextExpenseResponse = false
       void cdp('Fetch.fulfillRequest', { requestId: paused.requestId, responseCode: 503, responseHeaders: [{ name: 'Content-Type', value: 'application/json' }], body: Buffer.from(JSON.stringify({ error: 'transaction_retry', message: '저장 응답을 확인하지 못했어요. 다시 시도해 주세요.' })).toString('base64') })
@@ -142,6 +148,124 @@ try {
   await cdp('Fetch.enable', { patterns: [{ urlPattern: `${origin}/api/rounds/*/expenses`, requestStage: 'Response' }] })
   await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
   await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
+
+  if (process.argv.includes('--refresh-only')) {
+    const owner = await user('재조회 생성자', '001234567890'), participant = await user('재조회 참여자', '002234567890')
+    const group = await api(owner.session, '/api/groups', 'POST', { name: `재조회 검증 ${runId}` })
+    const invite = await api(owner.session, `/api/groups/${group.id}/invites`, 'POST', {})
+    await api(participant.session, `/api${invite.sharePath}/accept`, 'POST', {})
+    const roundBody = { name: '재조회 회차', currency: 'KRW', participantIds: [owner.session.userId, participant.session.userId] }
+    const rounds = []
+    for (let i = 0; i < 4; i++) rounds.push(await api(owner.session, `/api/groups/${group.id}/rounds`, 'POST', { ...roundBody, name: `재조회 회차 ${i}` }))
+    await setSession(owner.session)
+    const observer = await cdp('Page.addScriptToEvaluateOnNewDocument', { source: `
+      window.__refreshEvents = []; window.__heldRefreshEvents = []; window.__holdRefresh = false;
+      const NativeSocket = window.WebSocket;
+      window.WebSocket = class extends NativeSocket {
+        constructor(...args) {
+          super(...args);
+          if (new URL(args[0], location.href).pathname !== '/realtime') return;
+          window.__refreshSocket = this;
+          this.addEventListener('message', event => {
+            const data = JSON.parse(event.data);
+            if (data.type !== 'invalidate') return;
+            window.__refreshEvents.push(data);
+            if (window.__holdRefresh) { event.stopImmediatePropagation(); window.__heldRefreshEvents.push({ socket: this, data: event.data }); }
+          });
+        }
+      };
+    ` })
+    const settle = () => new Promise(resolve => setTimeout(resolve, 800))
+    await navigate(`/home/groups/${group.id}`, '현재 멤버 2명')
+    await waitFor('window.__refreshSocket?.readyState === WebSocket.OPEN')
+    await settle()
+    await evaluate("document.querySelector('details').open = true; window.__holdRefresh = true")
+    const revokeReads = apiReads.length
+    await click('폐기')
+    await waitFor('window.__heldRefreshEvents.length > 0')
+    await settle()
+    assert.deepEqual(apiReads.slice(revokeReads), [], 'invite DELETE has no direct GET')
+    assert.deepEqual(await evaluate('window.__refreshEvents.at(-1).keys'), [`group:${group.id}`], 'invite changes only invalidate group detail')
+    await evaluate("window.__holdRefresh = false; window.__heldRefreshEvents.splice(0).forEach(({socket,data}) => socket.onmessage(new MessageEvent('message', {data})))")
+    await settle()
+    assert.deepEqual(apiReads.slice(revokeReads), [`/api/groups/${group.id}`], 'one detail GET after invite invalidation')
+    console.log('PASS invite DELETE: direct GET 0, WebSocket GET 1')
+
+    await evaluate("document.querySelector('[aria-label=\"참여 회차 전체 보기\"]').click()")
+    await waitFor("Boolean(document.querySelector('#group-rounds-dialog[open] .round-link'))")
+    await settle()
+    await evaluate("document.querySelector('[aria-label=\"참여 회차 목록 닫기\"]').click()")
+    await waitFor("!document.querySelector('#group-rounds-dialog .round-link')")
+    const hiddenReads = apiReads.length
+    const cancellable = await api(owner.session, `/api/groups/${group.id}/rounds`, 'POST', { ...roundBody, name: '취소 검증' })
+    await settle()
+    assert.deepEqual(apiReads.slice(hiddenReads), [`/api/groups/${group.id}/rounds?limit=3`], 'closed dialog has no subscription')
+    const reopenReads = apiReads.length
+    await evaluate("document.querySelector('[aria-label=\"참여 회차 전체 보기\"]').click()")
+    await waitFor("Boolean(document.querySelector('#group-rounds-dialog[open] .round-link'))")
+    await settle()
+    assert.deepEqual(apiReads.slice(reopenReads), [`/api/groups/${group.id}/rounds`], 'reopening fetches the current list once')
+    await evaluate("document.querySelector('#group-rounds-dialog').close()")
+    await waitFor("!document.querySelector('#group-rounds-dialog .round-link')")
+    console.log('PASS closed round dialog: GET 0; reopening: GET 1')
+
+    const round = rounds[0]
+    let version = 1
+    version = (await api(owner.session, `/api/rounds/${round.id}/expenses`, 'POST', { expectedVersion: version, description: '정산 확인 검증', amount: '100', payerId: owner.session.userId, splitMode: 'ALL' })).version
+    version = (await api(owner.session, `/api/rounds/${round.id}/confirm`, 'POST', { expectedVersion: version })).version
+    version = (await api(owner.session, `/api/rounds/${round.id}/send`, 'POST', { expectedVersion: version })).version
+    await settle()
+    const checkReads = apiReads.length
+    await api(owner.session, `/api/rounds/${round.id}/settlement-check`, 'POST', { expectedVersion: version, checked: true })
+    await settle()
+    assert.deepEqual(apiReads.slice(checkReads), [], 'receipt confirmation does not reload unchanged round lists')
+    assert.deepEqual(await evaluate('window.__refreshEvents.at(-1).keys'), [`settlement:${round.id}`])
+    console.log('PASS settlement check: unrelated list GET 0')
+
+    await navigate(`/settlements/${round.id}`, '정산 확인 현황')
+    await settle()
+    const resumeReads = apiReads.length
+    await evaluate("document.dispatchEvent(new Event('visibilitychange')); window.dispatchEvent(new Event('focus')); window.dispatchEvent(new Event('pageshow'))")
+    await settle()
+    assert.deepEqual(apiReads.slice(resumeReads), [`/api/rounds/${round.id}/settlement`], 'resume events share one current read')
+    console.log('PASS paired resume events: settlement GET 1')
+
+    await navigate(`/home/groups/${group.id}`, '현재 멤버 2명')
+    await settle()
+    await click('모임 없애기')
+    await waitFor(hasText('종료되지 않은 회차가 있어 모임을 없앨 수 없어요'))
+    await settle()
+    const recoveredReads = apiReads.length
+    await api(owner.session, `/api/groups/${group.id}/rounds`, 'POST', { ...roundBody, name: '실패 후 구독 검증' })
+    await settle()
+    assert.deepEqual(apiReads.slice(recoveredReads), [`/api/groups/${group.id}/rounds?limit=3`], 'failed departure resumes subscriptions')
+    console.log('PASS rejected departure resumes resource subscriptions')
+
+    await cdp('Fetch.enable', { patterns: [{ urlPattern: `${origin}/api/*`, requestStage: 'Response' }] })
+    await navigate(`/home/rounds/${cancellable.id}`, '지출 내역이 없습니다.')
+    await settle()
+    const cancelReads = apiReads.length
+    delayNextDeleteResponse = true
+    await click('회차 전체 취소')
+    await waitFor(`location.pathname === '/home/groups/${group.id}'`)
+    await settle()
+    assert.equal(apiReads.slice(cancelReads).filter(path => path === `/api/rounds/${cancellable.id}`).length, 0, 'no deleted-round GET during delayed response')
+
+    const empty = await api(owner.session, '/api/groups', 'POST', { name: '지연 삭제 검증' })
+    await navigate(`/home/groups/${empty.id}`, '현재 멤버 1명')
+    await settle()
+    const deleteReads = apiReads.length
+    delayNextDeleteResponse = true
+    await click('모임 없애기')
+    await waitFor("location.pathname === '/home/groups'")
+    await settle()
+    assert.equal(apiReads.slice(deleteReads).filter(path => path.startsWith(`/api/groups/${empty.id}`)).length, 0, 'no deleted-group resource GET during delayed response')
+    console.log('PASS delayed group/round DELETE: stale detail GET 0')
+    assert.deepEqual(exceptions, [])
+    await cdp('Page.removeScriptToEvaluateOnNewDocument', { identifier: observer.identifier })
+    ws.close(); await fetch(`${debuggerOrigin}/json/close/${tab.id}`); process.exit(0)
+  }
+
   if (process.argv.includes('--expenses-only')) {
     const owner = await user('지출 생성자', '001234567890'), participant = await user('지출 참여자', '002234567890')
     const group = await api(owner.session, '/api/groups', 'POST', { name: `지출 재조회 ${runId}` })
@@ -159,7 +283,7 @@ try {
           window.__roundSocket = this;
           this.addEventListener('message', event => {
             const data = JSON.parse(event.data);
-            if (data.type === 'invalidate' && data.keys.includes(${JSON.stringify(`round:${round.id}`)})) {
+            if (data.type === 'invalidate' && data.keys.some(key => [${JSON.stringify(`round:${round.id}`)}, ${JSON.stringify(`settlement:${round.id}`)}].includes(key))) {
               event.stopImmediatePropagation();
               window.__roundInvalidations.push({ socket: this, data: event.data });
             }
@@ -714,6 +838,7 @@ try {
   await waitFor("!document.querySelector('.expense-form')")
   const editedCustom = (await api(owner.session, `/api/rounds/${roundId}`)).expenses.find(expense => expense.id === customExpense.id)
   assert.deepEqual(Object.fromEntries(editedCustom.shares.map(share => [share.userId, share.assignedAmountMinor])), { [owner.session.userId]: '400', [participant.session.userId]: '600' })
+  await waitFor(`document.querySelector('#expense-${customExpense.id} details')?.innerText.includes('400원') && document.querySelector('#expense-${customExpense.id} details')?.innerText.includes('600원')`, 'edited custom shares arrive through WebSocket')
   await evaluate(`document.querySelector('#expense-${customExpense.id} button.danger-text').click()`)
   await waitFor("document.querySelectorAll('.expense-card').length === 1")
   firstSavedRound = await api(owner.session, `/api/rounds/${roundId}`)

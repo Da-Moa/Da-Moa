@@ -89,9 +89,11 @@ DB 연결은 `pg` 드라이버의 공용 커넥션 풀을 사용합니다. 같�
 
 초대 폐기도 AUTH → 생성자 권한/재시도 조회 → 폐기·성공 기록 단일 SQL의 3회로 처리하며 명시적 트랜잭션·락을 사용하지 않습니다. 폐기와 동시에 진행 중인 초대 수락은 완료될 수 있고 기존 참여자는 유지합니다. 모임 생성은 명시적 트랜잭션·전역 락 없이 공용 풀의 연결에서 실행합니다. JWT 검증 뒤 AUTH의 회원 상태 조회 1회와 모임·생성자 멤버십 INSERT CTE 1회, 총 2회입니다. 생성은 멱등 기록을 조회하거나 저장하지 않습니다. 모임·생성자 멤버십은 한 SQL로 자동 커밋하며 일부 INSERT가 실패하면 문장 전체가 취소됩니다. 모임 목록·검색도 트랜잭션 없이 AUTH 회원 조회 → ID 내림차순 커서로 모임·멤버 ID 조회 → Set으로 중복 제거한 회원 프로필 조회, 총 3회이며 빈 결과는 2회입니다. 제목 검색은 ILIKE 부분 검색을 사용합니다. 모임 상세도 트랜잭션 없이 JWT 회원 조회 1회 → 모임·활성 멤버십·회원 이름 JOIN 조회 1회 → 생성자인 경우에만 유효 초대 조회 1회로, 멤버 목록을 포함해 일반 참여자 2회·생성자 3회입니다. 초대 조회는 트랜잭션 없이 AUTH 회원 조회 → 토큰 형식 검사 → 토큰 해시로 초대·모임·활성 생성자 멤버십·users 및 조회자 멤버십 JOIN 조회, 총 2회입니다. 생성자의 미탈퇴·가입 완료와 초대의 만료·폐기를 같은 SQL에서 확인하며 유효한 행이 없으면 거절합니다. 다른 쓰기는 공통 PostgreSQL advisory transaction lock으로 직렬화하고 다른 읽기는 별도 스냅샷을 사용합니다. 영수증 객체는 MinIO에 저장하고 DB는 객체 키를 관리합니다. 업로드 후 DB 저장이 실패하거나 DB 커밋 뒤 객체 삭제가 실패하면 참조되지 않은 객체가 남을 수 있으므로 저장소를 점검해야 합니다.
 
-`src/Global/Websocket/Backend/Controller/ws-controller.mjs`가 인증·요청 검증을 담당하고 `Backend/websocket-util.mjs`의 업그레이드 핸드셰이크·토픽 구독·발행·핑퐁 메서드를 호출합니다. 사용자 채널 구독은 서버가 인증 결과로 결정하며 클라이언트가 임의 채널을 지정하지 않습니다. 대상 사용자와 재조회 키는 `ws-invalidation-controller.ts`에서 결정합니다. 프론트의 `Frontend/websocket-util.ts`는 연결·키 구독·이벤트 병합·재연결을 캡슐화하며 `RealtimeProvider`로 공유합니다. 브라우저는 서버 ping에 자동으로 pong을 응답합니다.
+`src/Global/Websocket/Backend/Controller/ws-controller.mjs`가 인증·요청 검증을 담당하고 `Backend/websocket-util.mjs`의 업그레이드 핸드셰이크·토픽 구독·발행·핑퐁 메서드를 호출합니다. 사용자 채널 구독은 서버가 인증 결과로 결정하며 클라이언트가 임의 채널을 지정하지 않습니다. 대상 사용자와 재조회 키는 각 도메인 Invalidation Controller에서 결정하고 `ws-invalidation-controller.ts`는 전달만 담당합니다. 프론트의 `Frontend/websocket-util.ts`는 연결·키 구독·이벤트 병합·재연결을 캡슐화하며 `RealtimeProvider`로 공유합니다. 브라우저는 서버 ping에 자동으로 pong을 응답합니다.
 
 모임·회차·지출·정산·계좌 변경은 DB 커밋 후 이 Node 서버의 인증된 사용자별 WebSocket 연결로 재조회 키만 발행합니다. WebSocket도 localStorage의 Access JWT를 서브프로토콜 헤더로 전달해 인증하며 서버는 기존 JWT 검증 함수와 공용 DB 풀로 직접 인증하고 내부 `/api/me`를 호출하지 않으며, 토큰을 응답 프로토콜이나 메시지에 담지 않습니다. 브라우저는 이벤트를 받으면 기존 인증 API를 다시 읽습니다. 페이지 진입·이동 시 내 정보는 한 번 조회해 공유하고, 같은 자료의 진행 중 GET 요청도 공유합니다. `/api/me`의 401·404는 Refresh JWT로 한 번 갱신한 뒤 한 번 재시도합니다. WebSocket 최초 연결은 이미 확인한 내 정보와 Access JWT를 사용하며 화면 API를 다시 호출하지 않습니다. 금액·계좌·영수증·초대 토큰은 메시지에 넣지 않으며, 연결이 끊기면 재연결 시 현재 화면을 다시 조회합니다. 실시간 연결이 일시 실패해도 저장 결과는 유지되고 수동 새로고침을 사용할 수 있습니다.
+
+공통 UI/요청 훅은`Global/Util/Frontend`에 구현하며 앱 구성은 `app/home/AppShell.tsx`, 정산 상태/금액 표현은 Settle, 계좌 충돌 안내는 User가 소유합니다. 생성 요청의 UUIDv7 정책도 Group/Settle Requests에서 전달합니다. Auth Route는 공개 Auth Controller로 위임하고 쿠키 처리를 공통화합니다. 알림 대상과 키는 도메인이 결정하고 Global Websocket은 전달만 담당합니다. 전송은 같은 트랜잭션의 멤버·지출을 재사용하여 나머지 없는 2명·지출 1건 기준 18 SQL이며 알림 추가 SQL은 없습니다. 상세 흐름과 재조회 회귀 검증은 [도메인 책임과 자동 재조회 정리](docs/refactored-api-flows-and-sql.md#9-도메인-책임과-자동-재조회-정리-2026-10-04)를 참고하세요.
 
 ## 검증
 
@@ -130,6 +132,8 @@ node --import ./scripts/test-server-only.mjs --import tsx scripts/browser-check.
 node --import ./scripts/test-server-only.mjs --import tsx scripts/browser-check.mjs --invites-only
 # 지출 생성/수정/삭제·확정/재오픈·추첨·수취 확인/해제 후 GET 미실행·WebSocket 갱신 검증
 node --import ./scripts/test-server-only.mjs --import tsx scripts/browser-check.mjs --expenses-only
+# 초대 폐기·숨은 목록·복귀 이벤트·삭제 지연 중 중복 GET 회귀 검증
+node --import ./scripts/test-server-only.mjs --import tsx scripts/browser-check.mjs --refresh-only
 # 계좌 저장 후 GET 미실행·WebSocket 내 정보 갱신만 검증
 node --import ./scripts/test-server-only.mjs --import tsx scripts/browser-check.mjs --account-only
 ```

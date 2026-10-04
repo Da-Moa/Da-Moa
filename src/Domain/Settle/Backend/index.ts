@@ -5,3 +5,6 @@ export { getUnfinishedUserRounds, unfinishedUserRoundsSql } from './Repository/P
 
 export { getSettleResponse, isSettlePath } from './Controller/SettleController'
 export { addReceipt, checkExclusion, createRound, deleteExpense, excludeMember, getReceipt, getRound, getSettlement, listRounds, removeReceipt, roundCommand, saveExpense, setSettlementCheck } from './Service/SettleService'
+export { unfinishedGroupParticipationSql } from './Repository/ParticipationRepository'
+export { publishRoundInvalidation } from './Controller/SettleInvalidation'
+export { getBankSettlementAudience } from './Service/SettleService'

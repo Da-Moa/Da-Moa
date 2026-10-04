@@ -1,6 +1,5 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { readAccessToken } from '../../../../lib/auth.ts'
-import { getDatabasePool } from '../../../../lib/db-client.mjs'
+import { authenticateWebsocketToken } from '../../../Auth/Backend/native.ts'
 import { createWebsocketUtil } from '../websocket-util.mjs'
 
 export function createWsController(port) {
@@ -31,20 +30,6 @@ export function createWsController(port) {
     return true
   }
 
-  async function authenticatedUser(token) {
-    const access = readAccessToken(token ?? undefined)
-    if (!access) return { status: 401 }
-    if ((access.purpose ?? 'app') !== 'app') return { status: 403 }
-    const database = process.env.DATABASE_URL || process.env.POSTGRES_URL
-    if (!database) throw new Error('DATABASE_URL is required')
-    const { rows: [account] } = await getDatabasePool(database).query({
-      text: 'SELECT id, deleted_at, onboarding_completed_at FROM users WHERE id = $1',
-      values: [access.userId], query_timeout: 10000,
-    })
-    if (!account || account.deleted_at !== null) return { status: 401 }
-    return account.onboarding_completed_at !== null ? { status: 200, id: account.id } : { status: 403 }
-  }
-
   function handleUpgrade(request, socket, head) {
     if (request.url !== '/realtime') return
     const origin = request.headers.origin
@@ -62,7 +47,7 @@ export function createWsController(port) {
     if (!allowed) { socket.destroy(); return }
     const protocols = request.headers['sec-websocket-protocol']?.split(',').map(value => value.trim()) ?? []
     const token = protocols.length === 2 && protocols[0] === 'da-moa' ? protocols[1] : null
-    void authenticatedUser(token).then(auth => {
+    void authenticateWebsocketToken(token).then(auth => {
       if (!auth.id || socket.destroyed) { socket.destroy(); return }
       const userId = auth.id
       websocket.upgrade(request, socket, head, connection => {
@@ -70,7 +55,7 @@ export function createWsController(port) {
         let authTimer
         const revalidate = async () => {
           try {
-            const current = await authenticatedUser(token)
+            const current = await authenticateWebsocketToken(token)
             if (connection.readyState !== connection.OPEN) return
             // A short-lived Access JWT must refresh through the browser before reconnecting.
             if (current.status === 401) connection.close(4001)

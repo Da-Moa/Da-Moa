@@ -24,7 +24,7 @@ SQL은 해당 함수의 실제 query() 문자열을 가져와 PostgreSQL 형식�
 | 현재 시각 | nowSeconds는 기존 currentTimestamp()의 공개 별칭. 같은 초 단위 계산을 중복 구현하지 않음 |
 | 인증 | [Node Proxy](../src/proxy.ts) → [JwtGuard](../src/Global/Auth/Backend/Guard/JwtGuard.ts). Controller 진입 전 JWT 검증. Service의 requireAccount()는 회원 상태 조회에 사용 |
 | 협력 조회 | [User Backend](../src/Domain/User/Backend/index.ts)의 getActiveUserProfiles(), [Settle Backend](../src/Domain/Settle/Backend/index.ts)의 미종료 여부 조회. Service가 같은 DB Client 전달 |
-| 실시간 | [Global Websocket Backend](../src/Global/Websocket/Backend/index.ts). publishGroupInvalidation() 구현에 위임; DELETE 수신자와 초대 발급/폐기 수신자는 업무 조회에서 확보 |
+| 실시간 | [Global Websocket Backend](../src/Global/Websocket/Backend/index.ts). 대상·키 결정은 각 도메인 Invalidation Controller가 담당하고 Global은 전달만 수행; Group/Settle 수신자는 업무 조회에서 확보 |
 
 입력 검증은 문자열 trim·필수/최대 길이, 허용 필드, 중복 없는 참여자 ID를 검사한다. 모임 이름은 최대 100자, 재발급 초대 ID는 최대 128자다. idsInput()은 현재 회차 코드에서도 사용하는 공통 함수다. 페이지네이션은 기본 limit=20, 허용 범위 1~100이고 커서의 길이·시각·ID를 검증한다. pageOf()는 limit+1 조회 중 실제 페이지와 다음 위치 커서를 만든다. 모임 생성은 명시적 트랜잭션 없이 UUIDv7 PK의 모임·생성자 멤버십을 단일 SQL로 저장한다. 초대 발급·폐기는 권한과 멱등 성공 기록을 함께 조회하고 단일 SQL로 초대 생성 또는 폐기와 성공 기록을 저장한다. 재발급 시 이전 초대도 같은 SQL에서 폐기한다. 나머지 쓰기는 domainMutation() 또는 leaveGroup()에서 인증 → 키/본문 검사·성공 재생 → 업무 실행 → 성공 기록 저장을 같은 쓰기 트랜잭션에서 수행한다.
 
@@ -122,7 +122,7 @@ Access JWT는 localStorage에 저장하며 만료는 10분이다. 로그인 완�
 
 `apiRequest()`는 같은 URL·응답 종류·Access 토큰의 진행 중인 GET Promise만 공유한다. 완료·실패 후에는 지우므로 페이지 재방문, 검색, 다음 커서, 수동 갱신과 실시간 무효화는 최신 데이터를 조회한다. AbortSignal이 있는 요청과 변경 요청은 공유하지 않는다. 수동 재조회·실시간 무효화는 fresh 요청으로 이전 읽기를 공유하지 않아 변경 전 응답이 최신 결과를 덮지 않게 한다. 동일 이벤트의 여러 키에 등록된 listener는 Set으로 한 번만 실행한다. 개발 모드 effect 재실행도 이 경로를 사용하므로 정상 모임 목록 진입의 브라우저 요청은 `/api/me` 1회 → `/api/groups` 1회다. 유지되는 layout에서 페이지를 이동하면 내 정보 응답을 확인한 뒤 새 페이지 자료를 조회한다. 확인 중에는 화면 자료 대신 로딩·재시도를 표시하며 WebSocket 연결은 유지한다.
 
-WebSocket 최초 연결은 이미 확인한 AccountContext와 저장된 JWT를 사용하며 연결 전후에 브라우저 `/api/me`나 화면 자료를 다시 조회하지 않는다. 재연결 시에는 내 정보를 갱신한 뒤 연결하고 화면의 구독 자료를 다시 읽는다. 서버는 기존 `readAccessToken()`으로 WebSocket JWT를 직접 검증하고 공용 풀에서 id·탈퇴·가입 완료 상태만 SELECT한다. 최초 연결·주기적 검증 모두 내부 HTTP `/api/me`를 호출하지 않는다. Node.js 22.18 이상의 기본 TypeScript 타입 제거로 기존 순수 JWT 모듈을 재사용한다. 계좌 화면도 처음에는 Context를 사용하고 저장·충돌 복구 시에만 명시적으로 재조회한다.
+WebSocket 최초 연결은 이미 확인한 AccountContext와 저장된 JWT를 사용하며 연결 전후에 브라우저 `/api/me`나 화면 자료를 다시 조회하지 않는다. 재연결 시에는 내 정보를 갱신한 뒤 연결하고 화면의 구독 자료를 다시 읽는다. 서버는 기존 `readAccessToken()`으로 WebSocket JWT를 직접 검증하고 공용 풀에서 id·탈퇴·가입 완료 상태만 SELECT한다. 최초 연결·주기적 검증 모두 내부 HTTP `/api/me`를 호출하지 않는다. Node.js 22.18 이상의 기본 TypeScript 타입 제거로 기존 순수 JWT 모듈을 재사용한다. 계좌 화면도 처음에는 Context를 사용하고 저장 후에는 웹소켓 알림으로만 재조회한다. 충돌 복구의 명시적 재조회는 유지한다.
 
 공통 조회 변경 검증: `npm test` 89개, 격리 PostgreSQL·MinIO의 `npm run test:integration` 38개, `npm run build` 통과. 실제 개발 서버와 Chrome에서 모임 직접 진입 및 홈·모임·정산 기록·전체·계좌의 클라이언트 이동마다 `/api/me`가 먼저 1회, 각 화면 자료가 1회 조회됨을 검증했다. 계좌 저장·실시간 갱신·정산·로그아웃 회귀 검사도 통과했다.
 
@@ -244,13 +244,13 @@ GroupClient.inviteMembers() → POST → Node Proxy → JWT Guard(Access JWT 검
 3. G-INVITE-MUTATION에서 모임 생성자·활성 멤버십·기존 멱등 성공 기록을 함께 조회한다. 같은 키·본문은 링크 없는 성공 응답을 재생하고, 다른 본문은 idempotency_conflict로 거부한다. 신규 요청의 일반 멤버는 forbidden, 비멤버는 not_found로 거부한다.
 4. 새 초대 UUID·32바이트 랜덤 토큰·현재 시각을 만들고 G-INSERT-INVITE 한 SQL에서 SHA-256 토큰 해시·7일 만료 초대·성공 메타데이터를 저장한다. replaceInviteId가 있으면 해당 모임의 이전 초대를 같은 SQL에서 폐기한다. 저장 시 활성 생성자 자격도 다시 확인하며, 대상 초대가 없으면 쓰기 없이 not_found를 반환한다.
 5. 성공 기록에는 { id, inviteId, linkUnavailable: true }만 저장하고 최초 성공 응답에만 메모리 토큰의 sharePath를 반환한다. 같은 키 동시 요청은 mutation_requests PK가 중복 저장을 막으며, 충돌한 문장 전체가 취소된 뒤 추가 G-INVITE-MUTATION 조회로 성공을 재생하거나 본문 충돌을 거부한다.
-6. Controller가 응답 후 after()에서 생성자에게 groups·group:{id} 무효화를 보낸다. 생성자 ID를 확보했으므로 후행 DB 조회·트랜잭션이 없다. POST 성공 핸들러는 공유 링크만 표시하며 직접 재조회하지 않는다. 기존 useResource 구독이 group:{id} 신호를 받으면 모임 상세와 초대 목록을 한 번 다시 읽는다. 최초 화면 진입·수동 오류 재시도·웹소켓 재연결 시 조회는 유지한다.
+6. Controller가 응답 후 after()에서 생성자에게 group:{id} 무효화만 보낸다. 생성자 ID를 확보했으므로 후행 DB 조회·트랜잭션이 없다. POST 성공 핸들러는 공유 링크만 표시하며 직접 재조회하지 않는다. 기존 useResource 구독이 group:{id} 신호를 받으면 모임 상세와 초대 목록을 한 번 다시 읽는다. 최초 화면 진입·수동 오류 재시도·웹소켓 재연결 시 조회는 유지한다.
 
 신규 발급·재발급은 AUTH → G-INVITE-MUTATION → G-INSERT-INVITE로 3회다. 일반 성공 재생·권한 거절은 2회다. 같은 키 동시 저장 충돌 시 복구 조회를 포함해 4회다. PostgreSQL 문장 원자성으로 새 초대·성공 기록 저장 실패 시 기존 초대 폐기도 함께 취소된다.
 
 ### G6. DELETE /api/groups/{groupId}/invites/{inviteId} — 초대 폐기
 
-GroupClient.revoke() 확인 창 → DELETE → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 Group 분배 → GroupController → revokeInvite() → GroupMutationResult → 초대 목록 재조회.
+GroupClient.revoke() 확인 창 → DELETE → Node Proxy → JWT Guard(Access JWT 검사) → API Route의 Group 분배 → GroupController → revokeInvite() → GroupMutationResult → 로컬 링크 정리 → WebSocket group:{id} 수신 시 상세 GET 1회. DELETE 성공 직후 직접 GET은 없다.
 
 명시적 트랜잭션·advisory lock·행 조회 락 없이 공용 풀 연결에서 AUTH → G-INVITE-MUTATION(operation=invite.revoke)의 활성 멤버십·생성자 검사 및 성공 재생 → G-REVOKE의 모임/초대 ID UPDATE·성공 기록 INSERT를 한 SQL로 실행한다. 정상은 3회, 성공 재생·권한 거절은 2회다. 같은 키 동시 저장 충돌 시 복구 조회를 포함해 4회다. 이미 폐기된 초대는 COALESCE로 기존 폐기 시각을 유지한다. 초대가 없으면 not_found이며 성공 기록을 저장하지 않는다. 저장 실패 시 문장 전체가 취소된다. 이미 참여한 멤버십은 유지하며, 폐기와 동시에 진행 중인 수락은 성공할 수 있다. 생성자만 초대 목록을 보므로 인증한 생성자를 무효화 수신자로 전달하여 추가 조회를 생략한다.
 
@@ -282,7 +282,7 @@ InviteClient.accept() → POST → Node Proxy → JWT Guard → GroupController 
 
 모임 생성 중복은 AUTH → G-CREATE로 2회이며 PK 오류를 409로 반환한다. 초대 발급 성공 재생은 AUTH → G-INVITE-MUTATION으로 2회다. 초대 수락 성공 재생은 AUTH → G-ACCEPT-READ로 2회다. 나머지 모임 쓰기 성공 재생은 W-START(2) → AUTH → IDEM-READ → COMMIT으로 5회다. 업무 SQL·IDEM-SAVE는 반복하지 않는다. 초대 발급 재생에서는 원문 링크를 반환하지 않는다. 본문/키 오류·권한/정원/상태 오류·DB 오류는 성공 기록을 남기지 않는다. 모임 생성·초대 발급·폐기·수락 실패는 단일 SQL의 원자성, 다른 쓰기 실패는 기존 트랜잭션 ROLLBACK으로 부분 저장을 막는다. 응답 유실은 같은 키·같은 payload로 재시도한다. 외부 파일 작업은 Group API에 없다.
 
-DELETE는 G-DEPARTURE에서 확보한 변경 전 수신자에게, 초대 발급·폐기는 AUTH에서 확보한 생성자에게, 초대 수락은 G-JOIN의 기존 멤버와 수락자에게 추가 SQL 없이 groups·group:{id} 키만 내부 HTTP로 전달한다. 다른 모임 변경의 발행은 기존 별도 읽기 트랜잭션 R-START(1) → RT-PUBLISH → COMMIT으로 3회다. 이 후행 발행은 저장 트랜잭션에 속하지 않으며 발행 실패가 커밋된 결과를 롤백하지 않는다. 실시간 환경 변수가 꺼져 있으면 두 경로는 SQL 없이 생략된다.
+모임 생성은 AUTH의 생성자, DELETE는 G-DEPARTURE의 변경 전 수신자, 초대 발급·폐기는 AUTH의 생성자, 초대 수락은 G-JOIN의 기존 멤버와 수락자를 전달하여 알림 대상 추가 SQL은 모두 0회다. 초대 발급·폐기는 group:{id}만, 생성·이탈·참여는 groups와 group:{id}를 발행한다. 알림 대상·키는 GroupInvalidation이 결정하고 Global Websocket은 내부 HTTP로 키만 전달한다. 발행 실패가 커밋된 결과를 롤백하지 않는다.
 
 ## 5. 실제 SQL 카탈로그
 
@@ -516,9 +516,10 @@ $1=UUIDv7 요청 키, $2=생성자 ID, $3=trim된 이름, $4=현재 초 시각. 
 
 ```sql
 SELECT g.creator_id,viewer.user_id,
-    EXISTS(SELECT 1 FROM rounds r WHERE r.group_id=$1 AND r.status<>'COMPLETED'
-      AND (g.creator_id=$2 OR EXISTS(SELECT 1 FROM round_members m
-        WHERE m.round_id=r.id AND m.user_id=$2 AND m.excluded_at IS NULL))) AS has_unfinished,
+    EXISTS(SELECT 1 FROM (SELECT r.group_id,m.user_id FROM rounds r
+      LEFT JOIN round_members m ON m.round_id=r.id AND m.excluded_at IS NULL
+      WHERE r.status<>'COMPLETED') unfinished WHERE unfinished.group_id=$1
+      AND (g.creator_id=$2 OR unfinished.user_id=$2)) AS has_unfinished,
     ARRAY(SELECT user_id FROM group_members WHERE group_id=$1 AND left_at IS NULL) AS member_ids,
     previous.request_digest,previous.response_metadata
     FROM (SELECT $1::text AS id) requested
@@ -749,23 +750,17 @@ LIMIT
 
 $1=groupId, $2=이탈 요청자 ID. 제외된 회차 참여는 이 이탈 제한 조회의 대상에서 빠진다.
 
-### RT-PUBLISH — 커밋 후 현재 활성 수신자 조회
+### RT-PUBLISH — 회원 탈퇴 후 남은 모임 구성원 조회
 
-출처: [src/lib/realtime-server.ts](../src/lib/realtime-server.ts).
+출처: `GroupRepository.findDepartureAudience()`. Group 생성·초대·이탈 API에서는 이 조회를 사용하지 않는다.
 
 ```sql
-SELECT
-  m.user_id
-FROM
-  group_members m
-  JOIN users u ON u.id = m.user_id
-WHERE
-  m.group_id = $1
-  AND m.left_at IS NULL
-  AND u.deleted_at IS NULL;
+SELECT m.group_id,m.user_id
+FROM group_members m JOIN users u ON u.id=m.user_id
+WHERE m.group_id=ANY($1::text[]) AND m.left_at IS NULL AND u.deleted_at IS NULL;
 ```
 
-$1=groupId. 별도 읽기 트랜잭션에 AUTH는 없고, 이미 허가된 커밋 결과의 모임 ID로 수신자를 조회한다. 선행 수신자와 중복 제거 후 알림을 보낸다.
+회원 탈퇴 커밋 후 이전 모임 ID 배열로 남은 구성원을 조회한다. 자동 커밋 SELECT 1회이며 명시적 트랜잭션·락·추가 AUTH가 없다. 결과를 GroupInvalidation에서 모임별로 묶어 알린다.
 
 ## 6. SQL 호출 수와 재현
 
@@ -897,7 +892,7 @@ RoundClient·SettlementClient·CreateRoundForm·RoundList는 Settle Frontend에 
 
 ### SQL 계산 기준
 
-아래 수는 Service 호출의 실제 query() 횟수다. **BEGIN·락·AUTH·멱등 조회/저장·COMMIT을 포함**하고, Controller의 취소 전 알림 대상 조회·응답 후 실시간 발행·프론트 후속 GET·MinIO 작업은 별도로 센다. 풀 타임아웃은 startup parameter이며 요청별 SET LOCAL은 없다. JWT Guard 거절은 SQL 0회다. SQL에는 바인딩 자리만 기록하며 회원·계좌·토큰·파일 바이트는 로그에 출력하지 않는다.
+아래 수는 Service 호출의 실제 query() 횟수다. **BEGIN·락·AUTH·멱등 조회/저장·COMMIT을 포함**하고, 응답 후 실시간 발행·프론트 후속 GET·MinIO 작업은 별도로 센다. Settle의 모든 알림 대상은 기존 조회/저장 결과에서 확보하므로 추가 SQL은 없다. 풀 타임아웃은 startup parameter이며 요청별 SET LOCAL은 없다. JWT Guard 거절은 SQL 0회다. SQL에는 바인딩 자리만 기록하며 회원·계좌·토큰·파일 바이트는 로그에 출력하지 않는다.
 
 - `R`: BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY → AUTH → 업무 조회 → COMMIT. 제어 SQL 2회, AUTH 1회다. 읽기에는 명시적 락이 없다.
 - `W`: BEGIN → pg_advisory_xact_lock(1684106607) → AUTH → IDEM-READ → 업무 처리 → IDEM-SAVE → COMMIT. 업무 외 **6회**다. 성공 기록은 같은 트랜잭션에서 저장한다.
@@ -1064,11 +1059,11 @@ RoundClient.command('send')의 확인 → POST → Node Proxy → JWT Guard → 
 
 1. expectedVersion만 허용. W → S-ROUND → 생성자·버전·CONFIRMED 검사 → S-MEMBERS → S-SETTLEMENT-EXPENSES로 지출 재검증.
 2. S-LOCK으로 LOCKED·locked_at 저장 → S-REMAINDER로 미배분 나머지 존재 여부 조회.
-3. 나머지가 있으면 최종 저장을 추첨까지 미룬다. 나머지가 없으면 finalize(false)가 S-MEMBERS → S-SETTLEMENT-EXPENSES를 다시 조회하고 확정 계산한다.
+3. 나머지가 있으면 최종 저장을 추첨까지 미룬다. 나머지가 없으면 finalize()에 이미 검증한 멤버·지출을 전달하여 확정 계산한다. 같은 트랜잭션·락 안에서 재조회하지 않는다.
 4. 최종 저장은 S-FINAL-SHARE × S → S-BALANCE-INSERT × M → S-TRANSFER-INSERT × T → S-FINALIZE 1회다. 분담금·잔액·송금·최종 시각은 같은 트랜잭션에 저장한다.
-5. S-BUMP → IDEM-SAVE → COMMIT → 정산 화면 이동·알림. 실제 송금/카카오 전송은 없으며 링크만 직접 공유한다.
+5. S-BUMP → IDEM-SAVE → COMMIT → 정산 화면 이동·알림. 앞서 읽은 멤버와 회차에서 알림 대상을 확보하여 추가 SQL 없이 발행한다. 실제 송금/카카오 전송은 없으며 링크만 직접 공유한다.
 
-나머지 있음: W 6회 + S-ROUND → S-MEMBERS → S-SETTLEMENT-EXPENSES → S-LOCK → S-REMAINDER → S-BUMP = **12회**. 나머지 없음: 여기에 최종 저장의 재검증 2회·F회·최종 시각 1회가 추가되어 **15 + F회**다. 2명·분담금 2행·송금 1행이면 F=5로 20회다.
+나머지 있음: W 6회 + S-ROUND → S-MEMBERS → S-SETTLEMENT-EXPENSES → S-LOCK → S-REMAINDER → S-BUMP = **12회**. 나머지 없음: 여기에 최종 저장 F회·최종 시각 1회가 추가되어 **13 + F회**다. 2명·분담금 2행·송금 1행이면 F=5로 **18회**다. 멤버 SELECT와 전체 지출 SELECT는 각각 1회이며 알림 추가 SQL은 0회다.
 
 ### S14. POST /api/rounds/{roundId}/draw — 나머지 한 번 추첨
 
@@ -1185,9 +1180,9 @@ ExpenseCard.removeReceipt()의 확인 → DELETE → Node Proxy → JWT Guard �
 
 ### Settle 실시간·검증 경계
 
-회차 생성·지출 생성·지출 수정·지출 삭제·참여자 제외·정산 확정·일반 정산 종료·영수증 삭제 알림은 저장/통합 조회에서 확보한 참여자 ID를 전달받아 수신자 SQL 0회다. 나머지 일반 변경 후 알림 수신자 조회는 BEGIN → 회차 group_id → round_members → COMMIT = **별도 4회**다. 취소는 S5의 기록 확인 SQL에서 삭제 전 허가된 수신자를 함께 읽으므로 삭제 전후 추가 조회 **0회**이며 성공 재생 시 재발행하지 않는다. 실시간 비활성화 시 모두 SQL 0회다. after() 알림 실패는 이미 저장한 변경을 롤백하지 않는다. 메시지에는 rounds·group-rounds·round·settlement와 필요한 groups/group 키만 넣고 금액·계좌·영수증·초대 토큰은 넣지 않는다.
+모든 Settle 변경 알림은 저장/권한 조회에서 확보한 회차·참여자 ID를 사용하여 수신자 추가 SQL이 0회다. 전송도 검증한 멤버를 재사용한다. 취소는 삭제 전 대상을 사용하고 성공 재생 시 재발행하지 않는다. 수취 확인·해제는 settlement:{id}만 갱신한다. 다른 회차 변경은 rounds·group-rounds:{groupId}·round:{id}·settlement:{id}를 발행하며 회차 제외도 모임 멤버십을 변경하지 않으므로 groups/group 알림은 보내지 않는다. after() 알림 실패는 커밋을 롤백하지 않는다. 메시지에 금액·계좌·영수증·초대 토큰을 넣지 않는다.
 
-[scripts/settle-sql.integration.test.ts](../scripts/settle-sql.integration.test.ts)는 실제 PostgreSQL SQL 로그로 생성 4회·UUIDv7 PK·중복 409·동시 중복 단일 성공·세션 락 획득/해제·참여자 저장 실패 원자성·목록 4회·상세 10/11회·지출 생성 6회·생성 입력 오류 AUTH 1회·생성 성공 재생 5회·생성 실패 전체 롤백·같은 키 동시 생성 단일 저장·수정 5회/거절 및 재생 2회/경합 후 재조회 6회·삭제 12회·제외 검토 3회·제외 3회/거절 2회/중복 404·확정 6회/조회 거절 4회/성공 재생 5회·재오픈 10회·나머지 있는 전송 12회·없는 전송 20회·추첨 17회/재추첨 방지 7회·최종 전/후 안내 2회·AUTH/참여 권한 거절 0/1/2회·수취 확인 후 송금 제외·완료 회차/외화 안내 2회·수취 확인 8회·일반 종료·미확인 거절·성공 재생 2회·강제 종료 9회·취소 9회·영수증 생성/조회/삭제 2/2/3회·일반 성공 재생 5회·영수증 재생 2회·종료 후 편집 거절 ROLLBACK을 검증한다. 숫자는 해당 테스트의 참여자·분담금·송금 행 수 기준이며 위 계산식이 일반 규칙이다.
+[scripts/settle-sql.integration.test.ts](../scripts/settle-sql.integration.test.ts)는 각 API 절에 기재한 실제 SQL 수·AUTH/검증/쓰기 순서·트랜잭션/락·동시성·멱등 재생을 검증한다. 전송은 나머지 있음 12회, 나머지 없음은 2명·분담금 2행·송금 1행 기준 18회다. 멤버/전체 지출 중복 SELECT가 없으며 같은 조회 결과로 계산과 알림 대상을 만든다. 숫자는 해당 테스트의 데이터 기준이며 S13 계산식이 일반 규칙이다.
 
 기존 [settlement.integration.test.ts](../scripts/settlement.integration.test.ts)·[concurrency.integration.test.ts](../scripts/concurrency.integration.test.ts)·[receipt-migration.integration.test.ts](../scripts/receipt-migration.integration.test.ts)·[routes.integration.test.ts](../scripts/routes.integration.test.ts)는 Settle 공개 진입점을 통해 권한·과거 조회·정확한 통화/금액·CUSTOM 합계·멱등성·버전 충돌·추첨 중간 실패 취소·상태 전이 경합·사전 검사 후 업로드 경합·최신 수취 계좌 제한·기존 BYTEA 영수증을 검증한다. [domain-boundaries.test.ts](../src/lib/domain-boundaries.test.ts)는 Frontend/Shared→Backend 금지, 서버 전용 표시, 다른 도메인 내부 import 금지와 Controller/Service의 SQL 미포함을 검사한다. [settle.test.ts](../src/lib/settle.test.ts)는 경로 분배·출처·JSON/multipart 오류를 검사한다.
 
@@ -1213,3 +1208,33 @@ Settle 분리 검증 결과(2026-10-03): `npm test` **93개**, 격리된 로컬 
 지출 DELETE 개선 검증(2026-10-03): `npm test` 96개·격리된 PostgreSQL/MinIO의 `npm run test:integration` 50개·`npm run build` 통과. 실제 SQL 로그에서 BEGIN → AUTH → 통합 조회 → 락 → 단일 삭제 SQL → COMMIT의 6회, 권한/상태/버전 거절의 락 없는 4회, 성공 재생의 5회를 확인했다. 작성자/회차 생성자 권한·부담금/영수증 CASCADE·총금액/예상 송금 갱신·멱등 저장 실패 전체 롤백·락 전 조회 이후 PATCH/확정/동일 키 삭제 경합·커밋 후 MinIO 삭제·객체 삭제 실패 시 DB 성공 유지·알림 재발행 방지를 검증했다. 실제 Chrome `--expenses-only`에서 DELETE 직후 GET 0회, WebSocket invalidation 전달 뒤 상세 GET 1회를 확인했다. 기존 개발 서버의 Next 잠금 충돌은 임시 소스/의존성 복사본에서 전체 통합 테스트를 재실행하여 해소했다.
 
 정산 확정 개선 검증(2026-10-04): `npm test` 96개·격리된 PostgreSQL/MinIO와 개발 서버 복사본의 `npm run test:integration` 54개·`npm run build` 통과. 확정은 AUTH → BEGIN → 회차/지출 통합 조회 → 공통 transaction lock → 확정 일괄 저장 → COMMIT의 6회이며, 지출 수정도 같은 advisory lock을 사용한다. 지출 다건·혼합 분배·권한·빈 지출·멱등 재생·실패 롤백·확정 중 추가/수정의 실제 잠금 대기를 검증했다.
+
+
+## 9. 도메인 책임과 자동 재조회 정리 (2026-10-04)
+
+### 공통 UI·요청 정책
+
+1. `Global/Util/Frontend`는 UI 요소와 요청·액션 훅을 직접 소유하며 app/Domain 구현을 역참조하지 않는다. 앱 인증 확인·Provider·내비게이션 조합은 `app/home/AppShell.tsx`가 담당한다.
+2. 정산 상태 표시·금액 애니메이션·stale_round 안내는 Settle, 계좌 충돌 안내는 User가 소유한다. `app/home/ui.tsx`와 `app/animated-money.tsx`는 호환 export다.
+3. Group/Settle의 생성 Requests가 UUIDv7 키 생성 함수를 공통 transport에 전달한다. transport는 URL로 도메인을 판별하지 않고 키·원본문 재시도만 유지한다.
+4. 초대 폐기 성공은 직접 GET 0회, 웹소켓 group:{id} 수신 후 GET 1회다. 회차 전체보기 dialog는 닫을 때 구독을 해제하고 다시 열 때 최신 목록을 1회 읽는다.
+5. 정산 화면의 focus/pageshow/visibilitychange는 같은 resource의 120ms 예약을 공유한다. 이미 연결 유틸에서 병합된 웹소켓 알림은 추가 지연 없이 조회하며, 대기 중인 복귀 조회 예약도 함께 해소한다.
+6. 모임 이탈·회차 취소는 DELETE 발송 전에 상세 resource를 중지한다. 지연 응답 중 알림에도 삭제된 상세를 GET하지 않으며, 실패하면 resource와 구독을 복구한다.
+
+### Auth HTTP·native 경계
+
+기존 카카오 로그인/콜백·access-token·refresh·logout·test-login URL은 Auth 공개 Controller에 위임한다. JWT/OIDC 구현은 auth-util, 회원 상태 인증은 AuthorizationService, 갱신 목적·만료 정책은 AuthService, 쿠키 발급/삭제는 AuthCookies가 소유한다. User 온보딩·탈퇴는 공개 Auth 쿠키 어댑터를 호출한다. 기존 상태 없는 JWT 계약과 SQL 수는 유지한다.
+
+별도 Node WebSocket 서버는 Auth `Backend/native.ts`로 JWT/회원 상태를 확인하고 User `Backend/native.ts`를 통해 User Repository의 SELECT를 실행한다. 이 네이티브 모듈은 Next 전용 런타임에 의존하지 않으며 경계 테스트는 공개 진입점과 클라이언트 접근 금지를 함께 검사한다.
+
+### 계좌·회원 탈퇴 알림
+
+계좌 저장의 AUTH → 조건부 UPDATE 2 SQL은 유지한다. 커밋 후 UserInvalidation은 본인에게 me를 전달하고 Settle 공개 조회로 KRW의 아직 확인되지 않은 송금별 sender_id·round_id를 자동 커밋 SELECT 1회 조회한다. 대상자에게 해당 settlement:{id}만 발행한다. 전체 settlements 무효화와 명시적 읽기 트랜잭션은 사용하지 않는다. 조회 실패도 본인의 me 갱신을 막지 않는다.
+
+회원 탈퇴의 기존 쓰기 트랜잭션·락·미종료 검사는 유지한다. 커밋 후 Group 공개 기능에서 이전 모임의 활성 구성원을 SELECT 1회 조회하여 groups·group:{id}를 보낸다.
+
+### 검증
+
+`npm test`, 격리된 로컬 test DB·MinIO의 `npm run test:integration`, `npm run build`를 실행한다. `scripts/browser-check.mjs --refresh-only`는 초대 폐기 직접 GET 0/웹소켓 GET 1, 닫힌 dialog GET 0/재개방 GET 1, 수취 확인의 무관한 목록 GET 0, 복귀 이벤트 정산 GET 1, 실패한 이탈 뒤 구독 복구, DELETE 응답 1초 지연 중 모임/회차 상세 GET 0을 검증한다.
+
+검증 결과(2026-10-05): `npm test` **98개**, 전용 로컬 테스트 PostgreSQL·MinIO의 `npm run test:integration` **73개**, `npm run build`가 통과했다. 실제 Chrome의 전체 회귀 검사와 `--refresh-only` **6개**, `--expenses-only` **12개**, `--account-only` **1개** 시나리오도 통과했다. 전송은 나머지 없는 2명·지출 1건에서 **18 SQL**, 멤버/전체 지출 SELECT 각각 **1회**, 알림 대상 추가 SQL **0회**다. 계좌 변경은 본인 me와 해당 KRW 송금자의 settlement 키만 발행하며 AUTH·UPDATE·대상 SELECT까지 **3 SQL**이다. 전용 테스트 서버·Chrome은 종료했으며 실제 카카오 외부 인증은 이번 검증 대상이 아니다.

@@ -52,7 +52,7 @@ export async function getGroup(access: Identity, groupId: string): Promise<Group
   })
 }
 
-export async function createGroup(access: Identity, key: string, body: CreateGroupRequestDTO | Record<string, unknown>): Promise<GroupMutationResult> {
+export async function createGroup(access: Identity, key: string, body: CreateGroupRequestDTO | Record<string, unknown>, captureAudience?: (userIds: string[]) => void): Promise<GroupMutationResult> {
   onlyKeys(body, ['name'])
   const name = textInput(body.name)
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(key)) badInput('invalid_request_key', 'UUIDv7 모임 생성 키가 필요합니다')
@@ -64,6 +64,7 @@ export async function createGroup(access: Identity, key: string, body: CreateGro
       if (error && typeof error === 'object' && 'code' in error && error.code === '23505' && 'constraint' in error && error.constraint === 'groups_pkey') throw duplicateGroup()
       throw error
     }
+    captureAudience?.([account.id])
     return { id }
   })
 }
@@ -173,4 +174,8 @@ export async function acceptInvite(access: Identity, key: string, token: string,
       return { id: joined.group_id }
     })
   })
+}
+
+export function getDepartureAudience(groupIds: string[]) {
+  return withDatabaseConnection(client => repository.findDepartureAudience(client, groupIds))
 }

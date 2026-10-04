@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { apiRequest, ApiError } from './api-client.ts'
+import { createRoundRequest } from '../Domain/Settle/Frontend/Requests.ts'
+import { createGroupRequest } from '../Domain/Group/Frontend/Requests.ts'
 import { discardBankAccountRequests } from '../Domain/User/Frontend/Requests.ts'
 
 const originalFetch = globalThis.fetch
@@ -316,7 +318,6 @@ test('authentication redirects discard pending bodies and recovery callbacks acr
   }
 })
 
-
 test('round creation sends a UUIDv7 ticket and preserves it after a lost response', async () => {
   fakeWindow()
   const keys: string[] = []
@@ -325,11 +326,24 @@ test('round creation sends a UUIDv7 ticket and preserves it after a lost respons
     if (keys.length === 1) throw new TypeError('response lost')
     return Response.json({ error: 'round_already_exists' }, { status: 409 })
   }
-  const path = '/api/groups/ticket-test/rounds', body = { name: '검증 회차', currency: 'KRW', participantIds: ['a', 'b'] }
-  await assert.rejects(apiRequest(path, { method: 'POST', body }), error => error instanceof ApiError && error.code === 'network_error')
-  await assert.rejects(apiRequest(path, { method: 'POST', body }), error => error instanceof ApiError && error.code === 'round_already_exists')
+  const body = { name: '검증 회차', currency: 'KRW' as const, participantIds: ['a', 'b'] }
+  await assert.rejects(createRoundRequest('ticket-test', body), error => error instanceof ApiError && error.code === 'network_error')
+  await assert.rejects(createRoundRequest('ticket-test', body), error => error instanceof ApiError && error.code === 'round_already_exists')
   assert.match(keys[0], /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
   assert.equal(keys[0], keys[1])
-  await assert.rejects(apiRequest(path, { method: 'POST', body }))
+  await assert.rejects(createRoundRequest('ticket-test', body))
   assert.notEqual(keys[1], keys[2], 'a definitive 409 clears the pending ticket')
+})
+
+test('group creation owns its UUIDv7 policy while generic requests keep random keys', async () => {
+  fakeWindow()
+  const keys: string[] = []
+  globalThis.fetch = async (_input, init) => {
+    keys.push(new Headers(init?.headers).get('Idempotency-Key')!)
+    return Response.json({ data: { id: 'created' } })
+  }
+  await createGroupRequest({ name: '모임' })
+  await apiRequest('/api/generic-operation', { method: 'POST', body: {} })
+  assert.equal(keys[0].split('-')[2][0], '7')
+  assert.equal(keys[1].split('-')[2][0], '4')
 })

@@ -1,4 +1,5 @@
 import 'server-only'
+import { unfinishedGroupParticipationSql } from '../../../Settle/Backend'
 import type { Database } from '../../../../Global/Util/Backend'
 import type { GroupRow, GroupListRow, InviteRow, InviteSummaryRow, InviteMutationRow, InviteAcceptanceRow, GroupMemberRow, GroupDepartureRow } from '../DAO/GroupDAO'
 
@@ -47,9 +48,8 @@ export async function insertGroup(client: Database, id: string, userId: string, 
 
 export async function findGroupDeparture(client: Database, groupId: string, userId: string, key: string) {
   return (await client.query<GroupDepartureRow>(`SELECT g.creator_id,viewer.user_id,
-    EXISTS(SELECT 1 FROM rounds r WHERE r.group_id=$1 AND r.status<>'COMPLETED'
-      AND (g.creator_id=$2 OR EXISTS(SELECT 1 FROM round_members m
-        WHERE m.round_id=r.id AND m.user_id=$2 AND m.excluded_at IS NULL))) AS has_unfinished,
+    EXISTS(SELECT 1 FROM (${unfinishedGroupParticipationSql}) unfinished WHERE unfinished.group_id=$1
+      AND (g.creator_id=$2 OR unfinished.user_id=$2)) AS has_unfinished,
     ARRAY(SELECT user_id FROM group_members WHERE group_id=$1 AND left_at IS NULL) AS member_ids,
     previous.request_digest,previous.response_metadata
     FROM (SELECT $1::text AS id) requested
@@ -180,3 +180,8 @@ export const roundCreationCandidatesSql = `WITH actor AS (
     WHERE m.group_id=$1 AND m.user_id=ANY($2::text[]) AND m.left_at IS NULL
       AND u.deleted_at IS NULL AND u.onboarding_completed_at IS NOT NULL
   )`
+
+export async function findDepartureAudience(client: Database, groupIds: string[]) {
+  return (await client.query<{ group_id: string; user_id: string }>(`SELECT m.group_id,m.user_id FROM group_members m JOIN users u ON u.id=m.user_id
+    WHERE m.group_id=ANY($1::text[]) AND m.left_at IS NULL AND u.deleted_at IS NULL`, [groupIds])).rows
+}

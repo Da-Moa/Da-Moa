@@ -6,7 +6,8 @@ import { useRouter } from 'next/navigation'
 import { ChevronRight, Plus, Search } from 'lucide-react'
 import { apiRequest, ErrorNotice, Loading, ParticipantAvatar, useAction, useResource } from '../../../../Global/Util/Frontend'
 import type { Page } from '../../../../lib/domain-types'
-import type { GroupListItem, GroupMutationResult as MutationResult } from '../../Shared'
+import type { GroupListItem } from '../../Shared'
+import { createGroupRequest } from '../Requests'
 
 export function GroupsList() {
   const router = useRouter()
@@ -21,7 +22,7 @@ export function GroupsList() {
   const more = useAction()
   async function create(form: HTMLFormElement) {
     const values = new FormData(form)
-    const result = await action.run(() => apiRequest<MutationResult>('/api/groups', { method: 'POST', body: { name: String(values.get('name') ?? '') } }))
+    const result = await action.run(() => createGroupRequest({ name: String(values.get('name') ?? '') }))
     if (result) router.push(`/home/groups/${result.id}`)
   }
   async function loadMore() {

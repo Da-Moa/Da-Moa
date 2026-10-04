@@ -9,7 +9,8 @@ import {
   createRefreshToken,
   currentTimestamp,
   type KakaoProfile,
-} from '../../../../lib/auth'
+  type RefreshToken,
+} from '../auth-util'
 import { withWriteTransaction } from '../../../../lib/db'
 import { AppError } from '../../../../lib/errors'
 import { TEST_ONBOARDING_KEY, testAccountForKey } from '../../../../lib/test-accounts'
@@ -58,4 +59,16 @@ export function signInTestAccount(key: unknown) {
     if (!userId) throw new AppError(404, 'not_found', '테스트 계정을 먼저 시드해 주세요')
     return issueTokens(userId, 'app', currentTimestamp())
   })
+}
+
+export function refreshTokens(refresh: RefreshToken) {
+  const now = currentTimestamp(), purpose = refresh.purpose ?? 'app'
+  const remaining = (refresh.expiresAt ?? now) - now
+  const refreshMaxAge = purpose === 'onboarding' ? remaining : REFRESH_TOKEN_MAX_AGE_SECONDS
+  const accessMaxAge = Math.min(ACCESS_TOKEN_MAX_AGE_SECONDS, remaining)
+  return {
+    accessToken: createAccessToken(refresh.userId, refresh.sessionId, undefined, now, accessMaxAge, purpose),
+    refreshToken: createRefreshToken(refresh.userId, refresh.sessionId, undefined, now, refreshMaxAge, purpose),
+    refreshMaxAge,
+  }
 }

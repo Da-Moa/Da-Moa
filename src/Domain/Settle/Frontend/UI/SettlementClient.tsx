@@ -1,19 +1,20 @@
 'use client'
 
-import { useEffect } from 'react'
 import { ChevronLeft } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { AnimatedMoney } from '../../../../Global/Util/Frontend'
+import { AnimatedMoney } from './AnimatedMoney'
 import { ApiError, apiRequest } from '../../../../Global/Util/Frontend'
 import { formatAccountNumber } from '../../../User/Shared'
 import type { SettlementDTO } from '../../Shared'
 import { formatMoney } from '../../Shared'
-import { CopyLink, ErrorNotice, Loading, ParticipantAvatar, StatusBadge, useAction, useResource } from '../../../../Global/Util/Frontend'
+import { CopyLink, Loading, ParticipantAvatar, useAction, useResource } from '../../../../Global/Util/Frontend'
+import { StatusBadge } from './StatusBadge'
+import { ErrorNotice } from './ErrorNotice'
 
 export default function SettlementClient({ roundId }: { roundId: string }) {
   const router = useRouter()
-  const settlement = useResource<SettlementDTO>(`/api/rounds/${roundId}/settlement`)
+  const settlement = useResource<SettlementDTO>(`/api/rounds/${roundId}/settlement`, { refreshOnResume: true })
   const action = useAction()
   const data = settlement.data
   const reload = settlement.reload
@@ -23,13 +24,6 @@ export default function SettlementClient({ roundId }: { roundId: string }) {
   const remainingOutgoingMinor = data?.outgoing.reduce((sum, transfer) => sum + BigInt(transfer.amountMinor), 0n) ?? 0n
   const displayedBalanceMinor = balanceMinor < 0n ? remainingIncomingMinor > 0n ? remainingIncomingMinor : 0n : remainingOutgoingMinor
   const allIncomingReceived = Boolean(data?.incoming.length && data.incoming.every(transfer => transfer.receivedAt !== null))
-  useEffect(() => {
-    const refresh = () => { if (document.visibilityState === 'visible') void reload() }
-    window.addEventListener('focus', refresh)
-    window.addEventListener('pageshow', refresh)
-    document.addEventListener('visibilitychange', refresh)
-    return () => { window.removeEventListener('focus', refresh); window.removeEventListener('pageshow', refresh); document.removeEventListener('visibilitychange', refresh) }
-  }, [reload])
   async function command(name: 'draw' | 'complete' | 'force-complete') {
     if (!data) return
     if (name === 'complete' && !window.confirm('받을 내역이 모두 확인됐어요. 이 회차의 정산을 종료할까요? 종료 후 모든 정산 기록은 읽기 전용이며 참여자의 탈퇴 제한이 해제돼요.')) return

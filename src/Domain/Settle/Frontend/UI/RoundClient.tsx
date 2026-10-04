@@ -1,16 +1,17 @@
 'use client'
 
-import { useAccount } from '../../../User/Frontend'
-
 import { Fragment, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { ArrowRight, ChevronDown, ChevronLeft, ImagePlus, Pencil, Plus, Trash2, X } from 'lucide-react'
-import { AnimatedMoney } from '../../../../Global/Util/Frontend'
+import { AnimatedMoney } from './AnimatedMoney'
 import { ApiError, apiRequest } from '../../../../Global/Util/Frontend'
 import type { ExclusionCheck, Expense, MutationResult, Receipt, RoundDetail } from '../../Shared'
 import { amountInputPattern, currencyDecimals, expenseInputMaximum, formatAmountInput, formatMoney, minorToAmount, parseAmount } from '../../Shared'
-import { ErrorNotice, Loading, ParticipantAvatar, SheetSelect, StatusBadge, useAction, useResource } from '../../../../Global/Util/Frontend'
+import { Loading, ParticipantAvatar, SheetSelect, useAction, useResource } from '../../../../Global/Util/Frontend'
+import { useAccount } from '../../../User/Frontend'
+import { StatusBadge } from './StatusBadge'
+import { ErrorNotice } from './ErrorNotice'
 
 const expenseDayFormatter = new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' })
 function expenseDay(createdAt: number) {
@@ -205,8 +206,10 @@ export default function RoundClient({ roundId }: { roundId: string }) {
   }
   async function cancel() {
     if (!data || !window.confirm('지출 기록이 없는 회차만 취소할 수 있어요. 회차를 영구 삭제할까요? 이 작업은 되돌릴 수 없어요.')) return
+    resource.suspend()
     const result = await action.run(() => apiRequest(`/api/rounds/${roundId}`, { method: 'DELETE', body: { expectedVersion: data.version } }))
     if (result) router.push(`/home/groups/${data.groupId}`)
+    else await resource.resume()
   }
   async function loadMore() {
     if (!data?.expensesNextCursor) return

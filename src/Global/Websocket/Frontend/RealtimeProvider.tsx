@@ -2,14 +2,13 @@
 
 import { createContext, useContext, useEffect, useMemo, useRef, type ReactNode } from 'react'
 import { getAccessToken } from '../../Auth/Frontend'
-import type { Account } from '../../../Domain/User/Shared'
 import { createWebsocketUtil, type WebsocketSubscribe } from './websocket-util'
 
 const RealtimeContext = createContext<WebsocketSubscribe | null>(null)
 export const useWebsocketSubscribe = () => useContext(RealtimeContext)
 
 export function RealtimeProvider({ accountId, reloadAccount, children }: {
-  accountId: string; reloadAccount: () => Promise<Account | null>; children: ReactNode
+  accountId: string; reloadAccount: () => Promise<{ id: string } | null>; children: ReactNode
 }) {
   const accountReload = useRef(reloadAccount)
   accountReload.current = reloadAccount

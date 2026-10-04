@@ -395,8 +395,7 @@ function validateExpenses(items: Awaited<ReturnType<typeof settlementExpensesFor
   return { items, members }
 }
 
-async function finalize(client: Database, roundId: string, currency: Currency) {
-  const { items, members } = await validatedExpenses(client, roundId, currency)
+async function finalize(client: Database, roundId: string, { items, members }: Awaited<ReturnType<typeof validatedExpenses>>) {
   const result = finalizeSettlement(items, members.map(m => m.userId))
   for (const share of result.shares) await repository.saveFinalShare(client, share.expenseId, share.userId, share.amountMinor, share.receivedRemainder)
   for (const balance of result.balances) await repository.insertBalance(client, roundId, balance.userId, balance.paidMinor, balance.burdenMinor, balance.balanceMinor)
@@ -561,11 +560,12 @@ export async function roundCommand(access: Identity, key: string, roundId: strin
     const now = nowSeconds()
     if (action === 'send') {
       state(round, 'CONFIRMED')
-      await validatedExpenses(client, roundId, round.currency as Currency)
+      const expenses = await validatedExpenses(client, roundId, round.currency as Currency)
       const { rowCount } = await repository.lockRound(client, roundId, now, round.version)
       if (!rowCount) throw new AppError(409, 'stale_round', '다른 변경이 먼저 저장됐어요. 최신 내역을 확인해 주세요')
       const { rows } = await repository.findRemainder(client, roundId)
-      if (!rows.length) await finalize(client, roundId, round.currency as Currency)
+      if (!rows.length) await finalize(client, roundId, expenses)
+      captureAudience?.({ groupId: round.group_id, userIds: expenses.members.map(member => member.userId) })
     }
     return bump(client, roundId, round.version)
   })
@@ -713,4 +713,8 @@ export async function getReceipt(access: Identity, receiptId: string) {
   const content = receipt.object_key ? await readReceipt(receipt.object_key) : receipt.content
   if (!content) throw missing()
   return { mimeType: receipt.mime_type, content }
+}
+
+export function getBankSettlementAudience(userId: string) {
+  return withDatabaseConnection(client => repository.findBankSettlementAudience(client, userId))
 }

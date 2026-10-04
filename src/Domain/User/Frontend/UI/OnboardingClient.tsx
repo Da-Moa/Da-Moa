@@ -1,10 +1,11 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { ApiError, apiRequest, ErrorNotice, Loading, useAction, useResource } from '../../../../Global/Util/Frontend'
+import { ApiError, apiRequest, Loading, useAction, useResource } from '../../../../Global/Util/Frontend'
 import { discardBankAccountRequests } from '../Requests'
 import { BankFields, bankValues, useBankForm } from './BankFields'
 import type { Account, OnboardingResponseDTO } from '../../Shared'
+import { ErrorNotice } from './ErrorNotice'
 
 export default function OnboardingClient() {
   const me = useResource<Account>('/api/me')

@@ -603,3 +603,9 @@ export function findReceipt(client: Database, receiptId: string, userId: string)
     JOIN rounds r ON r.id=e.round_id JOIN round_members viewer ON viewer.round_id=r.id AND viewer.user_id=$2
     WHERE rc.id=$1`, [receiptId, userId])
 }
+
+export async function findBankSettlementAudience(client: Database, userId: string) {
+  return (await client.query<{ sender_id: string; round_id: string }>(`SELECT DISTINCT t.sender_id,t.round_id
+    FROM settlement_transfers t JOIN rounds r ON r.id=t.round_id
+    WHERE t.receiver_id=$1 AND t.received_at IS NULL AND r.currency='KRW'`, [userId])).rows
+}

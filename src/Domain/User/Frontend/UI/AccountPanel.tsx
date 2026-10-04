@@ -3,11 +3,12 @@
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { ChevronLeft, CircleUserRound } from 'lucide-react'
-import { ApiError, apiRequest, ErrorNotice, useAction } from '../../../../Global/Util/Frontend'
+import { ApiError, apiRequest, useAction } from '../../../../Global/Util/Frontend'
 import { formatAccountNumber, type BankAccountResponseDTO } from '../../Shared'
 import { useAccount } from '../Hooks/AccountContext'
 import { discardBankAccountRequests } from '../Requests'
 import { BankFields, bankValues, useBankForm } from './BankFields'
+import { ErrorNotice } from './ErrorNotice'
 
 export function AccountPanel() {
   const { account, reloadAccount } = useAccount()

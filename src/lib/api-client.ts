@@ -1,6 +1,5 @@
 'use client'
 
-import { uuidV7 } from './uuid'
 import { clearAccessToken, getAccessToken, setAccessToken } from '../Global/Auth/Frontend'
 
 export class ApiError extends Error {
@@ -62,7 +61,7 @@ async function fingerprint(path: string, method: string, body: unknown): Promise
   return JSON.stringify([path, method, entries])
 }
 
-type RequestOptions = { method?: string; body?: unknown; signal?: AbortSignal; response?: 'blob'; fresh?: boolean }
+type RequestOptions = { method?: string; body?: unknown; signal?: AbortSignal; response?: 'blob'; fresh?: boolean; createRequestKey?: () => string }
 const readRequests = new Map<string, Promise<unknown>>()
 
 export function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -89,12 +88,12 @@ async function request<T>(path: string, options: RequestOptions): Promise<T> {
       const previous = pending
       const error = new ApiError(409, 'unresolved_request', '이전 요청의 저장 결과를 먼저 확인해야 해요. 변경한 입력은 아직 저장되지 않았어요.')
       error.recover = () => {
-        if (previous.discarded) return Promise.reject(new ApiError(409, 'request_discarded', '이전 입력을 지웠어요. 저장된 계좌를 확인한 뒤 다시 입력해 주세요.'))
+        if (previous.discarded) return Promise.reject(new ApiError(409, 'request_discarded', '이전 입력을 지웠어요. 저장된 내용을 확인한 뒤 다시 입력해 주세요.'))
         return apiRequest(path, { method, body: previous.body })
       }
       throw error
     }
-    pending ??= { signature, key: method === 'POST' && (path === '/api/groups' || /^\/api\/groups\/[^/]+\/rounds$/.test(path)) ? uuidV7() : crypto.randomUUID(), body: snapshot(options.body) }
+    pending ??= { signature, key: options.createRequestKey?.() ?? crypto.randomUUID(), body: snapshot(options.body) }
     unfinishedRequests.set(operation, pending)
   }
   const body = pending ? pending.body : options.body

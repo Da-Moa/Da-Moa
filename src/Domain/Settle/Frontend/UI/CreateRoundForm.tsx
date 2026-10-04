@@ -2,9 +2,10 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { apiRequest, SheetSelect, useAction } from '../../../../Global/Util/Frontend'
-import { CURRENCIES, CURRENCY_CODES } from '../../Shared'
-import type { Member, MutationResult } from '../../../../lib/domain-types'
+import { SheetSelect, useAction } from '../../../../Global/Util/Frontend'
+import { CURRENCIES, CURRENCY_CODES, requireCurrency } from '../../Shared'
+import type { Member } from '../../../../lib/domain-types'
+import { createRoundRequest } from '../Requests'
 
 export function CreateRoundForm({ groupId, members, userId, action }: { groupId: string; members: Member[]; userId: string; action: ReturnType<typeof useAction> }) {
   const router = useRouter()
@@ -13,7 +14,7 @@ export function CreateRoundForm({ groupId, members, userId, action }: { groupId:
   async function start(form: HTMLFormElement) {
     const values = new FormData(form)
     const participantIds = [...new Set([userId, ...values.getAll('participantIds').map(String)])]
-    const result = await action.run(() => apiRequest<MutationResult>(`/api/groups/${groupId}/rounds`, { method: 'POST', body: { name: String(values.get('name') ?? ''), currency: String(values.get('currency') ?? ''), participantIds } }))
+    const result = await action.run(() => createRoundRequest(groupId, { name: String(values.get('name') ?? ''), currency: requireCurrency(values.get('currency')), participantIds }))
     if (result) router.push(`/home/rounds/${result.roundId ?? result.id}`)
   }
   return <form className="domain-card stack" onSubmit={event => { event.preventDefault(); void start(event.currentTarget) }}>

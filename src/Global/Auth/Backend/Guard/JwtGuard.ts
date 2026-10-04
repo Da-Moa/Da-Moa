@@ -1,9 +1,10 @@
 import 'server-only'
+import { clearAuthCookies } from '../Controller/AuthCookies'
 import { NextResponse, type NextRequest } from 'next/server'
 import {
-  ACCESS_TOKEN_COOKIE_NAME, REFRESH_TOKEN_COOKIE_NAME,
-  authCookieOptions, refreshCookieOptions, readRequestAccessToken, readRefreshToken,
-} from '../../../../lib/auth'
+  REFRESH_TOKEN_COOKIE_NAME,
+  readRequestAccessToken, readRefreshToken,
+} from '../auth-util'
 import { AppError, errorResponse } from '../../../../lib/errors'
 
 const publicHealthPaths = ['/api/health', '/api/health/live', '/api/health/database', '/api/health/minio', '/api/health/dependencies']
@@ -23,8 +24,7 @@ export function jwtGuard(request: NextRequest): Response | null {
 
   if (refreshRequest) {
     const response = NextResponse.json({ error: 'unauthorized' }, { status: 401, headers: { 'Cache-Control': 'private, no-store' } })
-    response.cookies.set(ACCESS_TOKEN_COOKIE_NAME, '', authCookieOptions(0))
-    response.cookies.set(REFRESH_TOKEN_COOKIE_NAME, '', refreshCookieOptions(0))
+    clearAuthCookies(response)
     return response
   }
   return errorResponse(new AppError(401, 'unauthorized', '로그인이 필요합니다'))
