@@ -12,6 +12,14 @@ if (!testUrl || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(testUrl).h
 process.env.DATABASE_URL = testUrl
 
 test('PostgreSQL pool reuses connections, rolls back safely, and isolates concurrent transactions', async t => {
+  const previousLog = process.env.DB_QUERY_LOG
+  process.env.DB_QUERY_LOG = 'true'
+  t.after(() => {
+    if (previousLog === undefined) delete process.env.DB_QUERY_LOG
+    else process.env.DB_QUERY_LOG = previousLog
+  })
+  const logs: string[] = []
+  t.mock.method(console, 'info', (sql: string) => logs.push(sql))
   const pool = getDatabasePool(testUrl)
   t.after(() => pool.end())
   let queries = 0
@@ -22,7 +30,12 @@ test('PostgreSQL pool reuses connections, rolls back safely, and isolates concur
     (await client.query('SELECT pg_backend_pid() AS pid')).rows[0].pid)
   const pid = await backend()
   assert.equal(await backend(), pid)
-  assert.equal(queries, 10, 'reused connections must count each query exactly once')
+  assert.equal(queries, 6, 'reused connections must count each query exactly once without SET queries')
+  assert.equal(logs.length, 6)
+  assert.equal(logs[0], 'SQL:\n    BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
+  assert.match(logs[1], /^SQL:\n    SELECT\n        pg_backend_pid\(\) AS pid$/)
+  assert.equal(logs[2], 'SQL:\n    COMMIT')
+  assert.deepEqual(logs.slice(0, 3), logs.slice(3, 6))
   assert.equal(pool.totalCount, 1)
   assert.equal(pool.idleCount, 1)
 
@@ -38,7 +51,8 @@ test('PostgreSQL pool reuses connections, rolls back safely, and isolates concur
   assert.equal(state.probe, null)
   const client = await pool.connect()
   try {
-    assert.equal((await client.query('SHOW statement_timeout')).rows[0].statement_timeout, '0')
+    assert.equal((await client.query('SHOW statement_timeout')).rows[0].statement_timeout, '15s')
+    assert.equal((await client.query('SHOW lock_timeout')).rows[0].lock_timeout, '10s')
     assert.equal((await client.query('SHOW transaction_read_only')).rows[0].transaction_read_only, 'off')
   } finally { client.release() }
 
@@ -48,6 +62,8 @@ test('PostgreSQL pool reuses connections, rolls back safely, and isolates concur
   const concurrent = () => withReadTransaction(async client => {
     if (++arrived === 2) resume()
     await ready
+    assert.equal((await client.query('SHOW statement_timeout')).rows[0].statement_timeout, '15s')
+    assert.equal((await client.query('SHOW lock_timeout')).rows[0].lock_timeout, '10s')
     assert.equal((await client.query('SHOW transaction_read_only')).rows[0].transaction_read_only, 'on')
     return (await client.query('SELECT pg_backend_pid() AS pid')).rows[0].pid
   })
@@ -55,4 +71,10 @@ test('PostgreSQL pool reuses connections, rolls back safely, and isolates concur
   assert.notEqual(pids[0], pids[1])
   assert.equal(pool.totalCount, 2)
   assert.equal(pool.idleCount, 2)
+
+  await assert.rejects(withReadTransaction(client => client.query('SELECT $1::integer', ['private-account-value'])),
+    (error: { code?: string }) => error.code === '22P02')
+  assert.equal(logs.at(-1), 'SQL:\n    ROLLBACK')
+  assert.doesNotMatch(logs.join('\n'), /private-account-value|db\.query\.(start|end)/)
+  assert.equal(logs.length, queries, 'every query must be logged exactly once')
 })

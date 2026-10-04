@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
-import { apiRequest, ApiError, discardBankAccountRequests } from './api-client.ts'
+import { apiRequest, ApiError } from './api-client.ts'
+import { createRoundRequest } from '../Domain/Settle/Frontend/Requests.ts'
+import { createGroupRequest } from '../Domain/Group/Frontend/Requests.ts'
+import { discardBankAccountRequests } from '../Domain/User/Frontend/Requests.ts'
 
 const originalFetch = globalThis.fetch
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
@@ -78,7 +81,11 @@ test('expired bank authentication discards the original personal data before log
 
 function fakeWindow(path = '/settlements/round-a', search = '') {
   const redirects: string[] = []
-  Object.defineProperty(globalThis, 'window', { configurable: true, value: { location: { pathname: path, search, assign: (path: string) => redirects.push(path) } } })
+  const storage = new Map([['da_moa_access', 'test-access-token']])
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: {
+    location: { pathname: path, search, assign: (path: string) => redirects.push(path) },
+    localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) },
+  } })
   return redirects
 }
 
@@ -104,7 +111,7 @@ test('session refresh retries the unchanged mutation with the same key and body'
   globalThis.fetch = async (input, init) => {
     requests.push({ path: String(input), key: new Headers(init?.headers).get('Idempotency-Key'), body: init?.body })
     if (requests.length === 1) return Response.json({ error: 'unauthorized' }, { status: 401 })
-    if (String(input) === '/api/auth/refresh') return Response.json({ ok: true })
+    if (String(input) === '/api/auth/refresh') return Response.json({ data: { accessToken: 'refreshed-access-token' } })
     return Response.json({ data: { version: 2 } })
   }
   await apiRequest('/api/rounds/round-a/confirm', { method: 'POST', body: { expectedVersion: 1 } })
@@ -112,6 +119,16 @@ test('session refresh retries the unchanged mutation with the same key and body'
   assert.equal(requests[0].key, requests[2].key)
   assert.equal(requests[0].body, requests[2].body)
   assert.deepEqual(redirects, [])
+})
+
+test('logout clears the local Access token and requests carry Bearer authorization', async () => {
+  fakeWindow()
+  globalThis.fetch = async (_input, init) => {
+    assert.equal(new Headers(init?.headers).get('Authorization'), 'Bearer test-access-token')
+    return Response.json({ ok: true })
+  }
+  await apiRequest('/api/auth/logout', { method: 'POST' })
+  assert.equal(window.localStorage.getItem('da_moa_access'), null)
 })
 
 test('an expired session retains the settlement destination while redirecting to login', async () => {
@@ -207,4 +224,126 @@ test('receipt retry retains its original version and bytes after a round refresh
   await assert.rejects(() => apiRequest('/api/rounds/receipt-replay/expenses/expense/receipts', { method: 'POST', body: form('1') }))
   await apiRequest('/api/rounds/receipt-replay/expenses/expense/receipts', { method: 'POST', body: form('2') })
   assert.deepEqual(requests[0], requests[1])
+})
+
+test('overlapping GETs share a request but completed reads and different tokens stay independent', async () => {
+  fakeWindow()
+  let calls = 0
+  globalThis.fetch = async () => { calls++; return Response.json({ data: { sequence: calls } }) }
+  const first = apiRequest('/api/groups')
+  const duplicate = apiRequest('/api/groups')
+  assert.equal(first, duplicate)
+  await Promise.all([first, duplicate, apiRequest('/api/groups?q=other')])
+  assert.equal(calls, 2)
+  await apiRequest('/api/groups')
+  assert.equal(calls, 3)
+  await Promise.all([apiRequest('/api/groups'), apiRequest('/api/groups', { fresh: true })])
+  assert.equal(calls, 5, 'invalidation must not reuse a read started before a write')
+  const oldAccount = apiRequest('/api/me')
+  window.localStorage.setItem('da_moa_access', 'other-account-token')
+  await Promise.all([oldAccount, apiRequest('/api/me')])
+  assert.equal(calls, 7)
+})
+
+test('failed GETs are not cached and callers with AbortSignal remain independent', async () => {
+  fakeWindow()
+  let calls = 0
+  globalThis.fetch = async () => { calls++; return Response.json({ error: 'storage_unavailable' }, { status: 503 }) }
+  await assert.rejects(apiRequest('/api/groups'))
+  await assert.rejects(apiRequest('/api/groups'))
+  assert.equal(calls, 2)
+  const controller = new AbortController()
+  await Promise.allSettled([apiRequest('/api/groups', { signal: controller.signal }), apiRequest('/api/groups')])
+  assert.equal(calls, 4)
+})
+
+test('me 401 and 404 refresh once then retry once, while domain 404 never refreshes', async () => {
+  for (const status of [401, 404]) {
+    const redirects = fakeWindow()
+    const paths: string[] = []
+    globalThis.fetch = async (input, init) => {
+      paths.push(String(input))
+      if (input === '/api/auth/refresh') return Response.json({ data: { accessToken: 'renewed-token' } })
+      if (paths.length === 1) return Response.json({ error: 'not_found' }, { status })
+      assert.equal(new Headers(init?.headers).get('Authorization'), 'Bearer renewed-token')
+      return Response.json({ data: { id: 'member' } })
+    }
+    assert.deepEqual(await apiRequest('/api/me'), { id: 'member' })
+    assert.deepEqual(paths, ['/api/me', '/api/auth/refresh', '/api/me'])
+    assert.deepEqual(redirects, [])
+  }
+  const paths: string[] = []
+  globalThis.fetch = async input => { paths.push(String(input)); return Response.json({ error: 'not_found' }, { status: 404 }) }
+  await assert.rejects(apiRequest('/api/groups/missing'), error => error instanceof ApiError && error.status === 404)
+  assert.deepEqual(paths, ['/api/groups/missing'])
+})
+
+test('me refresh and retry failures stop without an authentication loop', async () => {
+  for (const refreshStatus of [200, 401, 503]) {
+    const redirects = fakeWindow()
+    const paths: string[] = []
+    globalThis.fetch = async input => {
+      paths.push(String(input))
+      if (input === '/api/auth/refresh') return Response.json({ data: { accessToken: 'renewed-token' } }, { status: refreshStatus })
+      return Response.json({ error: 'not_found' }, { status: 404 })
+    }
+    await assert.rejects(apiRequest('/api/me'), error => error instanceof ApiError && error.status === (refreshStatus === 200 ? 404 : refreshStatus))
+    assert.deepEqual(paths, refreshStatus === 200 ? ['/api/me', '/api/auth/refresh', '/api/me'] : ['/api/me', '/api/auth/refresh'])
+    assert.equal(redirects.length, refreshStatus === 401 ? 1 : 0)
+  }
+})
+
+test('authentication redirects discard pending bodies and recovery callbacks across domains', async () => {
+  for (const status of [401, 403]) {
+    fakeWindow()
+    let calls = 0
+    globalThis.fetch = async input => {
+      calls++
+      return String(input) === '/api/groups'
+        ? Response.json({ error: 'storage_unavailable' }, { status: 503 })
+        : Response.json({ error: status === 401 ? 'unauthorized' : 'onboarding_required' }, { status })
+    }
+    await assert.rejects(() => apiRequest('/api/groups', { method: 'POST', body: { name: '기존 입력' } }))
+    let recover: (() => Promise<unknown>) | undefined
+    await assert.rejects(() => apiRequest('/api/groups', { method: 'POST', body: { name: '새 입력' } }), error => {
+      assert.ok(error instanceof ApiError)
+      recover = error.recover
+      return error.code === 'unresolved_request'
+    })
+    await assert.rejects(() => apiRequest('/api/me'))
+    const beforeRecovery = calls
+    assert.ok(recover)
+    await assert.rejects(recover, error => error instanceof ApiError && error.code === 'request_discarded')
+    assert.equal(calls, beforeRecovery)
+  }
+})
+
+test('round creation sends a UUIDv7 ticket and preserves it after a lost response', async () => {
+  fakeWindow()
+  const keys: string[] = []
+  globalThis.fetch = async (_input, init) => {
+    keys.push(new Headers(init?.headers).get('Idempotency-Key')!)
+    if (keys.length === 1) throw new TypeError('response lost')
+    return Response.json({ error: 'round_already_exists' }, { status: 409 })
+  }
+  const body = { name: '검증 회차', currency: 'KRW' as const, participantIds: ['a', 'b'] }
+  await assert.rejects(createRoundRequest('ticket-test', body), error => error instanceof ApiError && error.code === 'network_error')
+  await assert.rejects(createRoundRequest('ticket-test', body), error => error instanceof ApiError && error.code === 'round_already_exists')
+  assert.match(keys[0], /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+  assert.equal(keys[0], keys[1])
+  await assert.rejects(createRoundRequest('ticket-test', body))
+  assert.notEqual(keys[1], keys[2], 'a definitive 409 clears the pending ticket')
+})
+
+test('group creation owns its UUIDv7 policy while generic requests keep random keys', async () => {
+  fakeWindow()
+  const keys: string[] = []
+  globalThis.fetch = async (_input, init) => {
+    keys.push(new Headers(init?.headers).get('Idempotency-Key')!)
+    return Response.json({ data: { id: 'created' } })
+  }
+  await createGroupRequest({ name: '모임' })
+  await apiRequest('/api/generic-operation', { method: 'POST', body: {} })
+  assert.equal(keys[0].split('-')[2][0], '7')
+  assert.equal(keys[1].split('-')[2][0], '4')
 })

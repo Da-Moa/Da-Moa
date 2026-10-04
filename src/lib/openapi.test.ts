@@ -8,7 +8,7 @@ test('OpenAPI document uses the Swagger UI-compatible 3.0 dialect', () => {
   assert.equal(JSON.stringify(openApiDocument).includes('"const"'), false)
 })
 
-test('OpenAPI documents a recoverable refresh storage failure', () => {
+test('OpenAPI documents a recoverable refresh failure', () => {
   const refresh = openApiDocument.paths['/api/auth/refresh'].post
 
   assert.equal(refresh.responses['503'].$ref, '#/components/responses/RefreshUnavailable')
@@ -18,12 +18,14 @@ test('OpenAPI documents a recoverable refresh storage failure', () => {
   )
   assert.match(
     openApiDocument.paths['/api/auth/logout'].post.description,
-    /리프레시 토큰을 우선 사용하고, 없으면 유효한 액세스 토큰/,
+    /DB 세션을 사용하거나 Access JWT를 즉시 만료시키지/,
   )
+  assert.deepEqual(openApiDocument.paths['/api/auth/logout'].post.security, [{ refreshCookie: [] }, { accessBearer: [] }])
+  assert.ok(openApiDocument.paths['/api/auth/logout'].post.responses['401'])
 })
 
 type DocumentedOperation = {
-  parameters?: Array<{ name: string; in: string; required?: boolean }>
+  parameters?: Array<{ name: string; in: string; required?: boolean; description?: string; schema?: { pattern?: string; format?: string } }>
   requestBody?: { content: Record<string, { schema: { required?: string[] } }> }
   responses: Record<string, unknown>
   description: string
@@ -40,8 +42,15 @@ type DocumentedSchema = {
   description?: string
 }
 const paths = openApiDocument.paths as unknown as Record<string, Record<string, DocumentedOperation> & {
-  parameters?: Array<{ name: string; in: string; required?: boolean }>
+  parameters?: Array<{ name: string; in: string; required?: boolean; description?: string; schema?: { pattern?: string; format?: string } }>
 }>
+
+test('group creation requires a UUIDv7 key and token bootstrap requires Origin only', () => {
+  const parameters = paths['/api/groups'].post.parameters ?? []
+  assert.match(parameters.find(parameter => parameter.name === 'Idempotency-Key')?.schema?.pattern ?? '', /-7/)
+  assert.equal(parameters.find(parameter => parameter.name === 'Origin')?.schema?.format, 'uri')
+  assert.deepEqual(openApiDocument.paths['/api/auth/access-token'].post.parameters.map(parameter => parameter.name), ['Origin'])
+})
 
 test('every group, expense and settlement endpoint has documented authorization and mutation contracts', () => {
   const mutations = [
@@ -131,6 +140,7 @@ test('currency is required on round creation and absent from groups and invitati
   const preview = paths['/api/invites/{token}'].get.responses['200'] as { content: Record<string, { schema: DocumentedSchema }> }
   assert.equal('currency' in preview.content['application/json'].schema.properties!.data.properties!, false)
   assert.equal((openApiDocument.components.schemas.GroupDetail as DocumentedSchema).properties!.members.maxItems, 10)
+  assert.equal('/api/groups/{groupId}/members' in paths, false)
   assert.equal(roundInput.properties!.participantIds.maxItems, 10)
   assert.match(paths['/api/invites/{token}/accept'].post.description, /group_member_limit_exceeded/)
   const round = openApiDocument.components.schemas.Round as DocumentedSchema
@@ -148,7 +158,7 @@ test('group list documents name search with cursor pagination', () => {
   const parameters = paths['/api/groups'].get.parameters ?? []
   const search = parameters.find(parameter => parameter.name === 'q') as { schema?: { minLength?: number; maxLength?: number } } | undefined
   assert.deepEqual(search?.schema, { type: 'string', minLength: 1, maxLength: 100 })
-  assert.ok(parameters.some(parameter => parameter.name === 'cursor'))
+  assert.match(parameters.find(parameter => parameter.name === 'cursor')?.description ?? '', /모임 ID 내림차순/)
   const listItem = openApiDocument.components.schemas.GroupListItem as DocumentedSchema
   assert.ok(listItem.required?.includes('memberCount'))
   assert.equal(listItem.properties?.memberPreview.maxItems, 5)

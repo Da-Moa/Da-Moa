@@ -20,7 +20,7 @@ test('receipt objects use the configured private S3 bucket', async () => {
   }) as typeof S3Client.prototype.send
   Object.assign(process.env, { MINIO_ENDPOINT: 'http://127.0.0.1:9000', MINIO_BUCKET: 'receipts-test', MINIO_ACCESS_KEY: 'test-access', MINIO_SECRET_KEY: 'test-secret' })
   try {
-    await putReceipt('receipts/example.avif', Uint8Array.from([1, 2, 3, 4]), 'image/avif')
+    assert.equal(await putReceipt('receipts/example.avif', Uint8Array.from([1, 2, 3, 4]), 'image/avif'), 'receipts/example.avif')
     assert.deepEqual(await readReceipt('receipts/example.avif'), Uint8Array.from([1, 2, 3, 4]))
     await deleteReceiptObject('receipts/example.avif')
     assert.deepEqual(sent, ['PutObjectCommand', 'GetObjectCommand', 'DeleteObjectCommand'])

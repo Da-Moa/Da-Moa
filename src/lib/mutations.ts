@@ -13,14 +13,22 @@ function canonical(value: unknown): unknown {
   return value
 }
 
-export async function replayMutation<T>(client: Database, actorId: string, operation: string, key: string, payload: unknown): Promise<{ digest: string; result: T | null }> {
+export function mutationDigest(key: string, payload: unknown): string {
   if (key !== key.trim() || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(key)) {
     throw new AppError(400, 'invalid_request_key', '올바른 요청 키가 필요합니다')
   }
-  const digest = createHash('sha256').update(JSON.stringify(canonical(payload))).digest('hex')
+  return createHash('sha256').update(JSON.stringify(canonical(payload))).digest('hex')
+}
+
+export function mutationResult<T>(row: { request_digest: string | null; response_metadata: unknown } | undefined, digest: string): T | null {
+  if (row?.request_digest && row.request_digest !== digest) throw new AppError(409, 'idempotency_conflict', '같은 요청 키로 다른 내용을 저장할 수 없어요')
+  return row?.response_metadata as T ?? null
+}
+
+export async function replayMutation<T>(client: Database, actorId: string, operation: string, key: string, payload: unknown): Promise<{ digest: string; result: T | null }> {
+  const digest = mutationDigest(key, payload)
   const { rows } = await client.query('SELECT request_digest, response_metadata FROM mutation_requests WHERE actor_id=$1 AND operation=$2 AND request_key=$3', [actorId, operation, key])
-  if (rows[0] && rows[0].request_digest !== digest) throw new AppError(409, 'idempotency_conflict', '같은 요청 키로 다른 내용을 저장할 수 없어요')
-  return { digest, result: rows[0]?.response_metadata as T ?? null }
+  return { digest, result: mutationResult<T>(rows[0], digest) }
 }
 
 export async function saveMutation(client: Database, actorId: string, operation: string, key: string, digest: string, resourceId: string, result: unknown) {

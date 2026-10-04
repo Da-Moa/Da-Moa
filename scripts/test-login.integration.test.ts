@@ -2,9 +2,11 @@ import assert from 'node:assert/strict'
 import { before, test } from 'node:test'
 import { NextRequest } from 'next/server'
 import { POST } from '../src/app/api/auth/test-login/route.ts'
+import { POST as accessTokenResponse } from '../src/app/api/auth/access-token/route.ts'
 import { ACCESS_TOKEN_COOKIE_NAME, readAccessToken, REFRESH_TOKEN_COOKIE_NAME } from '../src/lib/auth.ts'
 import { getAccount } from '../src/lib/authorization.ts'
-import { completeOnboarding, signInTestAccount } from '../src/lib/auth-store.ts'
+import { completeOnboarding } from '../src/Domain/User/Backend/index.ts'
+import { signInTestAccount } from '../src/Global/Auth/Backend/index.ts'
 import { createDatabaseClient } from '../src/lib/db.ts'
 import { TEST_ACCOUNTS, TEST_ONBOARDING_KEY } from '../src/lib/test-accounts.ts'
 import { applyMigrations } from './migrations.mjs'
@@ -37,18 +39,20 @@ function loginRequest(key: string, origin = 'http://localhost', extra = '') {
   })
 }
 
-test('local development test login issues an authenticated cookie pair and rejects untrusted input', async () => {
+test('local development test login issues only a Refresh cookie and bootstraps a Bearer Access JWT and rejects untrusted input', async () => {
   for (const account of TEST_ACCOUNTS) {
     const response = await POST(loginRequest(account.key))
     assert.equal(response.status, 303, account.key)
-    assert.equal(response.headers.get('location'), 'http://localhost/home/history')
+    assert.equal(response.headers.get('location'), 'http://localhost/auth/complete?returnTo=%2Fhome%2Fhistory')
     const cookies = response.headers.getSetCookie()
     const accessCookie = cookies.find(cookie => cookie.startsWith(`${ACCESS_TOKEN_COOKIE_NAME}=`))
     const refreshCookie = cookies.find(cookie => cookie.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`))
-    assert.match(accessCookie ?? '', /HttpOnly/)
+    assert.match(accessCookie ?? '', /Max-Age=0/)
     assert.match(refreshCookie ?? '', /HttpOnly/)
     assert.match(refreshCookie ?? '', /Path=\/api\/auth/)
-    const access = readAccessToken(accessCookie?.slice(ACCESS_TOKEN_COOKIE_NAME.length + 1).split(';')[0])
+    const issued = await accessTokenResponse(new NextRequest('http://localhost/api/auth/access-token', { method: 'POST', headers: { origin: 'http://localhost', cookie: refreshCookie?.split(';')[0] ?? '' } }))
+    assert.equal(issued.status, 200)
+    const access = readAccessToken((await issued.json()).data.accessToken)
     assert.ok(access)
     assert.equal((await getAccount(access)).id, account.id)
   }
@@ -63,8 +67,10 @@ test('onboarding preview creates a fresh limited test session on every click and
   for (let attempt = 0; attempt < 2; attempt++) {
     const response = await POST(loginRequest(TEST_ONBOARDING_KEY))
     assert.equal(response.status, 303)
-    const accessCookie = response.headers.getSetCookie().find(cookie => cookie.startsWith(`${ACCESS_TOKEN_COOKIE_NAME}=`))
-    const access = readAccessToken(accessCookie?.slice(ACCESS_TOKEN_COOKIE_NAME.length + 1).split(';')[0])
+    const refreshCookie = response.headers.getSetCookie().find(cookie => cookie.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`))
+    const issued = await accessTokenResponse(new NextRequest('http://localhost/api/auth/access-token', { method: 'POST', headers: { origin: 'http://localhost', cookie: refreshCookie?.split(';')[0] ?? '' } }))
+    assert.equal(issued.status, 200)
+    const access = readAccessToken((await issued.json()).data.accessToken)
     assert.ok(access)
     const account = await getAccount(access, true)
     assert.equal(account.displayName, '민지')

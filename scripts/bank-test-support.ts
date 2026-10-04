@@ -1,5 +1,5 @@
 import type { AccessToken } from '../src/lib/auth.ts'
-import { completeOnboarding, updateBankAccount } from '../src/lib/auth-store.ts'
+import { completeOnboarding, updateBankAccount } from '../src/Domain/User/Backend/index.ts'
 import { getAccount } from '../src/lib/authorization.ts'
 
 type BankFixture = { bankName: string; accountHolder: string; accountNumber: string; confirmRejoin?: boolean }

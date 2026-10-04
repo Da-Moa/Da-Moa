@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { AppError, errorResponse } from './errors.ts'
-import { pageOf, pagination } from './group-store.ts'
+import { pageOf, pagination } from '../Global/Util/Backend/index.ts'
 import { readJsonBody } from './http.ts'
 
 test('pagination cursors include only the position and reject malformed or overflowing values', () => {
