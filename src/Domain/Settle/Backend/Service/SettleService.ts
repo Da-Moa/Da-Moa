@@ -2,6 +2,7 @@ import 'server-only'
 import { createHash, randomInt, randomUUID } from 'node:crypto'
 import { requireAccount } from '../../../../Global/Auth/Backend'
 import { MAX_GROUP_MEMBERS } from '../../../Group/Shared'
+import { bankDisplayName } from '../../../User/Shared'
 import { AppError, badInput, withDatabaseConnection, withWriteLock, withWriteTransaction, mutationDigest, mutationResult, deleteReceiptObject, putReceipt, readReceipt, convertReceipt, type Database, domainMutation, idsInput, nowSeconds, onlyKeys, pageOf, pagination, textInput, type Identity } from '../../../../Global/Util/Backend'
 import { MAX_ROUND_CURRENCIES, formatMoney, MAX_EXPENSE_MAJOR, MAX_ROUND_TOTAL_MAJOR, minorLimit, parseAmount, requireCurrency, type Currency, type CreateRoundRequestDTO, type ExpenseRequestDTO, type VersionRequestDTO, type SettlementCheckRequestDTO } from '../../Shared'
 import { calculateBase, finalizeCurrencySettlement, previewCurrencySettlement, validateCustomShares } from '../../Shared'
@@ -623,7 +624,7 @@ export async function getSettlement(access: Identity, roundId: string): Promise<
     result.balances = round.balances ?? []
     result.sharePath = `/settlements/${roundId}`
     result.outgoing = round.outgoing.map(row => ({ currency: row.currency, receiverId: row.receiver_id, displayName: row.display_name_snapshot, profileImageUrl: row.profile_image_url, amountMinor: row.amount_minor,
-      ...(row.currency === 'KRW' ? { account: { bankName: row.bank_name, accountNumber: row.account_number, formattedAccountNumber: row.account_number_formatted, accountHolder: row.account_holder,
+      ...(row.currency === 'KRW' ? { account: { bankName: bankDisplayName(row.bank_name), accountNumber: row.account_number, formattedAccountNumber: row.account_number_formatted, accountHolder: row.account_holder,
         verifiedAt: row.bank_verified_at === null ? null : Number(row.bank_verified_at) } } : {}) }))
     result.incoming = round.incoming.map(row => ({ currency: row.currency, senderId: row.sender_id, displayName: row.display_name_snapshot, profileImageUrl: row.profile_image_url, amountMinor: row.amount_minor,
       receivedAt: row.received_at === null ? null : Number(row.received_at) }))

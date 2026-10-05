@@ -1,7 +1,7 @@
 import { AppError } from '../../../lib/app-error'
 import { detect, formatAccount, institutions } from 'korean-account'
 
-export const BANKS: ReadonlyArray<{ code: string; name: string }> = [
+const BANK_INSTITUTIONS: ReadonlyArray<{ code: string; name: string }> = [
   { code: '002', name: 'KDB산업은행' }, { code: '003', name: 'IBK기업은행' },
   { code: '004', name: 'KB국민은행' }, { code: '007', name: '수협은행' },
   { code: '011', name: 'NH농협은행' }, { code: '012', name: '지역농축협' },
@@ -28,6 +28,27 @@ export const BANKS: ReadonlyArray<{ code: string; name: string }> = [
   { code: '287', name: '메리츠증권' },
 ]
 
+export const BANKS: ReadonlyArray<{ code: string; name: string }> = BANK_INSTITUTIONS.filter(bank => bank.code !== '012')
+  .map(bank => bank.code === '011' ? { ...bank, name: '농협' } : bank)
+
+const NONGHYUP_NAMES = ['농협', 'NH농협', '농협은행', 'NH농협은행', '농협중앙회', '지역농협', '지역농축협', '지역축협', '농축협', '축협']
+
+export function bankDisplayName(name: string): string
+export function bankDisplayName(name: string | null): string | null
+export function bankDisplayName(name: string | null): string | null {
+  return name && NONGHYUP_NAMES.includes(name.replace(/\s/g, '')) ? '농협' : name
+}
+
+export function bankSelectionCode(code: string): string {
+  return code === '012' ? '011' : code
+}
+
+function nonghyupAccountCode(digits: string): string | undefined {
+  const include = institutions.filter(item => item.code === '011' || item.code === '012').map(item => item.id)
+  const match = detect(digits, { include, minScore: 7, limit: 1 })[0]
+  return match?.matchedPattern.template.replace(/-/g, '').length === digits.length ? match.institution.code : undefined
+}
+
 const PHONE_NUMBER = /^01[016789]\d{7,8}$/
 // Confirmed 10–11 digit aliases: IBK lifetime accounts and KB customer-designated accounts.
 // https://blog.ibk.co.kr/452 and the korean-account KFTC CMS catalog.
@@ -36,7 +57,7 @@ const PHONE_ACCOUNT_BANKS: readonly string[] = ['003', '004']
 
 // The CMS catalog uses 005 for Hana Bank; our transfer bank list uses 081.
 function supportedBankCode(code: string): string | undefined {
-  const bankCode = code === '005' ? '081' : code
+  const bankCode = bankSelectionCode(code === '005' ? '081' : code)
   if (code === '081') return undefined // Hana Securities CMA, not Hana Bank.
   return BANKS.some(bank => bank.code === bankCode) ? bankCode : undefined
 }
@@ -65,7 +86,7 @@ export function suggestBanks(value: string): string[] {
 }
 
 function catalogPatterns(bankCode: string) {
-  return institutions.filter(institution => institution.code === (bankCode === '081' ? '005' : bankCode))
+  return institutions.filter(institution => institution.code === (bankCode === '081' ? '005' : bankCode) || bankCode === '011' && institution.code === '012')
     .flatMap(institution => institution.patterns)
 }
 
@@ -89,9 +110,11 @@ const DISPLAY_PATTERNS: ReadonlyArray<readonly [string, RegExp, readonly number[
 
 export function formatAccountNumber(bankCodeOrName: string | null, value: string, partial = false): string {
   const digits = value.replace(/[ -]/g, '')
-  const code = BANKS.find(bank => bank.code === bankCodeOrName || bank.name === bankCodeOrName)?.code
+  let code = BANK_INSTITUTIONS.find(bank => bank.code === bankCodeOrName || bank.name === bankCodeOrName)?.code
+    ?? BANKS.find(bank => bank.name === bankDisplayName(bankCodeOrName))?.code
   if (!/^\d+$/.test(digits)) return value
   if (PHONE_NUMBER.test(digits)) return digits
+  if (code === '011') code = nonghyupAccountCode(digits) ?? code
   if (code === '004' && digits.length === 14) return digits.replace(/^(\d{6})(\d{2})(\d{6})$/, '$1-$2-$3')
   if (code === '003' && digits.length === 14) return digits.replace(/^(\d{3})(\d{6})(\d{2})(\d{3})$/, '$1-$2-$3-$4')
   const matches = DISPLAY_PATTERNS.filter(([bankCode, pattern, groups]) => bankCode === code && pattern.test(partial ? digits.padEnd(groups.reduce((sum, size) => sum + size, 0), '0') : digits))
@@ -116,6 +139,7 @@ export function recognizedAccountNumber(bankCode: string, value: string): string
   const digits = value.replace(/[ -]/g, '')
   if (!/^\d{1,16}$/.test(digits)) return null
   if (PHONE_NUMBER.test(digits)) return PHONE_ACCOUNT_BANKS.includes(bankCode) ? digits : null
+  if (bankCode === '011') bankCode = nonghyupAccountCode(digits) ?? bankCode
   const knownLayout = DISPLAY_PATTERNS.some(([code, pattern]) => code === bankCode && pattern.test(digits))
   const institution = institutions.find(item => item.code === (bankCode === '081' ? '005' : bankCode))
   const match = institution && detect(digits, { include: [institution.id], minScore: 7, limit: 1 })[0]
@@ -129,7 +153,7 @@ export function parseClipboardAccount(text: string, selectedBankCode?: string): 
   const named = BANKS.flatMap(bank => {
     const name = bank.name.replace(/^(KDB|IBK|KB|NH|SC|한국)/, '')
     const short = name.replace(/(?:투자증권|은행|증권)$/, '')
-    const aliases = [bank.name, name, short, ...(bank.code === '031' ? ['iM뱅크', '대구은행'] : []), ...(bank.code === '012' ? ['농협', '지역농협', '지역축협', '농축협', '축협'] : [])]
+    const aliases = [bank.name, name, short, ...(bank.code === '031' ? ['iM뱅크', '대구은행'] : []), ...(bank.code === '011' ? NONGHYUP_NAMES : [])]
     return aliases.map(name => name.toLowerCase()).filter(name => name.length >= 2 && compact.includes(name)).map(name => ({ code: bank.code, name }))
   })
   const banks = [...new Set(named.filter(bank => !named.some(other => other.name !== bank.name && other.name.includes(bank.name))).map(bank => bank.code))]
@@ -177,12 +201,13 @@ export function normalizeBankAccountInput(
   const allowed = ['bankCode', 'accountNumber', 'accountHolder', 'expectedBankVersion', 'verifyWithOpenBanking', ...(options.onboarding ? ['confirmRejoin'] : [])]
   if (Object.keys(input).some(key => !allowed.includes(key))) invalidField('form', '지원하지 않는 계좌 입력 항목이 있어요')
   if (input.verifyWithOpenBanking !== undefined && input.verifyWithOpenBanking !== false) invalidField('verifyWithOpenBanking', '계좌 자동 확인은 지원하지 않아요')
-  const bank = BANKS.find(item => item.code === input.bankCode)
+  const bank = BANK_INSTITUTIONS.find(item => item.code === input.bankCode)
   if (!bank) invalidField('bankCode', '지원하는 은행을 선택해 주세요')
   if (typeof input.accountNumber !== 'string' || input.accountNumber.length > 64) invalidField('accountNumber', '계좌번호를 확인해 주세요')
   const accountNumber = input.accountNumber.replace(/[ -]/g, '')
   if (!/^[0-9]{1,16}$/.test(accountNumber)) invalidField('accountNumber', '계좌번호는 숫자 16자리 이내로 입력해 주세요')
-  const formattedAccountNumber = formatAccountNumber(bank.code, accountNumber)
+  const bankCode = bank.code === '011' || bank.code === '012' ? nonghyupAccountCode(accountNumber) ?? bank.code : bank.code
+  const formattedAccountNumber = formatAccountNumber(bankCode, accountNumber)
   if (typeof input.accountHolder !== 'string' || input.accountHolder.length > 100) invalidField('accountHolder', '예금주명을 확인해 주세요')
   const accountHolder = normalizeAccountHolder(input.accountHolder)
   if (!accountHolder || accountHolder.length > 40 || /[\p{Cc}\p{Cf}]/u.test(accountHolder)) invalidField('accountHolder', '예금주명을 확인해 주세요')
@@ -190,5 +215,5 @@ export function normalizeBankAccountInput(
     invalidField('expectedBankVersion', '계좌정보를 다시 불러온 뒤 저장해 주세요')
   }
   if (input.confirmRejoin !== undefined && typeof input.confirmRejoin !== 'boolean') invalidField('confirmRejoin', '재가입 동의를 확인해 주세요')
-  return { bankCode: bank.code, bankName: bank.name, accountNumber, formattedAccountNumber, accountHolder, expectedBankVersion: input.expectedBankVersion, confirmRejoin: input.confirmRejoin === true }
+  return { bankCode, bankName: bankDisplayName(bank.name), accountNumber, formattedAccountNumber, accountHolder, expectedBankVersion: input.expectedBankVersion, confirmRejoin: input.confirmRejoin === true }
 }

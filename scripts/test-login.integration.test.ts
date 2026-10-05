@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { before, test } from 'node:test'
+import { networkInterfaces } from 'node:os'
 import { NextRequest } from 'next/server'
 import { POST } from '../src/app/api/auth/test-login/route.ts'
 import { POST as accessTokenResponse } from '../src/app/api/auth/access-token/route.ts'
@@ -60,6 +61,32 @@ test('local development test login issues only a Refresh cookie and bootstraps a
   assert.equal((await POST(loginRequest('unknown'))).status, 404)
   assert.equal((await POST(loginRequest(TEST_ACCOUNTS[0].key, 'https://evil.test'))).status, 403)
   assert.equal((await POST(loginRequest(TEST_ACCOUNTS[0].key, 'http://localhost', '&extra=1'))).status, 400)
+})
+
+const localAddress = Object.values(networkInterfaces()).flat().find(entry => entry?.family === 'IPv4' && !entry.internal && /^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(entry.address))?.address
+test('development test login works at the server LAN address and preserves origin and production restrictions', { skip: !localAddress }, async () => {
+  const origin = `http://${localAddress}:3000`
+  function request(requestOrigin = origin) {
+    return new NextRequest(`${origin}/api/auth/test-login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: requestOrigin },
+      body: new URLSearchParams({ key: TEST_ACCOUNTS[0].key, returnTo: '/home' }).toString(),
+    })
+  }
+  const response = await POST(request())
+  assert.equal(response.status, 303)
+  assert.equal(response.headers.get('location'), `${origin}/auth/complete?returnTo=%2Fhome`)
+  assert.ok(response.headers.getSetCookie().some(cookie => cookie.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`)))
+  assert.equal((await POST(request('http://evil.test'))).status, 403)
+  const previousEnv = { NODE_ENV: process.env.NODE_ENV, KAKAO_REDIRECT_URI: process.env.KAKAO_REDIRECT_URI }
+  try {
+    Object.assign(process.env, { NODE_ENV: 'production', KAKAO_REDIRECT_URI: `${origin}/api/auth/kakao/callback` })
+    assert.equal((await POST(request())).status, 404)
+  } finally {
+    for (const [name, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+  }
 })
 
 test('onboarding preview creates a fresh limited test session on every click and completes registration', async () => {

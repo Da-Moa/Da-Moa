@@ -1,17 +1,43 @@
 'use client'
 
-import { ChevronLeft } from 'lucide-react'
+import { Check, ChevronLeft, Copy } from 'lucide-react'
+import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { CurrencyDivider } from './CurrencySelect'
 import { AnimatedMoney } from './AnimatedMoney'
 import { ApiError, apiRequest } from '../../../../Global/Util/Frontend'
-import { formatAccountNumber } from '../../../User/Shared'
+import { bankDisplayName, formatAccountNumber } from '../../../User/Shared'
 import type { SettlementDTO } from '../../Shared'
 import { formatMoney } from '../../Shared'
 import { CopyLink, Loading, ParticipantAvatar, useAction, useResource } from '../../../../Global/Util/Frontend'
 import { StatusBadge } from './StatusBadge'
 import { ErrorNotice } from './ErrorNotice'
+
+function SettlementAccount({ bankName, accountNumber, formattedAccountNumber, accountHolder }: { bankName: string; accountNumber: string; formattedAccountNumber: string | null; accountHolder: string }) {
+  const [message, setMessage] = useState('')
+  const [copied, setCopied] = useState(false)
+  const number = formattedAccountNumber ?? formatAccountNumber(bankName, accountNumber)
+  const displayName = bankDisplayName(bankName)
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(`${displayName} ${number}`)
+      setCopied(true)
+      setMessage('은행명과 계좌번호를 복사했어요.')
+    } catch {
+      setCopied(false)
+      setMessage('자동 복사를 사용할 수 없어요. 계좌번호를 길게 눌러 직접 복사해 주세요.')
+    }
+  }
+  return <div className="bank-details">
+    <button aria-label={`${displayName} ${number} 은행명과 계좌번호 복사`} className="settlement-account-copy" onClick={() => void copy()} type="button">
+      <span className="settlement-account-line">{displayName} <span className="account-number">{number}</span></span>
+      {copied ? <Check aria-hidden="true" size={16} /> : <Copy aria-hidden="true" size={16} />}
+    </button>
+    <p className="help-text">예금주 {accountHolder}</p>
+    {message && <p className="help-text" role="status">{message}</p>}
+  </div>
+}
 
 export default function SettlementClient({ roundId }: { roundId: string }) {
   const router = useRouter()
@@ -46,7 +72,7 @@ export default function SettlementClient({ roundId }: { roundId: string }) {
           return <div key={balance.currency}><p>{amount > 0n ? '내가 보낼 금액' : amount < 0n ? '내가 받을 금액' : '송금할 금액 없음'}</p><AnimatedMoney amountMinor={remaining.toString()} currency={balance.currency} key={`${roundId}-${balance.currency}`} /><CurrencyDivider currency={balance.currency} /></div>
         })}</section>
         {data.outgoing.length > 0 && <section className="stack"><h2 className="section-heading">이 사람에게 보내 주세요</h2>{data.outgoing.map(transfer => <article className="domain-card stack" key={`${transfer.currency}:${transfer.receiverId}`}><div className="row-between"><div className="settlement-person"><ParticipantAvatar profileImageUrl={transfer.profileImageUrl} /><h3>{transfer.displayName}</h3></div><strong className="money">{formatMoney(transfer.amountMinor, transfer.currency)}</strong></div>
-          {transfer.currency === 'KRW' && (settlement.error ? <p className="notice notice-warning">최신 계좌를 확인하지 못했어요. 새로고침한 뒤 확인해 주세요.</p> : transfer.account?.bankName && transfer.account.accountNumber && transfer.account.accountHolder ? <><dl className="bank-details"><div><dt>은행</dt><dd>{transfer.account.bankName}</dd></div><div><dt>계좌번호</dt><dd className="account-number">{transfer.account.formattedAccountNumber ?? formatAccountNumber(transfer.account.bankName, transfer.account.accountNumber)}</dd></div><div><dt>예금주</dt><dd>{transfer.account.accountHolder}</dd></div></dl><p className="notice notice-warning">{!transfer.account.verifiedAt && <>확인되지 않은 계좌입니다.<br /></>}송금 전 계좌번호와 예금주를 직접 확인해 주세요.</p></> : <p className="notice notice-warning">등록 계좌를 확인할 수 없어요. 상대방에게 계좌 수정을 요청한 뒤 새로고침해 주세요.</p>)}
+          {transfer.currency === 'KRW' && (settlement.error ? <p className="notice notice-warning">최신 계좌를 확인하지 못했어요. 새로고침한 뒤 확인해 주세요.</p> : transfer.account?.bankName && transfer.account.accountNumber && transfer.account.accountHolder ? <><SettlementAccount key={`${transfer.account.bankName}:${transfer.account.accountNumber}:${transfer.account.accountHolder}`} bankName={transfer.account.bankName} accountNumber={transfer.account.accountNumber} formattedAccountNumber={transfer.account.formattedAccountNumber} accountHolder={transfer.account.accountHolder} /><p className="notice notice-warning">{!transfer.account.verifiedAt && <>확인되지 않은 계좌입니다.<br /></>}송금 전 계좌번호와 예금주를 직접 확인해 주세요.</p></> : <p className="notice notice-warning">등록 계좌를 확인할 수 없어요. 상대방에게 계좌 수정을 요청한 뒤 새로고침해 주세요.</p>)}
         </article>)}</section>}
         {data.incoming.length > 0 && <section className="domain-card stack"><h2>이 사람에게 받아요</h2><ul className="member-list incoming-check-list">{data.incoming.map(transfer => {
           const received = transfer.receivedAt !== null

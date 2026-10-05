@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { formatAccountNumber, normalizeBankAccountInput, parseClipboardAccount, recognizedAccountNumber, suggestBanks } from '../Domain/User/Shared/index.ts'
+import { BANKS, bankDisplayName, bankSelectionCode, formatAccountNumber, normalizeBankAccountInput, parseClipboardAccount, recognizedAccountNumber, suggestBanks } from '../Domain/User/Shared/index.ts'
 
 test('manual bank input keeps leading zeroes and rejects former verification fields', () => {
   const input = { bankCode: '002', accountNumber: '031-1234 5678-901', accountHolder: ' 테스트 ', expectedBankVersion: 0 }
@@ -93,15 +93,42 @@ test('clipboard accounts extract one complete number and select only an unambigu
   }
 })
 
-test('regional Nonghyup names select the cooperative, and ambiguous names still paste the number', () => {
-  for (const name of ['지역농협', '지역 농협', '지역농축협', '지역축협', '농축협', '축협']) {
-    assert.deepEqual(parseClipboardAccount(`${name} 3510221772213`), { accountNumber: '3510221772213', bankCode: '012' }, name)
+test('Nonghyup names and cooperative aliases select one unified bank', () => {
+  for (const name of ['농협', 'NH농협', 'NH 농협', 'NH농협은행', '농협은행', '지역농협', '지역 농협', '지역농축협', '지역축협', '농축협', '축협']) {
+    assert.deepEqual(parseClipboardAccount(`${name} 3510221772213`), { accountNumber: '3510221772213', bankCode: '011' }, name)
+    assert.equal(bankDisplayName(name), '농협')
   }
-  assert.deepEqual(parseClipboardAccount('지역농협 351-0221-7722-13'), { accountNumber: '3510221772213', bankCode: '012' })
+  assert.deepEqual(parseClipboardAccount('지역농협 351-0221-7722-13'), { accountNumber: '3510221772213', bankCode: '011' })
   assert.deepEqual(parseClipboardAccount('농협은행 3510221772213'), { accountNumber: '3510221772213', bankCode: '011' })
-  assert.deepEqual(parseClipboardAccount('농협 3510221772213'), { accountNumber: '3510221772213', bankCode: null })
   assert.deepEqual(parseClipboardAccount('토스뱅크 신한은행 100004459947'), { accountNumber: '100004459947', bankCode: null })
-  assert.deepEqual(parseClipboardAccount('농협 3333123456789'), { accountNumber: '3333123456789', bankCode: null })
+  assert.deepEqual(parseClipboardAccount('농협 3333123456789'), { accountNumber: '3333123456789', bankCode: '011' })
+  assert.equal(bankDisplayName('NH투자증권'), 'NH투자증권')
+  assert.equal(bankDisplayName(null), null)
+})
+
+test('one Nonghyup selection supports both institutions and preserves account formatting', () => {
+  assert.deepEqual(BANKS.filter(bank => bank.name.includes('농협')), [{ code: '011', name: '농협' }])
+  assert.equal(bankSelectionCode('012'), '011')
+  assert.equal(bankSelectionCode('090'), '090')
+  for (const [number, code, formatted] of [
+    ['3510221772213', '012', '351-0221-7722-13'],
+    ['3010123456781', '011', '301-0123-4567-81'],
+    ['12345652123456', '012', '123456-52-12345-6'],
+    ['12312012345', '011', '123-12-01234-5'],
+  ]) {
+    assert.ok(suggestBanks(number).includes('011'))
+    assert.ok(!suggestBanks(number).includes('012'))
+    assert.equal(formatAccountNumber('농협', number), formatted)
+    assert.equal(recognizedAccountNumber('011', number), formatted)
+    const input = normalizeBankAccountInput({ bankCode: '011', accountNumber: number, accountHolder: '테스트', expectedBankVersion: 0 })
+    assert.equal(input.bankCode, code)
+    assert.equal(input.bankName, '농협')
+    assert.equal(input.formattedAccountNumber, formatted)
+    assert.equal(input.accountNumber, number)
+  }
+  assert.equal(formatAccountNumber('농협', '3510221', true), '351-0221')
+  assert.equal(formatAccountNumber('지역농축협', '3510221772213'), '351-0221-7722-13')
+  assert.equal(normalizeBankAccountInput({ bankCode: '012', accountNumber: '99999999', accountHolder: '테스트', expectedBankVersion: 0 }).bankCode, '012')
 })
 
 test('phone-shaped accounts paste only with a bank supporting that alias', () => {

@@ -530,10 +530,10 @@ button.participant-card:not(:disabled):hover { background: var(--info-hover, #f8
 .exclusion-issues b { font-size: 12px; }
 .receipt-item { border-top: 1px solid var(--divider-color, #eef1f5); padding-top: 5px; }
 .receipt-preview { border: 1px solid var(--box-border-color); border-radius: 9px; box-shadow: var(--control-shadow); display: block; height: auto; margin-top: 8px; max-width: 100%; }
-.bank-details { display: grid; gap: 10px; margin: 0; }
-.bank-details > div { display: flex; font-size: 14px; gap: 15px; justify-content: space-between; }
-.bank-details dt { color: var(--text-secondary, #657181); flex: 0 0 65px; }
-.bank-details dd { font-weight: 600; margin: 0; overflow-wrap: anywhere; text-align: right; }
+.bank-details { display: grid; gap: 8px; margin: 0; min-width: 0; }
+.settlement-account-copy { align-items: center; background: var(--page-background, #f2f4f6); border: 0; border-radius: 10px; display: flex; font-size: 14px; font-weight: 600; gap: 8px; min-height: 44px; padding: 10px 12px; text-align: left; width: 100%; }
+.settlement-account-line { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; }
+.settlement-account-copy svg { color: var(--link-color, #146db0); flex-shrink: 0; }
 .account-number { font-variant-numeric: tabular-nums; user-select: all; }
 .settlement-summary { background: #182b42; border-color: #32465c; color: #fff; }
 .settlement-summary .large-money { margin: 9px 0 12px; }

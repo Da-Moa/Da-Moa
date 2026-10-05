@@ -42,6 +42,8 @@ npm run dev
 
 [http://localhost:3000](http://localhost:3000)에서 시작합니다. API 문서는 `/docs`, OpenAPI JSON은 `/api/openapi.json`에서 확인할 수 있습니다. [정산기능-intent.md](intent/정산기능-intent.md)는 정책 결정 기록, [정산기능-spec.md](spec/정산기능-spec.md)는 요구사항·상태·권한·인수 기준입니다. 금액 부호는 최신 명세를 따라 **부담액 − 결제액**, 양수는 보낼 돈·음수는 받을 돈입니다.
 
+계좌 등록·수정의 은행 목록과 계정·정산 안내·계좌 복사는 농협은행과 지역농축협을 `농협` 하나로 표시합니다. 기존 계좌도 같은 이름으로 표시하며, 두 기관의 계좌번호 형식과 저장된 금융기관 코드는 유지합니다.
+
 상태 확인 API는 인증 없이 사용할 수 있습니다. `/api/health/live`는 앱 응답만, `/api/health/database`는 PostgreSQL `SELECT 1`만, `/api/health/minio`는 MinIO 저장소의 읽기·쓰기 정족수만 확인합니다. `/api/health/dependencies`는 DB와 MinIO를 함께, `/api/health`는 앱과 두 의존 서비스를 종합해 반환합니다. 검사 실패 시 해당 API는 `503`과 검사 결과를 반환하며 응답을 캐시하지 않습니다. MinIO 검사는 실제 객체 작업이나 영수증 버킷·키 권한까지 검증하지 않습니다.
 
 모든 `/api` 요청은 Node.js `src/proxy.ts` → Global Auth `JwtGuard`를 먼저 통과합니다. JWT 누락·서명/만료/종류 오류는 입력 검증·DB 접근 전에 `401`로 차단합니다. 공개 예외는 위 다섯 헬스체크의 GET/HEAD와 로그인 시작 `GET /api/auth/kakao`, 기존 개발 전용 `POST /api/auth/test-login`입니다. `POST /api/auth/access-token`·갱신은 Refresh JWT, 로그아웃은 Refresh 또는 Access JWT를 요구합니다. 카카오 콜백은 기존 OIDC 검증을 유지하며 페이지·정적 파일은 API Guard 대상이 아닙니다. `/api/docs`·`/api/openapi.json`도 인증 대상입니다. 인증은 서명된 JWT만 사용하며 로그인·가입·갱신·로그아웃 모두 DB 세션을 생성하거나 조회하지 않습니다. Access JWT는 10분이며 localStorage에 저장하고 Authorization: Bearer 헤더로 보냅니다. Refresh JWT는 HttpOnly 쿠키에 저장합니다. 로그인 완료 페이지는 Refresh JWT로 Access JWT를 받아 저장합니다. 갱신은 JWT의 app/onboarding 목적을 보존하며 onboarding의 원래 만료는 연장하지 않습니다. 로그아웃은 localStorage의 Access 토큰과 Refresh 쿠키를 삭제하며 이전 토큰은 자체 만료까지 유효합니다. 회원 가입·탈퇴 상태 및 모임·회차 권한 검사는 유지합니다.
@@ -167,7 +169,7 @@ npm run db:seed:test-accounts
 
 원격 개발 DB에는 `DATABASE_URL`과 `ALLOW_REMOTE_TEST_ACCOUNT_SEED=true`를 함께 명시한 경우에만 시드할 수 있습니다. 운영 DB에는 이 플래그를 사용하지 않습니다.
 
-시드는 `테스트 민지`, `테스트 준호`, `테스트 서연`, `테스트 지우`, `테스트 현우`와 서로 다른 테스트 계좌를 생성하고 목록을 출력합니다. 이 회원들은 `provider='test'`와 고정 `provider_subject`를 사용하므로 실제 카카오 로그인과 연결되지 않습니다. 개발 서버를 로컬 주소로 실행하면 `/login`에 다섯 계정의 로그인 버튼이 표시되고, 선택한 계정의 테스트 세션을 발급합니다. 운영 빌드에서는 버튼이 사라지고 `/api/auth/test-login`도 404를 반환합니다.
+시드는 `테스트 민지`, `테스트 준호`, `테스트 서연`, `테스트 지우`, `테스트 현우`와 서로 다른 테스트 계좌를 생성하고 목록을 출력합니다. 이 회원들은 `provider='test'`와 고정 `provider_subject`를 사용하므로 실제 카카오 로그인과 연결되지 않습니다. 개발 서버의 `/login`에 다섯 계정의 로그인 버튼이 표시되고, localhost 또는 서버의 현재 내부 IPv4 주소(`10.*`, `172.16.*`~`172.31.*`, `192.168.*`)에서 선택한 계정의 테스트 세션을 발급합니다. 같은 네트워크의 다른 기기에서도 서버의 `Network` 주소로 접속해 사용할 수 있으며 로그인 요청의 Origin은 접속 주소와 일치해야 합니다. 운영 빌드에서는 버튼이 사라지고 `/api/auth/test-login`도 404를 반환합니다.
 
 `첫 가입 온보딩 보기` 버튼은 별도 시드 없이 매번 새 테스트 계정과 가입 전 세션을 만들어 `/onboarding`을 엽니다. 계좌를 저장하면 실제 가입 완료 흐름도 확인할 수 있습니다. 기존 테스트 계정과 정산 기록은 변경하지 않습니다.
 

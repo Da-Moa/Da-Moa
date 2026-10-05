@@ -2,12 +2,12 @@
 
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { ApiError, discardPendingRequest, SheetSelect } from '../../../../Global/Util/Frontend'
-import { BANKS, formatAccountNumber, parseClipboardAccount, suggestBanks, type Account } from '../../Shared'
+import { BANKS, bankDisplayName, bankSelectionCode, formatAccountNumber, parseClipboardAccount, suggestBanks, type Account } from '../../Shared'
 
 export function BankFields({ disabled, error, account }: { disabled?: boolean; error?: Error | null; account?: Account['bankAccount'] }) {
   const id = useId()
   const fields = useRef<HTMLDivElement>(null)
-  const [selectedBank, setSelectedBank] = useState(account?.bankCode ?? BANKS.find(bank => bank.name === account?.bankName)?.code ?? '')
+  const [selectedBank, setSelectedBank] = useState(account?.bankCode ?? BANKS.find(bank => bank.name === bankDisplayName(account?.bankName ?? null))?.code ?? '')
   const [number, setNumber] = useState(account?.accountNumber ?? '')
   const [clipboardMessage, setClipboardMessage] = useState('')
   const [clipboardAccount, setClipboardAccount] = useState<ReturnType<typeof parseClipboardAccount>>(null)
@@ -72,15 +72,16 @@ export function BankFields({ disabled, error, account }: { disabled?: boolean; e
     }} type="button">{BANKS.find(bank => bank.code === clipboardAccount.bankCode)?.name} {formatAccountNumber(clipboardAccount.bankCode, clipboardAccount.accountNumber)} 붙여넣기</button>}
     {clipboardMessage && <p className="help-text" role="status">{clipboardMessage}</p>}
     <div className="stack bank-choice">
-      <SheetSelect disabled={disabled || !number} label="은행 선택" name="bankCode" onChange={chooseBank} options={BANKS.map(bank => ({ value: bank.code, label: bank.name, icon: <img alt="" draggable={false} height={32} src={`/banks/${bank.code}.${bank.code === '227' ? 'png' : 'svg'}`} width={32} /> }))} title="은행을 선택해 주세요" value={selectedBank} />
-      {number && (candidates.length > 0 ? <div className="bank-candidates" aria-label="계좌번호로 찾은 은행 후보"><div className="bank-candidate-list">{candidates.map(code => <button aria-pressed={selectedBank === code} className="bank-candidate" disabled={disabled} key={code} onClick={() => chooseBank(code)} type="button"><img alt="" draggable={false} height={20} src={`/banks/${code}.${code === '227' ? 'png' : 'svg'}`} width={20} />{BANKS.find(bank => bank.code === code)?.name}</button>)}</div></div> : <p className="help-text">은행을 직접 선택해 주세요.</p>)}
+      <input name="bankInstitutionCode" type="hidden" value={selectedBank} />
+      <SheetSelect disabled={disabled || !number} label="은행 선택" name="bankCode" onChange={chooseBank} options={BANKS.map(bank => ({ value: bank.code, label: bank.name, icon: <img alt="" draggable={false} height={32} src={`/banks/${bank.code}.${bank.code === '227' ? 'png' : 'svg'}`} width={32} /> }))} title="은행을 선택해 주세요" value={bankSelectionCode(selectedBank)} />
+      {number && (candidates.length > 0 ? <div className="bank-candidates" aria-label="계좌번호로 찾은 은행 후보"><div className="bank-candidate-list">{candidates.map(code => <button aria-pressed={bankSelectionCode(selectedBank) === code} className="bank-candidate" disabled={disabled} key={code} onClick={() => chooseBank(code)} type="button"><img alt="" draggable={false} height={20} src={`/banks/${code}.${code === '227' ? 'png' : 'svg'}`} width={20} />{BANKS.find(bank => bank.code === code)?.name}</button>)}</div></div> : <p className="help-text">은행을 직접 선택해 주세요.</p>)}
     </div>
     <label className="field line-field" htmlFor={`${id}-holder`}><span>예금주</span><input autoComplete="off" defaultValue={account?.accountHolder ?? ''} disabled={disabled} id={`${id}-holder`} maxLength={100} name="accountHolder" placeholder=" " required /></label>
   </div>
 }
 export function bankValues(form: HTMLFormElement) {
   const values = new FormData(form)
-  return { bankCode: String(values.get('bankCode') ?? ''), accountNumber: String(values.get('accountNumber') ?? ''), accountHolder: String(values.get('accountHolder') ?? '') }
+  return { bankCode: String(values.get('bankInstitutionCode') ?? values.get('bankCode') ?? ''), accountNumber: String(values.get('accountNumber') ?? ''), accountHolder: String(values.get('accountHolder') ?? '') }
 }
 
 export function useBankForm(path: '/api/me/bank-account' | '/api/me/onboarding') {

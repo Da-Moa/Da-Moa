@@ -2,7 +2,7 @@ import 'server-only'
 import { currentTimestamp, issueTokens, requireAccount, type AccessToken, type KakaoProfile } from '../../../../Global/Auth/Backend'
 import { AppError, withDatabaseConnection, withWriteTransaction, objectBody, mutationDigest, type Database } from '../../../../Global/Util/Backend'
 import { getUnfinishedUserRounds } from '../../../Settle/Backend'
-import { normalizeBankAccountInput, type Account, type BankAccountInput, type UserAccountState, type SignInUserDTO, type BankAccountResponseDTO } from '../../Shared'
+import { bankDisplayName, normalizeBankAccountInput, type Account, type BankAccountInput, type UserAccountState, type SignInUserDTO, type BankAccountResponseDTO } from '../../Shared'
 import { alreadyOnboarded, bankAccountConflict, rejoinConfirmationRequired, unfinishedRounds } from '../Exception/UserException'
 import * as repository from '../Repository/UserRepository'
 
@@ -70,7 +70,7 @@ export function getMe(access: AccessToken | null): Promise<Account> {
   return withDatabaseConnection(async client => {
     const account = await requireAccount(client, access, true)
     const { id, displayName, email, profileImageUrl, purpose, deletedAt, onboardingCompletedAt, bankName, accountNumber, formattedAccountNumber, accountHolder, bankCode, bankVerifiedAt, bankVersion } = account
-    const bankAccount = bankName && accountNumber && accountHolder ? { bankName, accountNumber, formattedAccountNumber, accountHolder, bankCode, verifiedAt: bankVerifiedAt } : null
+    const bankAccount = bankName && accountNumber && accountHolder ? { bankName: bankDisplayName(bankName), accountNumber, formattedAccountNumber, accountHolder, bankCode, verifiedAt: bankVerifiedAt } : null
     return { id, displayName, email, profileImageUrl, purpose, deletedAt, onboardingCompletedAt, bankAccount, bankVersion }
   })
 }
