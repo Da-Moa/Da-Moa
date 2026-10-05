@@ -18,9 +18,10 @@ function SettlementAccount({ bankName, accountNumber, formattedAccountNumber, ac
   const [message, setMessage] = useState('')
   const [copied, setCopied] = useState(false)
   const number = formattedAccountNumber ?? formatAccountNumber(bankName, accountNumber)
+  const clipboardBankName = bankName === 'NH농협은행' || bankName === '지역농축협' ? 'NH농협' : bankName
   async function copy() {
     try {
-      await navigator.clipboard.writeText(`${bankName} ${number}`)
+      await navigator.clipboard.writeText(`${clipboardBankName} ${number}`)
       setCopied(true)
       setMessage('은행명과 계좌번호를 복사했어요.')
     } catch {
