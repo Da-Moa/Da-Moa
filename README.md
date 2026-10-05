@@ -11,7 +11,7 @@ npm install
 cp .env.example .env.local
 ```
 
-`.env.local`에 아래 서버 환경 변수를 설정합니다. 비밀 값은 브라우저용 `NEXT_PUBLIC_` 변수로 옮기지 않습니다.
+`.env.local`에 아래 환경 변수를 설정합니다. 비밀 값은 브라우저용 `NEXT_PUBLIC_` 변수로 옮기지 않습니다.
 
 | 변수 | 값 |
 |---|---|
@@ -25,6 +25,7 @@ cp .env.example .env.local
 | `MINIO_BUCKET` | 비공개 영수증 버킷 이름 |
 | `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` | 해당 버킷에 읽기·쓰기·삭제 권한이 있는 전용 사용자 키 |
 | `NEXT_DEV_ALLOWED_ORIGINS` | 개발 서버 접근 허용 호스트를 쉼표로 구분. 미설정 시 현재 기기의 내부 IPv4 주소와 기존 `192.168.219.141`을 허용하며, 빈 값이면 추가 허용 없음. 변경 후 개발 서버 재시작 |
+| `NEXT_PUBLIC_SHEET_DRAG_SPEED_DEBUG` | `true`이면 추가창에 최대 드래그 속도·놓을 때 속도·판정 기준을 표시. 기본값은 `false`. 개발 서버 재시작이 필요하며 운영은 빌드 시 적용되므로 변경 후 다시 빌드 |
 
 ```bash
 npm run db:local:up

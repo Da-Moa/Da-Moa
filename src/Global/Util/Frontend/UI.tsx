@@ -1,8 +1,11 @@
 'use client'
 
-import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from 'react'
+import { createPortal } from 'react-dom'
 import { ChevronDown, CircleUserRound, Search, X } from 'lucide-react'
 import { ApiError } from '../../../lib/api-client'
+
+const SHEET_DRAG_SPEED_DEBUG = process.env.NEXT_PUBLIC_SHEET_DRAG_SPEED_DEBUG === 'true'
 
 export function ErrorNotice({ error, retry, hint, retryLabel = '다시 시도' }: { error: Error | null; retry?: () => void; hint?: string; retryLabel?: string }) {
   const [recovering, setRecovering] = useState(false)
@@ -39,7 +42,7 @@ export function CopyLink({ path, label = '링크 복사', hideButton = false }: 
     catch { input.current?.select(); setMessage('자동 복사를 사용할 수 없어요. 아래 링크를 선택해 직접 복사해 주세요.') }
   }
   return <div className="copy-link">{!hideButton && <button className="primary-button" type="button" disabled={!url} onClick={() => void copy()}>{label}</button>}
-    <label className="field"><span>공유 링크</span><input aria-label="공유 링크" onFocus={event => event.target.select()} readOnly ref={input} value={url} /></label>
+    <label className="field"><span>공유 링크</span><input aria-label="공유 링크" onBlur={event => { delete event.currentTarget.dataset.touchFocus }} onFocus={event => event.target.select()} onKeyDown={event => { delete event.currentTarget.dataset.touchFocus }} onPointerDown={event => { if (event.pointerType === 'touch') event.currentTarget.dataset.touchFocus = 'true'; else delete event.currentTarget.dataset.touchFocus }} readOnly ref={input} value={url} /></label>
     {message && <p className="help-text" role="status">{message}</p>}
   </div>
 }
@@ -51,22 +54,175 @@ function useSheetClose(dialogRef: RefObject<HTMLDialogElement | null>) {
     if (!dialog?.open || closing.current) return
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { dialog.close(); return }
     closing.current = true
-    const animation = dialog.animate([{ transform: getComputedStyle(dialog).transform }, { transform: 'translateY(100%)' }], { duration: 200, easing: 'ease-in', fill: 'forwards' })
+    const { height } = dialog.getBoundingClientRect()
+    const transform = getComputedStyle(dialog).transform
+    // Freeze an in-progress resize before sliding out; percentage translation
+    // otherwise follows the changing height and makes the sheet jump.
+    dialog.dataset.closing = 'true'
+    dialog.style.height = `${height}px`
+    const animation = dialog.animate([{ transform }, { transform: `translate3d(0, ${height}px, 0)` }], { duration: 200, easing: 'ease-in', fill: 'forwards' })
     try { await animation.finished } catch { /* A cancelled animation must still close the dialog. */ }
-    if (dialog.isConnected) dialog.close()
-    animation.cancel()
-    closing.current = false
+    finally {
+      if (dialog.isConnected) dialog.close()
+      animation.cancel()
+      dialog.style.removeProperty('height')
+      delete dialog.dataset.closing
+      closing.current = false
+    }
   }
   return { close, closing }
 }
 
-export function BottomSheet({ dialogRef, id, titleId, title, subtitle, closeLabel, dismissible = true, onClose, children }: {
-  dialogRef: RefObject<HTMLDialogElement | null>; id: string; titleId: string; title: string; subtitle?: string;
-  closeLabel: string; dismissible?: boolean; onClose?: () => void; children: ReactNode;
+function SheetHeader({ dialogRef, titleId, title, subtitle, closeLabel, dismissible = true, close, closing }: {
+  dialogRef: RefObject<HTMLDialogElement | null>; titleId: string; title: string; subtitle?: string;
+  closeLabel: string; dismissible?: boolean; close: () => Promise<void>; closing: RefObject<boolean>;
 }) {
-  const { close } = useSheetClose(dialogRef)
-  return <dialog aria-labelledby={titleId} className="bank-sheet" id={id} ref={dialogRef} onCancel={event => { event.preventDefault(); if (dismissible) void close() }} onClick={event => { if (event.target === event.currentTarget && dismissible) void close() }} onClose={event => { if (!event.currentTarget.open) onClose?.() }}>
-    <div className="bank-sheet-content"><div aria-hidden="true" className="bank-sheet-handle" /><header className="bank-sheet-header"><div>{subtitle && <p>{subtitle}</p>}<h2 id={titleId}>{title}</h2></div><button aria-label={closeLabel} className="icon-button" disabled={!dismissible} onClick={() => void close()} type="button"><X aria-hidden="true" size={20} /></button></header>
+  const areaRef = useRef<HTMLDivElement>(null)
+  const drag = useRef<{ pointerId: number; y: number; height: number; moved: boolean; samples: { y: number; time: number }[] } | null>(null)
+  const initialHeight = useRef<number | null>(null)
+  const limits = useRef<{ minimum: number; maximum: number } | null>(null)
+  const frame = useRef<number | null>(null)
+  const pendingHeight = useRef<number | null>(null)
+  const peakSpeed = useRef(0)
+  const [speedStats, setSpeedStats] = useState<{ peak: number; released: number | null; closed: boolean }>({ peak: 0, released: null, closed: false })
+  function finishDrag() {
+    if (frame.current !== null) cancelAnimationFrame(frame.current)
+    frame.current = null
+    pendingHeight.current = null
+    const pointerId = drag.current?.pointerId
+    drag.current = null
+    const area = areaRef.current
+    if (pointerId !== undefined && area?.hasPointerCapture(pointerId)) area.releasePointerCapture(pointerId)
+    if (area) delete area.dataset.dragging
+  }
+  function resize(nextHeight: number) {
+    const dialog = dialogRef.current
+    const area = areaRef.current
+    if (!dialog?.open || !area || closing.current) return
+    initialHeight.current ??= dialog.offsetHeight
+    if (!limits.current) {
+      dialog.style.setProperty('--sheet-height', `${dialog.offsetHeight}px`)
+      dialog.dataset.resized = 'true'
+      const content = area.parentElement!
+      const padding = parseFloat(getComputedStyle(content).paddingBottom)
+      const fixedHeight = Array.from(content.children).filter(child => !child.matches('.bank-sheet-body, .bank-grid')).reduce((sum, child) => {
+        const style = getComputedStyle(child)
+        return sum + (child as HTMLElement).offsetHeight + parseFloat(style.marginTop) + parseFloat(style.marginBottom)
+      }, 0)
+      const maximum = parseFloat(getComputedStyle(dialog).maxHeight)
+      limits.current = { maximum, minimum: Math.min(maximum, initialHeight.current ?? maximum, Math.max(180, fixedHeight + padding + 64)) }
+    }
+    const { minimum, maximum } = limits.current
+    const adjusted = Math.round(Math.max(minimum, Math.min(maximum, nextHeight)))
+    dialog.style.setProperty('--sheet-height', `${adjusted}px`)
+  }
+  function startDrag(event: PointerEvent<HTMLDivElement>) {
+    const dialog = dialogRef.current
+    const target = event.target as Element
+    if (!dialog?.open || closing.current || !event.isPrimary || event.button !== 0 || target.closest('button:not(.bank-sheet-resize-handle)')) return
+    target.closest<HTMLButtonElement>('.bank-sheet-resize-handle')?.focus({ preventScroll: true })
+    limits.current = null
+    peakSpeed.current = 0
+    if (SHEET_DRAG_SPEED_DEBUG) setSpeedStats({ peak: 0, released: null, closed: false })
+    drag.current = { pointerId: event.pointerId, y: event.clientY, height: dialog.offsetHeight, moved: false, samples: [{ y: event.clientY, time: event.timeStamp }] }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    event.currentTarget.dataset.dragging = 'true'
+    event.preventDefault()
+  }
+  function recordDragPoint(event: PointerEvent<HTMLDivElement>) {
+    const current = drag.current
+    if (current?.pointerId !== event.pointerId) return
+    current.samples.push({ y: event.clientY, time: event.timeStamp })
+    // Only recent motion counts; pausing before release cancels the flick.
+    while (current.samples.length > 1 && current.samples[0].time < event.timeStamp - 120) current.samples.shift()
+    const distance = event.clientY - current.samples[0].y
+    const elapsed = event.timeStamp - current.samples[0].time
+    const speed = elapsed > 0 ? distance / elapsed : 0
+    if (SHEET_DRAG_SPEED_DEBUG) peakSpeed.current = Math.max(peakSpeed.current, Math.abs(speed) * 1000)
+    return { distance, speed }
+  }
+  function moveDrag(event: PointerEvent<HTMLDivElement>) {
+    const current = drag.current
+    if (current?.pointerId !== event.pointerId) return
+    recordDragPoint(event)
+    current.moved ||= Math.abs(current.y - event.clientY) >= 4
+    if (current.moved) pendingHeight.current = current.height + current.y - event.clientY
+    // Coalesce pointer events into one layout write and one diagnostic update
+    // per frame; speed sampling still uses every event.
+    if ((current.moved || SHEET_DRAG_SPEED_DEBUG) && frame.current === null) frame.current = requestAnimationFrame(() => {
+      frame.current = null
+      if (pendingHeight.current !== null) resize(pendingHeight.current)
+      pendingHeight.current = null
+      if (SHEET_DRAG_SPEED_DEBUG) {
+        const peak = Math.round(peakSpeed.current)
+        setSpeedStats(previous => previous.peak === peak ? previous : { peak, released: null, closed: false })
+      }
+    })
+  }
+  function releaseDrag(event: PointerEvent<HTMLDivElement>) {
+    const current = drag.current
+    if (current?.pointerId !== event.pointerId) return
+    const requestedHeight = current.height + current.y - event.clientY
+    const moved = current.moved || Math.abs(current.y - event.clientY) >= 4
+    const { distance, speed } = recordDragPoint(event)!
+    if (SHEET_DRAG_SPEED_DEBUG) setSpeedStats({ peak: Math.round(peakSpeed.current), released: Math.round(Math.abs(speed) * 1000), closed: false })
+    const flick = Math.abs(distance) >= 16 && Math.abs(speed) >= .7
+    if (moved) resize(requestedHeight)
+    finishDrag()
+    const dialog = dialogRef.current
+    if (!moved || !dialog?.open || closing.current) return
+    const maximum = limits.current!.maximum
+    const original = Math.min(initialHeight.current ?? current.height, maximum)
+    if (flick && speed < 0) resize(maximum)
+    else if (flick && speed > 0 && dismissible) void close()
+    else resize(original)
+  }
+  function resizeWithKeyboard(event: KeyboardEvent<HTMLButtonElement>) {
+    if (!['ArrowUp', 'ArrowDown'].includes(event.key)) return
+    event.preventDefault()
+    limits.current = null
+    resize((dialogRef.current?.offsetHeight ?? 0) + (event.key === 'ArrowUp' ? 48 : -48))
+  }
+  useEffect(() => {
+    const dialog = dialogRef.current
+    function reset() {
+      finishDrag()
+      initialHeight.current = null
+      limits.current = null
+      if (SHEET_DRAG_SPEED_DEBUG) setSpeedStats(previous => ({ ...previous, closed: true }))
+      dialog?.style.removeProperty('--sheet-height')
+      if (dialog) delete dialog.dataset.resized
+    }
+    function fitViewport() {
+      finishDrag()
+      limits.current = null
+      if (dialog?.open && dialog.dataset.resized) resize(dialog.offsetHeight)
+    }
+    dialog?.addEventListener('close', reset)
+    window.addEventListener('resize', fitViewport)
+    return () => {
+      finishDrag()
+      dialog?.removeEventListener('close', reset)
+      window.removeEventListener('resize', fitViewport)
+    }
+  }, [dialogRef, closing])
+  const speedSummary = <><span>최대 드래그 속도 <strong>{speedStats.peak.toLocaleString('ko-KR')} px/s</strong></span><span>놓을 때 {speedStats.released === null ? '—' : `${speedStats.released.toLocaleString('ko-KR')} px/s`} · 기준 700 px/s</span></>
+  return <><div className="bank-sheet-drag-area" onLostPointerCapture={finishDrag} onPointerCancel={finishDrag} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={releaseDrag} ref={areaRef}>
+    <button aria-label="창 높이 조절 (위아래 방향키)" className="bank-sheet-resize-handle" onKeyDown={resizeWithKeyboard} type="button"><span aria-hidden="true" className="bank-sheet-handle" /></button>
+    <header className="bank-sheet-header"><div>{subtitle && <p>{subtitle}</p>}<h2 autoFocus id={titleId} ref={node => { if (node) node.autofocus = true }} tabIndex={-1}>{title}</h2></div><button aria-label={closeLabel} className="icon-button" disabled={!dismissible} onClick={() => void close()} type="button"><X aria-hidden="true" size={20} /></button></header>
+    {SHEET_DRAG_SPEED_DEBUG && <div aria-label="드래그 속도" className="bank-sheet-speed">{speedSummary}</div>}
+  </div>
+    {SHEET_DRAG_SPEED_DEBUG && speedStats.closed && speedStats.peak > 0 && typeof document !== 'undefined' && createPortal(<div className="sheet-drag-speed-result" role="status">{speedSummary}</div>, document.body)}
+  </>
+}
+
+export function BottomSheet({ dialogRef, id, titleId, title, subtitle, closeLabel, dismissible = true, fillHeight = false, onClose, children }: {
+  dialogRef: RefObject<HTMLDialogElement | null>; id: string; titleId: string; title: string; subtitle?: string;
+  closeLabel: string; dismissible?: boolean; fillHeight?: boolean; onClose?: () => void; children: ReactNode;
+}) {
+  const { close, closing } = useSheetClose(dialogRef)
+  return <dialog aria-labelledby={titleId} className={`bank-sheet${fillHeight ? ' bank-sheet-fill' : ''}`} id={id} ref={dialogRef} onCancel={event => { event.preventDefault(); if (dismissible) void close() }} onClick={event => { if (event.target === event.currentTarget && dismissible) void close() }} onClose={event => { if (!event.currentTarget.open) onClose?.() }}>
+    <div className="bank-sheet-content"><SheetHeader close={close} closeLabel={closeLabel} closing={closing} dialogRef={dialogRef} dismissible={dismissible} subtitle={subtitle} title={title} titleId={titleId} />
       <div className="bank-sheet-body"><div className="stack">{children}</div></div>
     </div>
   </dialog>
@@ -93,15 +249,19 @@ export function SheetSelect({ label, name, title, value, onChange, options, disa
   }
   const filtered = options.filter(option => `${option.label} ${option.searchText ?? ''}`.toLocaleLowerCase('ko-KR').includes(search.trim().toLocaleLowerCase('ko-KR')))
   const selected = options.find(option => option.value === value)
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current
+    if (!opened || !dialog || dialog.open) return
+    dialog.showModal()
+    dialog.querySelector<HTMLButtonElement>(`[data-value="${value || options[0]?.value}"]`)?.focus({ preventScroll: true })
+  }, [opened, value, options])
   function open() {
     if (disabled || closing.current) return
     clearTimeout(scrollTimer.current)
     setScrolling(false)
     setScrollbarHovered(false)
     setSearch('')
-    dialogRef.current?.showModal()
     setOpened(true)
-    dialogRef.current?.querySelector<HTMLButtonElement>(`[data-value="${value || options[0].value}"]`)?.focus()
   }
   function choose(next: string) {
     if (closing.current) return
@@ -115,7 +275,7 @@ export function SheetSelect({ label, name, title, value, onChange, options, disa
       <select aria-hidden="true" autoComplete="off" className="bank-select-native" disabled={disabled} name={name} onChange={event => choose(event.currentTarget.value)} onInvalid={event => { event.preventDefault(); open() }} required tabIndex={-1} value={value}>{!value && <option value="" disabled>{title}</option>}{options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
     </div>
     <dialog aria-labelledby={`${id}-title`} className={`bank-sheet ${sheetClassName ?? ''}`} id={`${id}-sheet`} onCancel={event => { event.preventDefault(); void close() }} onClick={event => { if (event.target === event.currentTarget) void close() }} onClose={() => { setOpened(false); trigger.current?.focus() }} ref={dialogRef}>
-      <div className="bank-sheet-content"><div className="bank-sheet-handle" aria-hidden="true" /><header className="bank-sheet-header"><h2 id={`${id}-title`}>{title}</h2><button aria-label={`${label} 닫기`} className="icon-button" onClick={() => void close()} type="button"><X aria-hidden="true" size={20} /></button></header>
+      <div className="bank-sheet-content"><SheetHeader close={close} closeLabel={`${label} 닫기`} closing={closing} dialogRef={dialogRef} title={title} titleId={`${id}-title`} />
         {searchPlaceholder && <div className="round-search-bar currency-search"><Search aria-hidden="true" size={21} /><input aria-label={searchPlaceholder} autoComplete="off" maxLength={100} onChange={event => setSearch(event.target.value)} placeholder={searchPlaceholder} type="search" value={search} /></div>}
         <div aria-label={`${label} 목록`} className="bank-grid" data-scrolling={scrolling || undefined} data-scrollbar-hovered={scrollbarHovered || undefined} onPointerMove={event => { const list = event.currentTarget; setScrollbarHovered(event.pointerType === 'mouse' && event.clientX >= list.getBoundingClientRect().left + list.clientLeft + list.clientWidth) }} onPointerLeave={() => setScrollbarHovered(false)} onScroll={showScrollbar} role="group">{filtered.map(option => <button aria-pressed={value === option.value} className="bank-tile" data-value={option.value} key={option.value} onClick={() => choose(option.value)} type="button">{option.icon}<span>{option.label}</span></button>)}</div>
         {filtered.length === 0 && <p className="help-text" role="status">검색 결과가 없어요.</p>}
