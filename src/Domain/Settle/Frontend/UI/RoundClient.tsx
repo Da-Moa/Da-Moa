@@ -3,13 +3,13 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { ArrowRight, ChevronDown, ChevronLeft, ImagePlus, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { ArrowRight, ChevronDown, ChevronLeft, ImagePlus, Pencil, Plus, Trash2 } from 'lucide-react'
 import { CurrencySelect, CurrencyDivider } from './CurrencySelect'
 import { AnimatedMoney } from './AnimatedMoney'
 import { ApiError, apiRequest } from '../../../../Global/Util/Frontend'
 import type { ExclusionCheck, Expense, MutationResult, Receipt, RoundDetail, Currency } from '../../Shared'
 import { amountInputPattern, currencyDecimals, expenseInputMaximum, formatAmountInput, formatMoney, minorToAmount, parseAmount } from '../../Shared'
-import { Loading, ParticipantAvatar, SheetSelect, useAction, useResource } from '../../../../Global/Util/Frontend'
+import { BottomSheet, Loading, ParticipantAvatar, SheetSelect, useAction, useResource } from '../../../../Global/Util/Frontend'
 import { useAccount } from '../../../User/Frontend'
 import { StatusBadge } from './StatusBadge'
 import { ErrorNotice } from './ErrorNotice'
@@ -159,14 +159,12 @@ function ExpenseCard({ expense, round, canEdit, highlighted, edit, reload }: { e
     {(expense.splitMode === 'CUSTOM' || expense.shares.some(share => share.amountMinor !== null)) && <details><summary>{round.finalizedAt !== null ? '최종 부담액 보기' : '개별 부담금 보기'}</summary><ul className="member-list">{expense.shares.map(share => <li key={share.userId}><span>{name(share.userId)}{share.receivedRemainder && <small className="subtle-tag">나머지 부담</small>}</span><strong className="money">{formatMoney(share.amountMinor ?? share.assignedAmountMinor ?? '0', expense.currency)}</strong></li>)}</ul></details>}
     {canEdit && <div className="inline-actions expense-card-actions"><button className="text-button" disabled={action.busy} onClick={edit} type="button"><Pencil size={15} /> 수정</button><button aria-controls={`receipt-upload-${expense.id}`} aria-haspopup="dialog" className="text-button" disabled={action.busy} onClick={() => uploadDialog.current?.showModal()} type="button"><ImagePlus size={15} /> 영수증 추가</button><button className="text-button danger-text" disabled={action.busy} onClick={() => void remove()} type="button"><Trash2 size={15} /> 삭제</button></div>}
     {expense.receipts.map((receipt, index) => <ReceiptImage key={receipt.id} receipt={receipt} index={index} canEdit={canEdit} busy={action.busy} remove={() => void removeReceipt(receipt.id)} />)}
-    {canEdit && <dialog aria-labelledby={`receipt-upload-heading-${expense.id}`} className="account-dialog" id={`receipt-upload-${expense.id}`} ref={uploadDialog} onCancel={event => { if (uploadAction.busy) event.preventDefault() }} onClick={event => { if (event.target === event.currentTarget && !uploadAction.busy) event.currentTarget.close() }} onClose={() => { setFile(null); uploadAction.setError(null); if (input.current) input.current.value = '' }}>
-      <div className="account-dialog-content stack"><div className="account-dialog-header"><div><p>영수증 이미지</p><h2 id={`receipt-upload-heading-${expense.id}`}>영수증 이미지 추가</h2></div><button aria-label="영수증 이미지 추가 팝업 닫기" className="icon-button account-dialog-close" disabled={uploadAction.busy} onClick={() => uploadDialog.current?.close()} type="button"><X size={20} /></button></div>
+    {canEdit && <BottomSheet closeLabel="영수증 이미지 추가 팝업 닫기" dialogRef={uploadDialog} dismissible={!uploadAction.busy} id={`receipt-upload-${expense.id}`} onClose={() => { setFile(null); uploadAction.setError(null); if (input.current) input.current.value = '' }} subtitle="영수증 이미지" title="영수증 이미지 추가" titleId={`receipt-upload-heading-${expense.id}`}>
         <label className="field"><span>이미지 파일</span><input accept="image/jpeg,image/png,image/webp" onChange={event => { setFile(event.target.files?.[0] ?? null); uploadAction.setError(null) }} ref={input} type="file" /></label>
         <p className="help-text">사용 가능한 타입: JPEG, PNG, WebP</p>
         <button className="primary-button" disabled={!file || uploadAction.busy} onClick={() => void upload()} type="button">{uploadAction.busy ? '업로드 중…' : '선택한 영수증 업로드'}</button>
         <ErrorNotice error={uploadAction.error} retry={uploadAction.error instanceof ApiError && uploadAction.error.code === 'stale_round' ? () => void reload() : undefined} />
-      </div>
-    </dialog>}
+    </BottomSheet>}
     <ErrorNotice error={action.error} retry={action.error instanceof ApiError && action.error.code === 'stale_round' ? () => void reload() : undefined} />
   </article>
 }
@@ -295,15 +293,15 @@ export default function RoundClient({ roundId }: { roundId: string }) {
           })}</ul><CurrencyDivider currency={total.currency} /></div>)}</div>}
         </div>
       </section>
-      <dialog aria-labelledby="exclusion-dialog-heading" className="account-dialog" id="participant-exclusion-dialog" ref={exclusionDialog} onCancel={() => setCheck(null)} onClick={event => { if (event.target === event.currentTarget) { event.currentTarget.close(); setCheck(null) } }}>
-        {check && <div className="account-dialog-content stack"><div className="account-dialog-header"><div><p>참여자 제외</p><h2 id="exclusion-dialog-heading">{nameOf(check.userId)}</h2></div><button aria-label="제외 팝업 닫기" className="icon-button account-dialog-close" onClick={() => { exclusionDialog.current?.close(); setCheck(null) }} type="button"><X size={20} /></button></div>
+      <BottomSheet closeLabel="제외 팝업 닫기" dialogRef={exclusionDialog} id="participant-exclusion-dialog" onClose={() => setCheck(null)} subtitle="참여자 제외" title={check ? nameOf(check.userId) : '참여자 제외'} titleId="exclusion-dialog-heading">
+        {check && <>
           <div className={`notice${check.allowed ? '' : ' notice-warning'}`} role="status">{!check.allowed && <p>{check.expenses.length ? '해당 사용자와 연관된 정산이 있습니다.' : exclusionReason[check.reason ?? ''] ?? '현재 이 참여자를 제외할 수 없어요.'}</p>}
             {check.expenses.length > 0 && <><p>아래 내역을 작성자 또는 회차 생성자가 수정한 뒤 다시 제외해 주세요.</p><ul className="exclusion-issues">{check.expenses.map(expense => <li key={expense.id}>{data.expenses.some(item => item.id === expense.id) ? <a href={`#expense-${expense.id}`} onClick={event => { event.preventDefault(); revealExpense(expense.id) }}><strong>{expense.description}</strong></a> : <strong>{expense.description}</strong>}<span>{formatMoney(expense.amountMinor, expense.currency)} · 작성 {expense.authorName}</span><b>제외 전 수정 필요</b><small>{exclusionReason[expense.reason] ?? '결제·부담 관계를 먼저 수정해 주세요.'}</small></li>)}</ul><p className="help-text">목록에 안 보이는 지출은 아래 ‘지출 더 보기’로 확인할 수 있어요.</p></>}
             {check.allowed && (recording ? <><p>이 회차에서 제외할 수 있어요. 모임 참여 상태와 다른 회차는 유지돼요.</p><button className="secondary-button" disabled={action.busy} onClick={() => void exclude()} type="button">이 사용자 제외하기</button></> : <p>회차 생성자가 ‘기록 단계로 다시 열기’를 누른 다음 다시 제외해 주세요.</p>)}
           </div>
           <ErrorNotice error={action.error} retry={action.error instanceof ApiError && action.error.code === 'stale_round' ? () => void refresh() : undefined} />
-        </div>}
-      </dialog>
+        </>}
+      </BottomSheet>
       <div className="row-between expense-heading" id="expense-section-heading"><h2 className="section-heading">지출 내역</h2><div className="inline-actions">{recording && myself && !myself.excludedAt && !editing && <button className="text-button" onClick={() => { setExpensesOpen(true); setEditing('new') }} type="button"><Plus size={17} /> 지출 추가</button>}<button aria-controls="round-expenses" aria-expanded={expensesOpen} aria-label={expensesOpen ? '모든 지출 내역 숨기기' : '모든 지출 내역 펼치기'} className="text-button expense-toggle" onClick={() => setExpensesOpen(open => !open)} title={expensesOpen ? '모든 지출 내역 숨기기' : '모든 지출 내역 펼치기'} type="button"><ChevronDown aria-hidden="true" className={expensesOpen ? 'expense-toggle-open' : undefined} size={24} /></button></div></div>
       <div className="stack" hidden={!expensesOpen} id="round-expenses">
         {editing && <ExpenseForm key={editing === 'new' ? 'new' : editing.id} round={data} expense={editing === 'new' ? null : editing} reload={refresh} onSaved={() => { setEditing(null); setCheck(null) }} onCancel={closeEditor} />}
