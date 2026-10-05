@@ -7,11 +7,44 @@ import { discardBankAccountRequests } from '../Domain/User/Frontend/Requests.ts'
 
 const originalFetch = globalThis.fetch
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto')!
 afterEach(() => {
   discardBankAccountRequests()
   globalThis.fetch = originalFetch
   if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow)
   else Reflect.deleteProperty(globalThis, 'window')
+  Object.defineProperty(globalThis, 'crypto', originalCrypto)
+})
+
+test('HTTP LAN mutations and receipt retries work without randomUUID or subtle, while changed file bytes stay blocked', async () => {
+  fakeWindow()
+  const requests: { key: string; body: FormData | undefined }[] = []
+  globalThis.fetch = async (_input, init) => {
+    requests.push({ key: new Headers(init?.headers).get('Idempotency-Key')!, body: init?.body instanceof FormData ? init.body : undefined })
+    return requests.length === 1 ? Response.json({ error: 'transaction_retry' }, { status: 503 }) : Response.json({ data: { id: 'saved' } })
+  }
+  const form = (content: string, version: string) => {
+    const body = new FormData()
+    body.set('file', new File([content], 'receipt.png', { type: 'image/png' }))
+    body.set('expectedVersion', version)
+    return body
+  }
+  const content = 'receipt bytes '.repeat(100)
+  const path = '/api/rounds/http-lan/expenses/expense/receipts'
+  await assert.rejects(apiRequest(path, { method: 'POST', body: form(content, '1') }))
+  const getRandomValues = crypto.getRandomValues.bind(crypto)
+  Object.defineProperty(globalThis, 'crypto', { configurable: true, value: { getRandomValues } })
+  assert.equal(crypto.randomUUID, undefined)
+  assert.equal(crypto.subtle, undefined)
+  await assert.rejects(apiRequest(path, { method: 'POST', body: form(content.replace('r', 'R'), '2') }), error => error instanceof ApiError && error.code === 'unresolved_request')
+  assert.equal(requests.length, 1, 'same size and filename do not allow different bytes to replace a pending request')
+  await apiRequest(path, { method: 'POST', body: form(content, '2') })
+  assert.equal(requests[0].key, requests[1].key, 'native and JS SHA-256 produce the same retry fingerprint')
+  assert.equal(requests[1].body?.get('expectedVersion'), '1')
+  await apiRequest('/api/http-lan-operation', { method: 'POST', body: {} })
+  assert.match(requests[2].key, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+  await apiRequest(path, { method: 'POST', body: form(content, '3') })
+  assert.notEqual(requests[2].key, requests[3].key)
 })
 
 test('leaving the bank form discards sensitive retry input, including an already exposed recovery callback', async () => {
