@@ -77,8 +77,9 @@ function useSheetClose(dialogRef: RefObject<HTMLDialogElement | null>) {
   return { close, closing }
 }
 
-function useSheetResize(dialogRef: RefObject<HTMLDialogElement | null>, closing: RefObject<boolean>) {
+function useSheetSizing(dialogRef: RefObject<HTMLDialogElement | null>, closing: RefObject<boolean>) {
   const initialHeight = useRef<number | null>(null)
+  const visibleHeight = useRef<number | null>(null)
   const limits = useRef<{ minimum: number; maximum: number } | null>(null)
   const resize = useCallback((nextHeight: number) => {
     const dialog = dialogRef.current
@@ -86,8 +87,7 @@ function useSheetResize(dialogRef: RefObject<HTMLDialogElement | null>, closing:
     if (!dialog?.open || !content || closing.current) return
     initialHeight.current ??= dialog.offsetHeight
     if (!limits.current) {
-      dialog.style.setProperty('--sheet-height', `${dialog.offsetHeight}px`)
-      dialog.dataset.resized = 'true'
+      dialog.dataset.positioned = 'true'
       const padding = parseFloat(getComputedStyle(content).paddingBottom)
       const fixedHeight = Array.from(content.children).filter(child => !child.matches('.bank-sheet-body, .bank-grid')).reduce((sum, child) => {
         const style = getComputedStyle(child)
@@ -97,34 +97,48 @@ function useSheetResize(dialogRef: RefObject<HTMLDialogElement | null>, closing:
       limits.current = { maximum, minimum: Math.min(maximum, initialHeight.current, Math.max(180, fixedHeight + padding + 64)) }
     }
     const { minimum, maximum } = limits.current
-    dialog.style.setProperty('--sheet-height', `${Math.round(Math.max(minimum, Math.min(maximum, nextHeight)))}px`)
+    visibleHeight.current = Math.round(Math.max(minimum, Math.min(maximum, nextHeight)))
+    // The panel stays full height; only its resting offset and scroll viewport change.
+    dialog.style.setProperty('--sheet-height', `${visibleHeight.current}px`)
+    dialog.style.setProperty('--sheet-offset', `${maximum - visibleHeight.current}px`)
     return limits.current
   }, [dialogRef, closing])
-  useEffect(() => {
+  useLayoutEffect(() => {
     const dialog = dialogRef.current
     function reset() {
       initialHeight.current = null
+      visibleHeight.current = null
       limits.current = null
       dialog?.style.removeProperty('--sheet-height')
-      if (dialog) delete dialog.dataset.resized
+      dialog?.style.removeProperty('--sheet-offset')
+      if (dialog) delete dialog.dataset.positioned
     }
     function fitViewport() {
       limits.current = null
-      if (dialog?.open && dialog.dataset.resized) resize(dialog.offsetHeight)
+      if (dialog?.open && dialog.dataset.positioned) resize(visibleHeight.current ?? dialog.offsetHeight)
     }
+    function prepare() {
+      if (dialog?.open && !dialog.dataset.positioned) resize(dialog.offsetHeight)
+      else if (!dialog?.open) reset()
+    }
+    // showModal() is also called by domain screens. Observe it before the first paint.
+    const observer = new MutationObserver(prepare)
+    if (dialog) observer.observe(dialog, { attributes: true, attributeFilter: ['open'] })
+    prepare()
     dialog?.addEventListener('close', reset)
     window.addEventListener('resize', fitViewport)
     return () => {
+      observer.disconnect()
       dialog?.removeEventListener('close', reset)
       window.removeEventListener('resize', fitViewport)
     }
   }, [dialogRef, resize])
-  return { resize, initialHeight, limits }
+  return { resize, initialHeight, visibleHeight, limits }
 }
 
-function useSheetMotion(dialogRef: RefObject<HTMLDialogElement | null>, close: () => Promise<void>, closing: RefObject<boolean>, sizing: ReturnType<typeof useSheetResize>, dismissible: boolean) {
-  const { resize, initialHeight } = sizing
-  const geometry = useRef<{ top: number; bottom: number; height: number; original: number; maximum: number; offset: number; expandable: boolean } | null>(null)
+function useSheetMotion(dialogRef: RefObject<HTMLDialogElement | null>, close: () => Promise<void>, closing: RefObject<boolean>, sizing: ReturnType<typeof useSheetSizing>, dismissible: boolean) {
+  const { resize, initialHeight, visibleHeight } = sizing
+  const geometry = useRef<{ visible: number; original: number; maximum: number; offset: number; expandable: boolean } | null>(null)
   const frame = useRef<number | null>(null)
   const offset = useRef(0)
   const settling = useRef<Animation | null>(null)
@@ -135,24 +149,24 @@ function useSheetMotion(dialogRef: RefObject<HTMLDialogElement | null>, close: (
   const settle = useCallback((height: number) => {
     const dialog = dialogRef.current
     if (!dialog?.open || closing.current) return
-    const top = dialog.getBoundingClientRect().top
+    const transform = getComputedStyle(dialog).transform
+    const start = new DOMMatrixReadOnly(transform === 'none' ? undefined : transform).m42
     const previous = settling.current
     settling.current = null
     previous?.cancel()
     for (const animation of dialog.getAnimations()) animation.cancel()
     dialog.dataset.settling = 'true'
-    dialog.style.removeProperty('transform')
-    resize(height)
-    // Commit the chosen height once, then compensate its top with a transform
-    // so the snap starts exactly where the finger left the sheet.
-    const delta = top - dialog.getBoundingClientRect().top
-    dialog.style.transform = `translate3d(0, ${delta}px, 0)`
+    dialog.style.transform = `translate3d(0, ${start}px, 0)`
+    const bounds = resize(height)
+    if (!bounds) return
+    const target = bounds.maximum - visibleHeight.current!
+    const delta = start - target
     if (Math.abs(delta) < 1 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
       dialog.style.removeProperty('transform')
       delete dialog.dataset.settling
       return
     }
-    const animation = dialog.animate([{ transform: dialog.style.transform }, { transform: 'translate3d(0, 0, 0)' }], sheetMotionOptions(delta))
+    const animation = dialog.animate([{ transform: dialog.style.transform }, { transform: `translate3d(0, ${target}px, 0)` }], sheetMotionOptions(delta))
     settling.current = animation
     void animation.finished.catch(() => {}).finally(() => {
       if (settling.current !== animation) return
@@ -161,7 +175,7 @@ function useSheetMotion(dialogRef: RefObject<HTMLDialogElement | null>, close: (
       delete dialog.dataset.settling
       animation.cancel()
     })
-  }, [dialogRef, closing, resize])
+  }, [dialogRef, closing, resize, visibleHeight])
   const begin = useCallback((expandable: boolean) => {
     const dialog = dialogRef.current
     if (!dialog?.open || closing.current) return false
@@ -172,19 +186,17 @@ function useSheetMotion(dialogRef: RefObject<HTMLDialogElement | null>, close: (
     settling.current = null
     delete dialog.dataset.settling
     dialog.style.transform = `translate3d(0, ${currentOffset}px, 0)`
-    const rect = dialog.getBoundingClientRect()
     dialog.dataset.dragging = 'true'
-    const bounds = resize(rect.height)
+    const bounds = resize(visibleHeight.current ?? dialog.offsetHeight)
     if (!bounds) return false
-    geometry.current = { top: rect.top, bottom: rect.bottom - currentOffset, height: rect.height, original: Math.min(initialHeight.current ?? rect.height, bounds.maximum), maximum: bounds.maximum, offset: currentOffset, expandable }
+    geometry.current = { visible: visibleHeight.current!, original: Math.min(initialHeight.current!, bounds.maximum), maximum: bounds.maximum, offset: currentOffset, expandable }
     offset.current = currentOffset
     return true
-  }, [dialogRef, closing, clearFrame, resize, initialHeight])
+  }, [dialogRef, closing, clearFrame, resize, initialHeight, visibleHeight])
   const move = useCallback((distance: number) => {
     const current = geometry.current
     if (!current) return
-    const minimum = current.expandable ? current.bottom - current.maximum - current.top : 0
-    offset.current = current.offset + Math.max(minimum, Math.min(current.bottom - current.top, distance))
+    offset.current = Math.max(current.expandable ? 0 : current.offset, Math.min(current.maximum, current.offset + distance))
     if (frame.current === null) frame.current = requestAnimationFrame(() => {
       frame.current = null
       const dialog = dialogRef.current
@@ -201,13 +213,12 @@ function useSheetMotion(dialogRef: RefObject<HTMLDialogElement | null>, close: (
     geometry.current = null
     delete dialog.dataset.dragging
     delete dialog.dataset.contentDragging
-    let height = current.height
+    let height = current.visible
     if (!cancelled) {
-      const top = current.bottom - current.height + offset.current
-      const positions = [{ top: current.bottom - current.original, height: current.original }]
-      if (current.expandable || Math.abs(current.height - current.maximum) < 1) positions.push({ top: current.bottom - current.maximum, height: current.maximum })
-      const closingTop = current.bottom - current.original + Math.max(64, Math.min(120, current.original * .25))
-      height = dismissible && top >= closingTop ? 0 : positions.reduce((nearest, position) => Math.abs(position.top - top) < Math.abs(nearest.top - top) ? position : nearest).height
+      const positions = [{ offset: current.maximum - current.original, height: current.original }]
+      if (current.expandable || Math.abs(current.visible - current.maximum) < 1) positions.push({ offset: 0, height: current.maximum })
+      const closingOffset = current.maximum - current.original + Math.max(64, Math.min(120, current.original * .25))
+      height = dismissible && offset.current >= closingOffset ? 0 : positions.reduce((nearest, position) => Math.abs(position.offset - offset.current) < Math.abs(nearest.offset - offset.current) ? position : nearest).height
     }
     if (height === 0) void close()
     else settle(height)
@@ -318,7 +329,7 @@ function useSheetContentDrag(dialogRef: RefObject<HTMLDialogElement | null>, clo
 function SheetHeader({ dialogRef, titleId, title, subtitle, closeLabel, dismissible = true, close, closing, sizing, motion }: {
   dialogRef: RefObject<HTMLDialogElement | null>; titleId: string; title: string; subtitle?: string;
   closeLabel: string; dismissible?: boolean; close: () => Promise<void>; closing: RefObject<boolean>;
-  sizing: ReturnType<typeof useSheetResize>;
+  sizing: ReturnType<typeof useSheetSizing>;
   motion: ReturnType<typeof useSheetMotion>;
 }) {
   const areaRef = useRef<HTMLDivElement>(null)
@@ -392,7 +403,7 @@ function SheetHeader({ dialogRef, titleId, title, subtitle, closeLabel, dismissi
     if (!['ArrowUp', 'ArrowDown'].includes(event.key)) return
     event.preventDefault()
     sizing.limits.current = null
-    motion.settle((dialogRef.current?.offsetHeight ?? 0) + (event.key === 'ArrowUp' ? 48 : -48))
+    motion.settle((sizing.visibleHeight.current ?? 0) + (event.key === 'ArrowUp' ? 48 : -48))
   }
   useEffect(() => {
     const dialog = dialogRef.current
@@ -426,7 +437,7 @@ export function BottomSheet({ dialogRef, id, titleId, title, subtitle, closeLabe
   closeLabel: string; dismissible?: boolean; fillHeight?: boolean; onClose?: () => void; children: ReactNode;
 }) {
   const { close, closing } = useSheetClose(dialogRef)
-  const sizing = useSheetResize(dialogRef, closing)
+  const sizing = useSheetSizing(dialogRef, closing)
   const motion = useSheetMotion(dialogRef, close, closing, sizing, dismissible)
   useSheetContentDrag(dialogRef, closing, motion, dismissible)
   return <dialog aria-labelledby={titleId} className={`bank-sheet${fillHeight ? ' bank-sheet-fill' : ''}`} id={id} ref={dialogRef} onCancel={event => { event.preventDefault(); if (dismissible) void close() }} onClick={event => { if (event.target === event.currentTarget && dismissible) void close() }} onClose={event => { if (!event.currentTarget.open) onClose?.() }}>
@@ -444,7 +455,7 @@ export function SheetSelect({ label, name, title, value, onChange, options, disa
   const dialogRef = useRef<HTMLDialogElement>(null)
   const trigger = useRef<HTMLButtonElement>(null)
   const { close, closing } = useSheetClose(dialogRef)
-  const sizing = useSheetResize(dialogRef, closing)
+  const sizing = useSheetSizing(dialogRef, closing)
   const motion = useSheetMotion(dialogRef, close, closing, sizing, true)
   useSheetContentDrag(dialogRef, closing, motion)
   const scrollTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
