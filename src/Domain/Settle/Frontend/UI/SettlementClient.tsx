@@ -7,7 +7,7 @@ import { useRouter } from 'next/navigation'
 import { CurrencyDivider } from './CurrencySelect'
 import { AnimatedMoney } from './AnimatedMoney'
 import { ApiError, apiRequest } from '../../../../Global/Util/Frontend'
-import { formatAccountNumber } from '../../../User/Shared'
+import { bankDisplayName, formatAccountNumber } from '../../../User/Shared'
 import type { SettlementDTO } from '../../Shared'
 import { formatMoney } from '../../Shared'
 import { CopyLink, Loading, ParticipantAvatar, useAction, useResource } from '../../../../Global/Util/Frontend'
@@ -18,10 +18,10 @@ function SettlementAccount({ bankName, accountNumber, formattedAccountNumber, ac
   const [message, setMessage] = useState('')
   const [copied, setCopied] = useState(false)
   const number = formattedAccountNumber ?? formatAccountNumber(bankName, accountNumber)
-  const clipboardBankName = bankName === 'NH농협은행' || bankName === '지역농축협' ? 'NH농협' : bankName
+  const displayName = bankDisplayName(bankName)
   async function copy() {
     try {
-      await navigator.clipboard.writeText(`${clipboardBankName} ${number}`)
+      await navigator.clipboard.writeText(`${displayName} ${number}`)
       setCopied(true)
       setMessage('은행명과 계좌번호를 복사했어요.')
     } catch {
@@ -30,8 +30,8 @@ function SettlementAccount({ bankName, accountNumber, formattedAccountNumber, ac
     }
   }
   return <div className="bank-details">
-    <button aria-label={`${bankName} ${number} 은행명과 계좌번호 복사`} className="settlement-account-copy" onClick={() => void copy()} type="button">
-      <span className="settlement-account-line">{bankName} <span className="account-number">{number}</span></span>
+    <button aria-label={`${displayName} ${number} 은행명과 계좌번호 복사`} className="settlement-account-copy" onClick={() => void copy()} type="button">
+      <span className="settlement-account-line">{displayName} <span className="account-number">{number}</span></span>
       {copied ? <Check aria-hidden="true" size={16} /> : <Copy aria-hidden="true" size={16} />}
     </button>
     <p className="help-text">예금주 {accountHolder}</p>

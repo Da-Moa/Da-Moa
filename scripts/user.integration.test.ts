@@ -22,6 +22,53 @@ if (!database || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(database)
 process.env.DATABASE_URL = database
 process.env.AUTH_JWT_SECRET ||= 'isolated-user-test-secret-at-least-32-bytes'
 
+test('unified Nonghyup input preserves institution codes and verified legacy accounts with two SQL writes', async t => {
+  const client = createDatabaseClient(database)
+  await client.connect()
+  const previousLog = process.env.DB_QUERY_LOG
+  let statements: string[] = []
+  try {
+    await applyMigrations(client)
+    for (const [bankCode, bankName, accountNumber] of [
+      ['011', 'NH농협은행', '3010123456781'],
+      ['012', '지역농축협', '3510221772213'],
+    ]) {
+      const limited = await signInKakao(`unified-nonghyup:${randomUUID()}`, { displayName: '농협 검증', email: null, profileImageUrl: null })
+      const input = { bankCode: '011', accountNumber, accountHolder: '농협 검증', expectedBankVersion: 0 }
+      const session = await completeOnboarding(readAccessToken(limited.accessToken), input)
+      await client.query("UPDATE users SET bank_name=$2, bank_verified_at=7, bank_verification_tran_id='test-nonghyup-verification' WHERE id=$1", [session.userId, bankName])
+      process.env.DB_QUERY_LOG = 'true'
+      t.mock.method(console, 'info', (message: string) => { statements.push(message.replace(/^SQL:\s*/, '').replace(/\s+/g, ' ').trim()) })
+      statements = []
+      const response = await GET(new NextRequest('http://localhost/api/me', { headers: { authorization: `Bearer ${session.accessToken}` } }))
+      assert.equal(response.status, 200)
+      const me = (await response.json()).data
+      assert.equal(me.bankAccount.bankName, '농협')
+      assert.equal(me.bankAccount.bankCode, bankCode)
+      assert.equal(me.bankAccount.verifiedAt, 7)
+      assert.equal(statements.length, 1)
+      statements = []
+      await updateBankAccount(readAccessToken(session.accessToken), randomUUID(), { ...input, expectedBankVersion: 1 })
+      assert.equal(statements.length, 2)
+      assert.match(statements[0], /^SELECT .* FROM users u WHERE u\.id = \$1$/)
+      assert.match(statements[1], /^UPDATE users SET /)
+      const saved = (await client.query('SELECT bank_name, bank_code, account_number, bank_verified_at, bank_version FROM users WHERE id=$1', [session.userId])).rows[0]
+      assert.equal(saved.bank_name, '농협')
+      assert.equal(saved.bank_code, bankCode)
+      assert.equal(saved.account_number, accountNumber)
+      assert.equal(saved.bank_verified_at, '7')
+      assert.equal(saved.bank_version, 2)
+      if (previousLog === undefined) delete process.env.DB_QUERY_LOG
+      else process.env.DB_QUERY_LOG = previousLog
+      t.mock.restoreAll()
+    }
+  } finally {
+    if (previousLog === undefined) delete process.env.DB_QUERY_LOG
+    else process.env.DB_QUERY_LOG = previousLog
+    await client.end()
+  }
+})
+
 test('withdrawal locks before checks and releases the transaction lock on commit and rollback', async t => {
   const client = createDatabaseClient(database)
   await client.connect()
