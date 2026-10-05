@@ -73,11 +73,56 @@ function useSheetClose(dialogRef: RefObject<HTMLDialogElement | null>) {
   return { close, closing }
 }
 
-function useSheetContentDrag(dialogRef: RefObject<HTMLDialogElement | null>, close: () => Promise<void>, closing: RefObject<boolean>, dismissible = true) {
+function useSheetResize(dialogRef: RefObject<HTMLDialogElement | null>, closing: RefObject<boolean>) {
+  const initialHeight = useRef<number | null>(null)
+  const limits = useRef<{ minimum: number; maximum: number } | null>(null)
+  const resize = useCallback((nextHeight: number) => {
+    const dialog = dialogRef.current
+    const content = dialog?.querySelector<HTMLElement>('.bank-sheet-content')
+    if (!dialog?.open || !content || closing.current) return
+    initialHeight.current ??= dialog.offsetHeight
+    if (!limits.current) {
+      dialog.style.setProperty('--sheet-height', `${dialog.offsetHeight}px`)
+      dialog.dataset.resized = 'true'
+      const padding = parseFloat(getComputedStyle(content).paddingBottom)
+      const fixedHeight = Array.from(content.children).filter(child => !child.matches('.bank-sheet-body, .bank-grid')).reduce((sum, child) => {
+        const style = getComputedStyle(child)
+        return sum + (child as HTMLElement).offsetHeight + parseFloat(style.marginTop) + parseFloat(style.marginBottom)
+      }, 0)
+      const maximum = parseFloat(getComputedStyle(dialog).maxHeight)
+      limits.current = { maximum, minimum: Math.min(maximum, initialHeight.current, Math.max(180, fixedHeight + padding + 64)) }
+    }
+    const { minimum, maximum } = limits.current
+    dialog.style.setProperty('--sheet-height', `${Math.round(Math.max(minimum, Math.min(maximum, nextHeight)))}px`)
+    return limits.current
+  }, [dialogRef, closing])
+  useEffect(() => {
+    const dialog = dialogRef.current
+    function reset() {
+      initialHeight.current = null
+      limits.current = null
+      dialog?.style.removeProperty('--sheet-height')
+      if (dialog) delete dialog.dataset.resized
+    }
+    function fitViewport() {
+      limits.current = null
+      if (dialog?.open && dialog.dataset.resized) resize(dialog.offsetHeight)
+    }
+    dialog?.addEventListener('close', reset)
+    window.addEventListener('resize', fitViewport)
+    return () => {
+      dialog?.removeEventListener('close', reset)
+      window.removeEventListener('resize', fitViewport)
+    }
+  }, [dialogRef, resize])
+  return { resize, initialHeight, limits }
+}
+
+function useSheetContentDrag(dialogRef: RefObject<HTMLDialogElement | null>, close: () => Promise<void>, closing: RefObject<boolean>, resize: ReturnType<typeof useSheetResize>['resize'], dismissible = true) {
   useEffect(() => {
     const dialog = dialogRef.current
     if (!dialog) return
-    let drag: { id: number; x: number; y: number; active: boolean; samples: { y: number; time: number }[] } | null = null
+    let drag: { id: number; x: number; y: number; height: number; expandable: boolean; direction: 'expand' | 'dismiss' | null; active: boolean; samples: { y: number; time: number }[] } | null = null
     let frame: number | null = null
     let offset = 0
     let suppressClickUntil = 0
@@ -92,7 +137,9 @@ function useSheetContentDrag(dialogRef: RefObject<HTMLDialogElement | null>, clo
     }
     function restore() {
       const transform = dialog!.style.transform
+      const height = drag?.direction === 'expand' ? drag.height : null
       reset()
+      if (height !== null) resize(height)
       if (transform && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
         rebound?.cancel()
         rebound = dialog!.animate([{ transform }, { transform: 'translate3d(0, 0, 0)' }], { duration: 180, easing: 'ease-out' })
@@ -101,16 +148,20 @@ function useSheetContentDrag(dialogRef: RefObject<HTMLDialogElement | null>, clo
     function start(event: TouchEvent) {
       if (event.touches.length !== 1) { restore(); return }
       const target = event.target instanceof Element ? event.target : null
-      const body = target?.closest('.bank-sheet-body, .bank-grid')
-      if (!dismissible || !dialog!.open || closing.current || !body || body.closest('dialog') !== dialog || target?.closest('input, textarea, select, [contenteditable="true"]')) return
+      const body = target?.closest('.bank-sheet-content')
+      if (!dismissible || !dialog!.open || closing.current || !body || body.closest('dialog') !== dialog || target?.closest('.bank-sheet-drag-area, input, textarea, select, [contenteditable="true"]')) return
+      const lists = Array.from(body.querySelectorAll('.bank-sheet-body, .bank-grid'))
+      if (lists.some(list => list.scrollTop > 1)) return
+      let expandable = lists.every(list => list.scrollHeight <= list.clientHeight + 1)
       // Let native scrolling own the entire gesture if any enclosing list is
       // away from its top, including scrollable content nested in the sheet.
       for (let node = target; node && node !== dialog; node = node.parentElement) {
         if (node.scrollTop > 1) return
+        if (node.scrollHeight > node.clientHeight + 1 && ['auto', 'scroll'].includes(getComputedStyle(node).overflowY)) expandable = false
       }
       rebound?.cancel()
       const touch = event.touches[0]
-      drag = { id: touch.identifier, x: touch.clientX, y: touch.clientY, active: false, samples: [{ y: touch.clientY, time: event.timeStamp }] }
+      drag = { id: touch.identifier, x: touch.clientX, y: touch.clientY, height: dialog!.offsetHeight, expandable, direction: null, active: false, samples: [{ y: touch.clientY, time: event.timeStamp }] }
     }
     function move(event: TouchEvent) {
       if (!drag) return
@@ -120,8 +171,9 @@ function useSheetContentDrag(dialogRef: RefObject<HTMLDialogElement | null>, clo
       const distance = touch.clientY - drag.y
       if (!drag.active) {
         if (Math.max(Math.abs(distance), Math.abs(touch.clientX - drag.x)) < 8) return
-        if (distance <= 0 || Math.abs(touch.clientX - drag.x) >= distance || !event.cancelable) { drag = null; return }
+        if ((distance < 0 && !drag.expandable) || Math.abs(touch.clientX - drag.x) >= Math.abs(distance) || !event.cancelable) { drag = null; return }
         drag.active = true
+        drag.direction = distance < 0 ? 'expand' : 'dismiss'
         // Cancel an unfinished entrance once, instead of toggling its CSS rule:
         // restoring that rule on release would replay the entrance animation.
         for (const animation of dialog!.getAnimations()) {
@@ -134,10 +186,11 @@ function useSheetContentDrag(dialogRef: RefObject<HTMLDialogElement | null>, clo
       suppressClickUntil = performance.now() + 400
       drag.samples.push({ y: touch.clientY, time: event.timeStamp })
       while (drag.samples.length > 1 && drag.samples[0].time < event.timeStamp - 120) drag.samples.shift()
-      offset = Math.max(0, distance)
+      offset = drag.direction === 'expand' ? drag.height + Math.max(0, -distance) : Math.max(0, distance)
       if (frame === null) frame = requestAnimationFrame(() => {
         frame = null
-        dialog!.style.transform = `translate3d(0, ${offset}px, 0)`
+        if (drag?.direction === 'expand') resize(offset)
+        else dialog!.style.transform = `translate3d(0, ${offset}px, 0)`
       })
     }
     function end(event: TouchEvent) {
@@ -147,12 +200,21 @@ function useSheetContentDrag(dialogRef: RefObject<HTMLDialogElement | null>, clo
       if (!drag.active) { reset(); return }
       if (event.cancelable) event.preventDefault()
       suppressClickUntil = performance.now() + 400
-      const distance = Math.max(0, touch.clientY - drag.y)
+      const signedDistance = touch.clientY - drag.y
+      const distance = Math.max(0, signedDistance)
       const sample = drag.samples.find(sample => sample.time >= event.timeStamp - 120)
       const elapsed = sample ? event.timeStamp - sample.time : 0
       const recentDistance = sample ? touch.clientY - sample.y : 0
       const flick = elapsed > 0 && recentDistance >= 16 && recentDistance / elapsed >= .7
-      const threshold = Math.max(64, Math.min(120, dialog!.offsetHeight * .2))
+      const threshold = Math.max(64, Math.min(120, drag.height * .2))
+      if (drag.direction === 'expand') {
+        const height = drag.height
+        const expand = -signedDistance >= 8 && (-signedDistance >= threshold || (elapsed > 0 && recentDistance <= -16 && recentDistance / elapsed <= -.7))
+        reset()
+        const bounds = resize(height + Math.max(0, -signedDistance))
+        if (bounds) resize(expand ? bounds.maximum : height)
+        return
+      }
       if (dismissible && !closing.current && distance >= 8 && (distance >= threshold || flick)) {
         if (frame !== null) cancelAnimationFrame(frame)
         frame = null
@@ -184,17 +246,17 @@ function useSheetContentDrag(dialogRef: RefObject<HTMLDialogElement | null>, clo
       dialog.removeEventListener('close', reset)
       window.removeEventListener('resize', restore)
     }
-  }, [dialogRef, close, closing, dismissible])
+  }, [dialogRef, close, closing, resize, dismissible])
 }
 
-function SheetHeader({ dialogRef, titleId, title, subtitle, closeLabel, dismissible = true, close, closing }: {
+function SheetHeader({ dialogRef, titleId, title, subtitle, closeLabel, dismissible = true, close, closing, sizing }: {
   dialogRef: RefObject<HTMLDialogElement | null>; titleId: string; title: string; subtitle?: string;
   closeLabel: string; dismissible?: boolean; close: () => Promise<void>; closing: RefObject<boolean>;
+  sizing: ReturnType<typeof useSheetResize>;
 }) {
   const areaRef = useRef<HTMLDivElement>(null)
   const drag = useRef<{ pointerId: number; y: number; height: number; moved: boolean; samples: { y: number; time: number }[] } | null>(null)
-  const initialHeight = useRef<number | null>(null)
-  const limits = useRef<{ minimum: number; maximum: number } | null>(null)
+  const { resize, initialHeight, limits } = sizing
   const frame = useRef<number | null>(null)
   const pendingHeight = useRef<number | null>(null)
   const peakSpeed = useRef(0)
@@ -208,27 +270,6 @@ function SheetHeader({ dialogRef, titleId, title, subtitle, closeLabel, dismissi
     const area = areaRef.current
     if (pointerId !== undefined && area?.hasPointerCapture(pointerId)) area.releasePointerCapture(pointerId)
     if (area) delete area.dataset.dragging
-  }
-  function resize(nextHeight: number) {
-    const dialog = dialogRef.current
-    const area = areaRef.current
-    if (!dialog?.open || !area || closing.current) return
-    initialHeight.current ??= dialog.offsetHeight
-    if (!limits.current) {
-      dialog.style.setProperty('--sheet-height', `${dialog.offsetHeight}px`)
-      dialog.dataset.resized = 'true'
-      const content = area.parentElement!
-      const padding = parseFloat(getComputedStyle(content).paddingBottom)
-      const fixedHeight = Array.from(content.children).filter(child => !child.matches('.bank-sheet-body, .bank-grid')).reduce((sum, child) => {
-        const style = getComputedStyle(child)
-        return sum + (child as HTMLElement).offsetHeight + parseFloat(style.marginTop) + parseFloat(style.marginBottom)
-      }, 0)
-      const maximum = parseFloat(getComputedStyle(dialog).maxHeight)
-      limits.current = { maximum, minimum: Math.min(maximum, initialHeight.current ?? maximum, Math.max(180, fixedHeight + padding + 64)) }
-    }
-    const { minimum, maximum } = limits.current
-    const adjusted = Math.round(Math.max(minimum, Math.min(maximum, nextHeight)))
-    dialog.style.setProperty('--sheet-height', `${adjusted}px`)
   }
   function startDrag(event: PointerEvent<HTMLDivElement>) {
     const dialog = dialogRef.current
@@ -301,16 +342,10 @@ function SheetHeader({ dialogRef, titleId, title, subtitle, closeLabel, dismissi
     const dialog = dialogRef.current
     function reset() {
       finishDrag()
-      initialHeight.current = null
-      limits.current = null
       if (SHEET_DRAG_SPEED_DEBUG) setSpeedStats(previous => ({ ...previous, closed: true }))
-      dialog?.style.removeProperty('--sheet-height')
-      if (dialog) delete dialog.dataset.resized
     }
     function fitViewport() {
       finishDrag()
-      limits.current = null
-      if (dialog?.open && dialog.dataset.resized) resize(dialog.offsetHeight)
     }
     dialog?.addEventListener('close', reset)
     window.addEventListener('resize', fitViewport)
@@ -335,9 +370,10 @@ export function BottomSheet({ dialogRef, id, titleId, title, subtitle, closeLabe
   closeLabel: string; dismissible?: boolean; fillHeight?: boolean; onClose?: () => void; children: ReactNode;
 }) {
   const { close, closing } = useSheetClose(dialogRef)
-  useSheetContentDrag(dialogRef, close, closing, dismissible)
+  const sizing = useSheetResize(dialogRef, closing)
+  useSheetContentDrag(dialogRef, close, closing, sizing.resize, dismissible)
   return <dialog aria-labelledby={titleId} className={`bank-sheet${fillHeight ? ' bank-sheet-fill' : ''}`} id={id} ref={dialogRef} onCancel={event => { event.preventDefault(); if (dismissible) void close() }} onClick={event => { if (event.target === event.currentTarget && dismissible) void close() }} onClose={event => { if (!event.currentTarget.open) onClose?.() }}>
-    <div className="bank-sheet-content"><SheetHeader close={close} closeLabel={closeLabel} closing={closing} dialogRef={dialogRef} dismissible={dismissible} subtitle={subtitle} title={title} titleId={titleId} />
+    <div className="bank-sheet-content"><SheetHeader close={close} closeLabel={closeLabel} closing={closing} dialogRef={dialogRef} dismissible={dismissible} sizing={sizing} subtitle={subtitle} title={title} titleId={titleId} />
       <div className="bank-sheet-body"><div className="stack">{children}</div></div>
     </div>
   </dialog>
@@ -351,7 +387,8 @@ export function SheetSelect({ label, name, title, value, onChange, options, disa
   const dialogRef = useRef<HTMLDialogElement>(null)
   const trigger = useRef<HTMLButtonElement>(null)
   const { close, closing } = useSheetClose(dialogRef)
-  useSheetContentDrag(dialogRef, close, closing)
+  const sizing = useSheetResize(dialogRef, closing)
+  useSheetContentDrag(dialogRef, close, closing, sizing.resize)
   const scrollTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const [opened, setOpened] = useState(false)
   const [scrolling, setScrolling] = useState(false)
@@ -391,7 +428,7 @@ export function SheetSelect({ label, name, title, value, onChange, options, disa
       <select aria-hidden="true" autoComplete="off" className="bank-select-native" disabled={disabled} name={name} onChange={event => choose(event.currentTarget.value)} onInvalid={event => { event.preventDefault(); open() }} required tabIndex={-1} value={value}>{!value && <option value="" disabled>{title}</option>}{options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
     </div>
     <dialog aria-labelledby={`${id}-title`} className={`bank-sheet ${sheetClassName ?? ''}`} id={`${id}-sheet`} onCancel={event => { event.preventDefault(); void close() }} onClick={event => { if (event.target === event.currentTarget) void close() }} onClose={() => { setOpened(false); trigger.current?.focus() }} ref={dialogRef}>
-      <div className="bank-sheet-content"><SheetHeader close={close} closeLabel={`${label} 닫기`} closing={closing} dialogRef={dialogRef} title={title} titleId={`${id}-title`} />
+      <div className="bank-sheet-content"><SheetHeader close={close} closeLabel={`${label} 닫기`} closing={closing} dialogRef={dialogRef} sizing={sizing} title={title} titleId={`${id}-title`} />
         {searchPlaceholder && <div className="round-search-bar currency-search"><Search aria-hidden="true" size={21} /><input aria-label={searchPlaceholder} autoComplete="off" maxLength={100} onChange={event => setSearch(event.target.value)} placeholder={searchPlaceholder} type="search" value={search} /></div>}
         <div aria-label={`${label} 목록`} className="bank-grid" data-scrolling={scrolling || undefined} data-scrollbar-hovered={scrollbarHovered || undefined} onPointerMove={event => { const list = event.currentTarget; setScrollbarHovered(event.pointerType === 'mouse' && event.clientX >= list.getBoundingClientRect().left + list.clientLeft + list.clientWidth) }} onPointerLeave={() => setScrollbarHovered(false)} onScroll={showScrollbar} role="group">{filtered.map(option => <button aria-pressed={value === option.value} className="bank-tile" data-value={option.value} key={option.value} onClick={() => choose(option.value)} type="button">{option.icon}<span>{option.label}</span></button>)}</div>
         {filtered.length === 0 && <p className="help-text" role="status">검색 결과가 없어요.</p>}
