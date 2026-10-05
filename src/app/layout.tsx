@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import { connection } from 'next/server'
+import { getKakaoRedirectUris } from '../Global/Auth/Backend'
 import './globals.css'
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -7,7 +8,7 @@ export async function generateMetadata(): Promise<Metadata> {
   await connection()
 
   return {
-    metadataBase: new URL(new URL(process.env.KAKAO_REDIRECT_URI ?? 'http://localhost:3000').origin),
+    metadataBase: new URL(new URL(getKakaoRedirectUris()[0] ?? 'http://localhost:3000').origin),
     title: '다모아 | 간편 정산',
     description: '영수증으로 시작하는 간편한 모임 정산',
     icons: { icon: { url: '/logo/da-moa-128px-trans.png', type: 'image/png', sizes: '128x128' } },

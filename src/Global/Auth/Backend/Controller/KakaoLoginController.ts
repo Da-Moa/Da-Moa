@@ -4,6 +4,7 @@ import {
   authCookieOptions,
   createKakaoAuthorizationRequest,
   createReturnToCookie,
+  createRedirectUriCookie,
   getKakaoAuthenticationConfig,
   OIDC_COOKIE_NAMES,
   OIDC_MAX_AGE_SECONDS,
@@ -23,13 +24,15 @@ function loginRedirect(request: NextRequest, error: string) {
 
 export async function getKakaoLoginResponse(request: NextRequest) {
   try {
-    const login = createKakaoAuthorizationRequest(getKakaoAuthenticationConfig())
+    const config = getKakaoAuthenticationConfig(requestOrigin(request))
+    const login = createKakaoAuthorizationRequest(config)
     const response = NextResponse.redirect(login.url)
     const options = authCookieOptions(OIDC_MAX_AGE_SECONDS)
 
     response.cookies.set(OIDC_COOKIE_NAMES.state, login.state, options)
     response.cookies.set(OIDC_COOKIE_NAMES.nonce, login.nonce, options)
     response.cookies.set(OIDC_COOKIE_NAMES.codeVerifier, login.codeVerifier, options)
+    response.cookies.set(OIDC_COOKIE_NAMES.redirectUri, createRedirectUriCookie(config.redirectUri, login.state), options)
     response.cookies.set(RETURN_TO_COOKIE_NAME, createReturnToCookie(request.nextUrl.searchParams.get('returnTo'), login.state), options)
     response.headers.set('Cache-Control', 'private, no-store')
     return response

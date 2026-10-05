@@ -23,6 +23,7 @@ const OIDC_MAX_AGE_SECONDS = 10 * 60
 export const OIDC_COOKIE_NAMES = {
   codeVerifier: 'da_moa_oidc_verifier',
   nonce: 'da_moa_oidc_nonce',
+  redirectUri: 'da_moa_oidc_redirect_uri',
   state: 'da_moa_oidc_state',
 } as const
 export const ACCESS_TOKEN_COOKIE_NAME = 'da_moa_access'
@@ -153,11 +154,26 @@ function getSessionSecret(): string {
   return secret
 }
 
-export function getKakaoConfig(): KakaoConfig {
+export function getKakaoRedirectUris(): string[] {
+  const configured = process.env.KAKAO_REDIRECT_URI || process.env.NEXT_PUBLIC_KAKAO_REDIRECT_URI || ''
+  const uris = [...new Set(configured.split(',').map(uri => uri.trim()).filter(Boolean))]
+  for (const uri of uris) {
+    const url = new URL(uri)
+    if (!/^https?:\/\//.test(uri) || url.username || url.password || url.search || url.hash) {
+      throw new Error('Invalid Kakao redirect URI')
+    }
+  }
+  return uris
+}
+
+export function getKakaoConfig(origin?: URL | null, selectedRedirectUri?: string): KakaoConfig {
   const clientId = process.env.KAKAO_REST_API_KEY
     || process.env.KAKAO_CLIENT_ID
     || process.env.NEXT_PUBLIC_KAKAO_REST_API_KEY
-  const redirectUri = process.env.KAKAO_REDIRECT_URI || process.env.NEXT_PUBLIC_KAKAO_REDIRECT_URI
+  const redirectUris = getKakaoRedirectUris()
+  const redirectUri = selectedRedirectUri
+    ? redirectUris.find(uri => uri === selectedRedirectUri && new URL(uri).origin === origin?.origin)
+    : origin === undefined ? redirectUris[0] : redirectUris.find(uri => new URL(uri).origin === origin?.origin)
 
   if (!clientId || !redirectUri) throw new Error('Kakao OIDC is not configured')
 
@@ -168,8 +184,8 @@ export function getKakaoConfig(): KakaoConfig {
   }
 }
 
-export function getKakaoAuthenticationConfig(): KakaoConfig {
-  const config = getKakaoConfig()
+export function getKakaoAuthenticationConfig(origin?: URL | null): KakaoConfig {
+  const config = getKakaoConfig(origin)
   getSessionSecret()
   return config
 }
@@ -526,6 +542,24 @@ export function createReturnToCookie(
 ) {
   const payload = encodeJson({ path: safeReturnTo(value), state, exp: now + ONBOARDING_MAX_AGE_SECONDS })
   return `${payload}.${signHs256(`return-to:${payload}`, secret)}`
+}
+
+export function createRedirectUriCookie(redirectUri: string, state: string, secret = getSessionSecret(), now = currentTimestamp()) {
+  const payload = encodeJson({ redirectUri, state, exp: now + OIDC_MAX_AGE_SECONDS })
+  return `${payload}.${signHs256(`redirect-uri:${payload}`, secret)}`
+}
+
+export function readRedirectUriCookie(token: string | undefined, expectedState: string, secret?: string, now = currentTimestamp()): string | null {
+  if (!token) return null
+  const parts = token.split('.')
+  if (parts.length !== 2) return null
+  let signature: string
+  try { signature = signHs256(`redirect-uri:${parts[0]}`, secret ?? getSessionSecret()) } catch { return null }
+  if (!safeEqual(parts[1], signature)) return null
+  const payload = decodeJson(parts[0])
+  if (!payload || !isTimestamp(payload.exp) || payload.exp <= now
+      || payload.state !== expectedState || typeof payload.redirectUri !== 'string') return null
+  return payload.redirectUri
 }
 
 export function readReturnToCookie(

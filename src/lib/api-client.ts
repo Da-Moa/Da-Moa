@@ -1,6 +1,7 @@
 'use client'
 
 import { clearAccessToken, getAccessToken, setAccessToken } from '../Global/Auth/Frontend'
+import { uuidV4 } from './uuid'
 
 export class ApiError extends Error {
   recover?: () => Promise<unknown>
@@ -55,8 +56,17 @@ async function fingerprint(path: string, method: string, body: unknown): Promise
   }
   const entries = await Promise.all(Array.from(body.entries()).filter(([key]) => key !== 'expectedVersion').sort(([a], [b]) => a.localeCompare(b)).map(async ([key, value]) => {
     if (typeof value === 'string') return [key, value]
-    const hash = await crypto.subtle.digest('SHA-256', await value.arrayBuffer())
-    return [key, value.type, Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('')]
+    const bytes = await value.arrayBuffer()
+    let hash: Uint8Array
+    if (crypto.subtle) hash = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
+    else {
+      // Web Crypto digest is unavailable on HTTP LAN origins. Reuse the SDK's pure JS SHA-256.
+      const { Sha256Js } = await import('@smithy/core/checksum')
+      const digest = new Sha256Js()
+      digest.update(new Uint8Array(bytes))
+      hash = await digest.digest()
+    }
+    return [key, value.type, Array.from(hash, byte => byte.toString(16).padStart(2, '0')).join('')]
   }))
   return JSON.stringify([path, method, entries])
 }
@@ -93,7 +103,7 @@ async function request<T>(path: string, options: RequestOptions): Promise<T> {
       }
       throw error
     }
-    pending ??= { signature, key: options.createRequestKey?.() ?? crypto.randomUUID(), body: snapshot(options.body) }
+    pending ??= { signature, key: options.createRequestKey?.() ?? uuidV4(), body: snapshot(options.body) }
     unfinishedRequests.set(operation, pending)
   }
   const body = pending ? pending.body : options.body

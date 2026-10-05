@@ -1,4 +1,5 @@
 import { createServer } from 'node:http'
+import { networkInterfaces } from 'node:os'
 import next from 'next'
 import { createWsController } from './src/Global/Websocket/Backend/Controller/ws-controller.mjs'
 import { collectDatabaseMetrics, httpMetrics, trackHttpResponse } from './src/lib/http-metrics.mjs'
@@ -28,4 +29,16 @@ if (metricsPort !== null) createServer((request, response) => {
   if (request.method !== 'GET' || request.url !== '/metrics') { response.writeHead(404).end(); return }
   response.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8', 'Cache-Control': 'no-store' }).end(httpMetrics())
 }).listen(metricsPort, process.env.HOST || '127.0.0.1')
-server.listen(port, process.env.HOST || (process.env.NODE_ENV === 'production' ? '127.0.0.1' : '0.0.0.0'), () => console.log(`Ready on port ${port}`))
+const host = process.env.HOST || (process.env.NODE_ENV === 'production' ? '127.0.0.1' : '0.0.0.0')
+server.listen(port, host, () => {
+  const listensOnAllInterfaces = host === '0.0.0.0' || host === '::'
+  const localHost = listensOnAllInterfaces ? 'localhost' : host.includes(':') ? `[${host}]` : host
+  console.log(`Ready on port ${port}`)
+  console.log(`  Local:   http://${localHost}:${port}`)
+  if (listensOnAllInterfaces) {
+    const addresses = new Set(Object.values(networkInterfaces()).flatMap(entries => (entries ?? [])
+      .filter(entry => entry.family === 'IPv4' && !entry.internal)
+      .map(entry => entry.address)))
+    for (const address of addresses) console.log(`  Network: http://${address}:${port}`)
+  }
+})

@@ -1,6 +1,6 @@
 import 'server-only'
 
-export { readRequestAccessToken, currentTimestamp } from './auth-util'
+export { readRequestAccessToken, currentTimestamp, getKakaoRedirectUris } from './auth-util'
 export { requireAccount, getAccount, type Account } from './Service/AuthorizationService'
 export { jwtGuard } from './Guard/JwtGuard'
 export { issueTokens, signInKakao, signInTestAccount, type AuthSession } from './Service/AuthService'

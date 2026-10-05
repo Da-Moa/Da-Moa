@@ -16,7 +16,7 @@ cp .env.example .env.local
 | 변수 | 값 |
 |---|---|
 | `KAKAO_REST_API_KEY` | 카카오 앱 REST API 키. OpenID Connect 활성화 필요 |
-| `KAKAO_REDIRECT_URI` | 로컬에서는 `http://localhost:3000/auth/v1/kakao`. 카카오 콘솔에 같은 URI 등록 |
+| `KAKAO_REDIRECT_URI` | 카카오에 등록한 콜백 URI. 여러 개는 쉼표로 구분하며 접속 주소와 일치하는 URI를 선택. 첫 URI는 메타데이터의 기준 주소 |
 | `KAKAO_CLIENT_SECRET` | 카카오 콘솔에서 Client Secret을 사용하는 경우만 설정 |
 | `AUTH_JWT_SECRET` | 32바이트 이상의 임의 비밀 문자열 |
 | `DATABASE_URL` | 로컬은 `postgresql://da_moa:da_moa_local@127.0.0.1:55432/da_moa_dev`, OCI 앱 컨테이너는 Compose의 `postgres:5432` 연결 문자열 |
@@ -24,7 +24,7 @@ cp .env.example .env.local
 | `MINIO_ENDPOINT` | MinIO S3 API 주소. 운영 앱 컨테이너는 `http://minio:9000` |
 | `MINIO_BUCKET` | 비공개 영수증 버킷 이름 |
 | `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` | 해당 버킷에 읽기·쓰기·삭제 권한이 있는 전용 사용자 키 |
-| `NEXT_DEV_ALLOWED_ORIGINS` | 개발 서버 접근 허용 호스트를 쉼표로 구분. 미설정 시 기존 `192.168.219.141`, 빈 값이면 추가 허용 없음. 변경 후 개발 서버 재시작 |
+| `NEXT_DEV_ALLOWED_ORIGINS` | 개발 서버 접근 허용 호스트를 쉼표로 구분. 미설정 시 현재 기기의 내부 IPv4 주소와 기존 `192.168.219.141`을 허용하며, 빈 값이면 추가 허용 없음. 변경 후 개발 서버 재시작 |
 
 ```bash
 npm run db:local:up
@@ -54,6 +54,18 @@ npm run dev
 정산 구현은 `src/Domain/Settle`의 Frontend(회차 생성·목록·상세·지출 폼·개인 정산), Backend(Controller·Service·Repository·DAO·Exception), Shared(DTO·순수 금액/분배 계산)로 분리합니다. 회차·지출·참여자 제외·확정/재오픈/전송/추첨·개인 안내/수취 확인/종료·영수증의 기존 21개 API를 유지합니다. API Route는 Group/Settle 공개 Controller로 분배하며, 회차 생성 후보 검사 SQL은 Group 공개 진입점으로 조합합니다. 영수증 변환과 MinIO 객체 작업은 Global Util 공개 기능을 사용합니다. 회차 생성은 UUIDv7 `Idempotency-Key` ticket을 PK로 사용하고 중복은 `409 round_already_exists`로 거절합니다. 모임 이탈·닫기·회원 탈퇴와 같은 세션 advisory lock을 획득한 뒤 AUTH·입력 검증·단일 회차/참여자 저장을 수행하고 같은 연결에서 락을 해제하는 SQL 4회 흐름입니다. 명시적 트랜잭션·멱등 성공 기록은 사용하지 않으며 실패해도 락을 해제합니다. 해제 결과가 불확실한 연결은 폐기합니다. 응답 유실 후에는 같은 ticket으로 재시도하며, 중복 응답이면 회차 목록에서 저장 결과를 확인합니다. 회차 상세는 AUTH 회원 조회 → 회차·모임·참여자/사용자·지출 페이지/부담금/영수증·통화별 합계·본인 잔액/송금 통합 JOIN의 SQL 2회이며 명시적 트랜잭션·락은 없습니다. 전체 예상 송금은 지출 페이지에 관계없이 유지합니다. 회차 취소는 지출 기록이 없는 RECORDING 회차에 한해 회차 생성자에게 허용합니다. BEGIN → AUTH → advisory transaction lock → 기록·권한·버전·재시도 통합 조회 → 삭제·성공 기록 단일 SQL → COMMIT의 6회이며, 지출이 있으면 409로 거절하고 ROLLBACK으로 락을 해제합니다. 삭제 전 알림 대상도 통합 조회에 포함합니다. 지출 생성은 AUTH → Service 요청 검증 → BEGIN → advisory transaction lock → 권한·현재 상태·통화별 한도·최대 5종·재시도를 통합한 조건부 지출 INSERT → 부담금·버전·성공 기록 저장 → COMMIT/락 자동 해제의 SQL 6회입니다. 알림 대상은 INSERT에서 확보하므로 WebSocket 발행에도 추가 조회가 없으며 입력 형식 오류는 AUTH 1회로 종료합니다. 기록 중 총액·예상 송금은 저장된 지출·부담금에서 계산하고 최종 송금 저장은 전송/추첨 단계에서 유지합니다. 지출 수정은 AUTH → 통합 조회/검증 → 같은 세션 advisory lock → 조건부 수정 단일 SQL → 락 해제의 5회이며 명시적 트랜잭션은 없습니다. 정산 확정은 AUTH → BEGIN → 회차/전체 지출/멱등 통합 조회 → 회차 생성자·지출·상태·버전 검사 → 같은 transaction advisory lock → 확정/기본 몫/버전/성공 기록 단일 SQL → COMMIT의 6회입니다. 확정 락을 보유하는 동안 추가·수정 저장이 대기하며, 저장 SQL은 락 대기 사이의 상태·버전 변경을 다시 검사합니다. 알림 대상도 통합 조회에 포함하여 추가 조회 없이 커밋 후 invalidation을 발행합니다. 개인 정산 조회는 AUTH 회원 조회 → 회차 참여 권한·통화별 본인 잔액·보낼/받을 송금·수취 확인 현황 통합 조회의 SQL 2회이며 최종 저장 전·후 모두 명시적 트랜잭션·락이 없습니다. KRW일 때만 본인이 보낼 실제 수취인의 최신 계좌를 포함합니다. 수취 확인·해제는 AUTH → 본인의 수취 목록/권한 조회 → 단일 조건부 UPDATE의 SQL 3회이며 명시적 트랜잭션·락·멱등 성공 기록을 사용하지 않습니다. 이미 요청한 확인 상태라 변경할 기록이 없으면 같은 키·새 키 모두 404 not_found를 반환하며, 원본 잔액을 보존하고 확인 시각으로 남은 금액을 계산합니다. 알림 대상도 수취 조회에 포함하여 추가 SQL 없이 저장 뒤 invalidation을 발행합니다. 일반 정산 종료는 AUTH → 미확인 수취 검사·종료·버전·성공 기록을 합친 단일 SQL의 총 2회이며 명시적 트랜잭션·락을 사용하지 않습니다. 종료 UPDATE 안에서 미확인 수취가 없는지 검사하며, 남으면 저장 없이 거절하고 모두 확인되었거나 송금 건이 없으면 종료합니다. 알림 대상도 같은 SQL에서 확보하며 거절·같은 키/본문의 성공 재생도 총 2회입니다. 영수증 삭제는 AUTH → 지출 작성자/회차 생성자·상태·버전·재시도 통합 조회 → 삭제·버전·성공 기록 단일 SQL의 총 3회이며 명시적 트랜잭션·advisory lock이 없습니다. DB 자동 커밋 뒤 실제 삭제한 MinIO 객체를 정리하며 알림 대상 추가 조회도 없습니다. 같은 키·본문의 성공 재생은 SQL 2회로 객체 삭제·알림을 반복하지 않습니다. 나머지 변경의 기존 트랜잭션·락·멱등 성공 재생·버전 검사·KRW 수취 계좌 공개 범위를 유지합니다. [Settle 요청 흐름과 SQL 횟수](docs/refactored-api-flows-and-sql.md#8-settle-요청-흐름sql)에 API별 실제 순서·변동 횟수·검증 방법을 기록합니다.
 
 공용 `pg.Pool`은 새 PostgreSQL 연결의 startup parameter로 `statement_timeout=15000`(15초), `lock_timeout=10000`(10초)을 설정합니다. 풀의 일반 조회와 읽기·쓰기 트랜잭션에 같은 제한을 적용하며 요청마다 `SET LOCAL`을 실행하지 않습니다. 풀 설정 변경 후에는 앱 서버를 재시작해야 기존 풀 연결도 새 기본값을 사용합니다. 마이그레이션용 독립 연결의 별도 제한 설정은 유지합니다.
+
+화면은 기기의 라이트·다크 모드 설정을 자동으로 따릅니다. 화면을 보는 중 설정을 변경해도 배경·글자·카드·입력창 색상이 바로 반영됩니다.
+
+개발 서버가 준비되면 `Local: http://localhost:3000`과 `Network: http://현재-내부-IP:3000`을 출력합니다. 같은 네트워크의 다른 기기에서는 `Network` 주소로 접속합니다. `--port` 또는 `PORT`로 포트를 변경하면 실제 포트를 표시하며, `HOST=127.0.0.1`처럼 로컬 주소에만 바인딩하면 `Network` 주소는 출력하지 않습니다.
+
+카카오 로그인도 localhost와 내부 IP 양쪽에서 사용하려면, 두 URI를 카카오 디벨로퍼스의 사용 중인 REST API 키에 각각 등록하고 `.env.local`에 쉼표로 나열합니다.
+
+```dotenv
+KAKAO_REDIRECT_URI=http://localhost:3000/auth/v1/kakao,http://192.168.219.102:3000/auth/v1/kakao
+```
+
+개발 서버를 재시작한 뒤 로그인은 접속한 주소에 맞는 URI를 자동 선택합니다. 목록에 없는 주소에서는 로그인을 시작하지 않습니다. 선택한 URI는 state에 묶인 서명된 HttpOnly 쿠키에 저장하고, 콜백에서도 같은 URI로 토큰을 교환합니다. 내부 IP나 포트가 바뀌면 환경변수와 카카오 등록 주소를 함께 갱신합니다. 기존 단일 URI 설정도 계속 지원합니다. 설정과 토큰 교환 규칙은 [카카오 앱 설정](https://developers.kakao.com/docs/ko/app-setting/app#redirect-uri)과 [카카오 로그인 REST API](https://developers.kakao.com/docs/ko/kakaologin/rest-api#request-token)를 참고하세요.
 
 ## 사용자 흐름
 
@@ -160,7 +172,7 @@ npm run db:seed:test-accounts
 
 ## 배포
 
-Ubuntu arm64 오라클 인스턴스의 IP HTTPS, Docker Compose 앱·PostgreSQL·MinIO 설정과 GitHub Actions 배포 절차는 [OCI 배포 가이드](docs/oci-deploy.md)를 따릅니다. PostgreSQL과 MinIO 데이터는 `/db` 블록 볼륨의 `/db/postgres`와 `/db/minio`에 각각 저장하고, 배포 시 기존 저장소 컨테이너와 볼륨을 유지하면서 앱만 교체합니다. `main`에 반영하면 테스트·빌드가 통과한 커밋으로 앱 이미지를 서버에서 빌드하고, 빈 운영 DB에 스키마를 만든 뒤 컨테이너를 전환합니다. 개발·운영 DB와 MinIO 버킷은 분리합니다. 운영 API의 변경 요청과 WebSocket 연결은 `KAKAO_REDIRECT_URI`의 공개 주소에서 온 요청만 허용합니다. 같은 IP를 유지하면 기존 세션을 유지할 수 있도록 `AUTH_JWT_SECRET`도 유지하고, 공개 주소가 바뀌면 카카오 콘솔의 Redirect URI와 `KAKAO_REDIRECT_URI`를 함께 변경합니다.
+Ubuntu arm64 오라클 인스턴스의 IP HTTPS, Docker Compose 앱·PostgreSQL·MinIO 설정과 GitHub Actions 배포 절차는 [OCI 배포 가이드](docs/oci-deploy.md)를 따릅니다. PostgreSQL과 MinIO 데이터는 `/db` 블록 볼륨의 `/db/postgres`와 `/db/minio`에 각각 저장하고, 배포 시 기존 저장소 컨테이너와 볼륨을 유지하면서 앱만 교체합니다. `main`에 반영하면 테스트·빌드가 통과한 커밋으로 앱 이미지를 서버에서 빌드하고, 빈 운영 DB에 스키마를 만든 뒤 컨테이너를 전환합니다. 개발·운영 DB와 MinIO 버킷은 분리합니다. 운영 API의 변경 요청과 WebSocket 연결은 `KAKAO_REDIRECT_URI` 목록에 등록된 공개 주소에서 온 동일 출처 요청만 허용합니다. 같은 IP를 유지하면 기존 세션을 유지할 수 있도록 `AUTH_JWT_SECRET`도 유지하고, 공개 주소가 바뀌면 카카오 콘솔의 Redirect URI와 `KAKAO_REDIRECT_URI`를 함께 변경합니다.
 
 운영 Compose는 앱·PostgreSQL·MinIO만 실행합니다. Grafana·Prometheus·Blackbox Exporter와 대시보드·경보는 별도 [Monitoring 저장소](https://github.com/Da-Moa/Monitoring)에서 E2 Micro에 배포합니다. A1에는 모니터링 컨테이너를 두지 않고 CPU·메모리는 OCI Compute 지표를 사용합니다. 앱의 P95/P99·RPS·HTTP 상태 코드·공통 API 예외·DB 쿼리 호출량·PostgreSQL 연결 사용/잔여 지표는 `127.0.0.1:9464/metrics`에서 제공하고, E2 `10.0.0.195`가 A1 `10.0.0.20:9465`의 전용 Nginx 경로로 수집합니다. 네트워크·환경변수·이전 순서는 Monitoring README를 따릅니다.
 
