@@ -1,4 +1,5 @@
 import 'server-only'
+import { networkInterfaces } from 'node:os'
 import { setAuthCookies } from './AuthCookies'
 import { NextRequest, NextResponse } from 'next/server'
 import { safeReturnTo } from '../auth-util'
@@ -11,7 +12,9 @@ export async function getTestLoginResponse(request: NextRequest) {
   try {
     const expected = requestOrigin(request)
     if (!expected) throw new AppError(403, 'forbidden', '허용되지 않은 요청입니다')
-    const denied = testLoginGuard(process.env.NODE_ENV, expected.hostname, request.headers.get('origin'), expected.origin)
+    const localAddresses = Object.values(networkInterfaces()).flatMap(entries => (entries ?? [])
+      .filter(entry => entry.family === 'IPv4' && !entry.internal).map(entry => entry.address))
+    const denied = testLoginGuard(process.env.NODE_ENV, expected.hostname, request.headers.get('origin'), expected.origin, localAddresses)
     if (denied) throw new AppError(denied, denied === 404 ? 'not_found' : 'forbidden', denied === 404 ? '요청한 API를 찾을 수 없어요' : '허용되지 않은 요청입니다')
     if (!request.headers.get('content-type')?.toLowerCase().startsWith('application/x-www-form-urlencoded')) {
       throw new AppError(400, 'invalid_input', '올바른 로그인 요청이 필요합니다')

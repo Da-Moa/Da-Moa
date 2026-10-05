@@ -57,7 +57,9 @@ export function testAccountForKey(value: unknown) {
   return typeof value === 'string' ? TEST_ACCOUNTS.find(account => account.key === value) : undefined
 }
 
-export function testLoginGuard(nodeEnv: string | undefined, hostname: string, origin: string | null, expectedOrigin: string) {
-  if (nodeEnv === 'production' || !['localhost', '127.0.0.1', '[::1]', '::1'].includes(hostname)) return 404
+export function testLoginGuard(nodeEnv: string | undefined, hostname: string, origin: string | null, expectedOrigin: string, localAddresses: readonly string[] = []) {
+  const loopback = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(hostname)
+  const localNetwork = localAddresses.includes(hostname) && /^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(hostname)
+  if (nodeEnv === 'production' || !loopback && !localNetwork) return 404
   return origin === expectedOrigin ? null : 403
 }
