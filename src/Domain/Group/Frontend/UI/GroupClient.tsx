@@ -3,11 +3,11 @@
 import { useAccount } from '../../../User/Frontend'
 
 import { useRef, useState } from 'react'
-import { ChevronLeft, Search, X } from 'lucide-react'
+import { ChevronLeft, Search } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { MAX_GROUP_MEMBERS, type GroupDetail, type GroupMutationResult as MutationResult } from '../../Shared'
-import { apiRequest, CopyLink, ErrorNotice, Loading, useAction, useResource } from '../../../../Global/Util/Frontend'
+import { apiRequest, BottomSheet, CopyLink, ErrorNotice, Loading, useAction, useResource } from '../../../../Global/Util/Frontend'
 import { CreateRoundForm, RoundList } from '../../../Settle/Frontend'
 
 export default function GroupClient({ groupId }: { groupId: string }) {
@@ -63,12 +63,16 @@ export default function GroupClient({ groupId }: { groupId: string }) {
           {data.invites.length > 0 && <details><summary>유효한 초대 {data.invites.length}개 관리</summary><ul className="member-list">{data.invites.map(item => <li key={item.id}><span>{new Date(item.expiresAt * 1000).toLocaleDateString('ko-KR')}까지 유효</span><span className="inline-actions">{!memberLimitReached && <button className="text-button" disabled={action.busy} type="button" onClick={() => void inviteMembers(item.id)}>재발급</button>}<button className="text-button danger-text" disabled={action.busy} type="button" onClick={() => void revoke(item.id)}>폐기</button></span></li>)}</ul></details>}
         </>}
       </section>
-      {data.members.length >= 5 && <dialog aria-labelledby="group-members-dialog-heading" className="account-dialog" id="group-members-dialog" ref={membersDialog} onClick={event => { if (event.target === event.currentTarget) event.currentTarget.close() }}><div className="account-dialog-content stack"><div className="account-dialog-header"><h2 id="group-members-dialog-heading">현재 멤버 {data.members.length}명</h2><button aria-label="현재 멤버 목록 닫기" className="icon-button account-dialog-close" onClick={() => membersDialog.current?.close()} type="button"><X size={20} /></button></div><ul aria-label="현재 멤버 전체 목록" className="member-list">{data.members.map(member => <li key={member.userId}><span>{member.displayName}</span>{member.userId === data.creatorId && <span className="subtle-tag">모임 생성자</span>}</li>)}</ul></div></dialog>}
+      {data.members.length >= 5 && <BottomSheet closeLabel="현재 멤버 목록 닫기" dialogRef={membersDialog} id="group-members-dialog" title={`현재 멤버 ${data.members.length}명`} titleId="group-members-dialog-heading">
+        <ul aria-label="현재 멤버 전체 목록" className="member-list">{data.members.map(member => <li key={member.userId}><span>{member.displayName}</span>{member.userId === data.creatorId && <span className="subtle-tag">모임 생성자</span>}</li>)}</ul>
+      </BottomSheet>}
       <ErrorNotice error={action.error} />
       <CreateRoundForm groupId={groupId} members={data.members} userId={account.id} action={action} />
       <h2 className="section-heading">내가 참여한 회차</h2>
       {!departing && <RoundList endpoint={`/api/groups/${groupId}/rounds?limit=3`} onMore={() => { setRoundsDialogOpened(true); roundsDialog.current?.showModal() }} />}
-      <dialog aria-labelledby="group-rounds-dialog-heading" className="account-dialog" id="group-rounds-dialog" ref={roundsDialog} onClose={() => setRoundsDialogOpened(false)} onClick={event => { if (event.target === event.currentTarget) event.currentTarget.close() }}><div className="account-dialog-content stack"><div className="account-dialog-header"><h2 id="group-rounds-dialog-heading">내가 참여한 회차</h2><button aria-label="참여 회차 목록 닫기" className="icon-button account-dialog-close" onClick={() => roundsDialog.current?.close()} type="button"><X size={20} /></button></div><div className="round-search-bar"><Search aria-hidden="true" size={21} /><input aria-label="내가 참여한 회차 검색어" autoComplete="off" maxLength={100} onChange={event => setRoundSearch(event.target.value)} placeholder="모임명 또는 회차명 검색" type="search" value={roundSearch} /></div><div aria-label="회차 상태" className="round-status-filters" role="group"><button aria-pressed={roundStatus === ''} className="round-status-filter" onClick={() => setRoundStatus('')} type="button">전체</button><button aria-pressed={roundStatus === 'active'} className="round-status-filter" onClick={() => setRoundStatus('active')} type="button">진행 중</button><button aria-pressed={roundStatus === 'COMPLETED'} className="round-status-filter" onClick={() => setRoundStatus('COMPLETED')} type="button">정산 종료</button></div>{roundsDialogOpened && !departing && <div aria-label="참여 회차 전체 목록"><RoundList key={roundDialogEndpoint} endpoint={roundDialogEndpoint} empty={roundSearchQuery || roundStatus ? '조건에 맞는 회차가 없어요.' : undefined} /></div>}</div></dialog>
+      <BottomSheet closeLabel="참여 회차 목록 닫기" dialogRef={roundsDialog} id="group-rounds-dialog" onClose={() => setRoundsDialogOpened(false)} title="내가 참여한 회차" titleId="group-rounds-dialog-heading">
+        <div className="round-search-bar"><Search aria-hidden="true" size={21} /><input aria-label="내가 참여한 회차 검색어" autoComplete="off" maxLength={100} onChange={event => setRoundSearch(event.target.value)} placeholder="모임명 또는 회차명 검색" type="search" value={roundSearch} /></div><div aria-label="회차 상태" className="round-status-filters" role="group"><button aria-pressed={roundStatus === ''} className="round-status-filter" onClick={() => setRoundStatus('')} type="button">전체</button><button aria-pressed={roundStatus === 'active'} className="round-status-filter" onClick={() => setRoundStatus('active')} type="button">진행 중</button><button aria-pressed={roundStatus === 'COMPLETED'} className="round-status-filter" onClick={() => setRoundStatus('COMPLETED')} type="button">정산 종료</button></div>{roundsDialogOpened && !departing && <div aria-label="참여 회차 전체 목록"><RoundList key={roundDialogEndpoint} endpoint={roundDialogEndpoint} empty={roundSearchQuery || roundStatus ? '조건에 맞는 회차가 없어요.' : undefined} /></div>}
+      </BottomSheet>
       <section className="domain-card stack"><h2>모임 관리</h2><ErrorNotice error={departure.error} /><button className="secondary-button danger-text" disabled={departure.busy} onClick={() => void leave()} type="button">{departure.busy ? '처리 중…' : data.isCreator ? '모임 없애기' : '모임 나가기'}</button></section>
     </div>}
   </>

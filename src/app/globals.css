@@ -53,14 +53,6 @@ a:focus-visible, button:focus-visible, input:focus-visible, .expense-card:focus-
 .icon-button { align-items: center; background: transparent; border: 0; border-radius: 50%; color: #4e5968; display: flex; justify-content: center; padding: 7px; }
 .icon-button:not(:disabled):hover { background: #e5e8eb; }
 .back-button { height: 46px; padding: 0; text-decoration: none; width: 46px; }
-.account-dialog { background: #fff; border: 1px solid var(--box-border-color); border-radius: 20px; box-shadow: var(--box-shadow); color: #191f28; margin: auto; max-width: calc(100% - 40px); overscroll-behavior: contain; padding: 0; width: 400px; }
-.account-dialog::backdrop { -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); background: rgba(25, 31, 40, .58); touch-action: none; }
-.account-dialog-content { padding: 22px; }
-.account-dialog-header { align-items: flex-start; display: flex; justify-content: space-between; }
-.account-dialog-header p { color: #6b7684; font-size: 13px; font-weight: 700; margin: 0 0 5px; }
-.account-dialog-header h2 { font-size: 21px; margin: 0; }
-.account-dialog-header form { margin: 0; }
-.account-dialog-close { background: #f2f4f6; color: #4e5968; }
 .account-provider { align-items: center; background: #f2f4f6; border: 1px solid var(--box-border-color); border-radius: 15px; box-shadow: var(--control-shadow); display: flex; gap: 12px; margin-top: 22px; padding: 14px; }
 .account-avatar { align-items: center; background: #e8f8ff; border-radius: 50%; color: #5dc4fc; display: flex; flex: 0 0 56px; height: 56px; justify-content: center; overflow: hidden; width: 56px; }
 .account-avatar img { height: 100%; object-fit: cover; width: 100%; }
@@ -366,12 +358,15 @@ select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3
 .bank-sheet { background: #fff; border: 0; border-radius: 24px 24px 0 0; bottom: 0; box-shadow: var(--box-shadow); color: #191f28; inset-inline: 0; margin: auto auto 0; max-height: min(80dvh, 720px); max-width: 480px; overflow: hidden; padding: 0; width: 100%; }
 .bank-sheet[open] { animation: bank-sheet-rise .24s cubic-bezier(.2, .8, .2, 1); }
 @keyframes bank-sheet-rise { from { transform: translateY(100%); } to { transform: translateY(0); } }
-.bank-sheet::backdrop { background: rgba(25, 31, 40, .58); }
+.bank-sheet::backdrop { background: rgba(25, 31, 40, .58); touch-action: none; }
 .bank-sheet-content { display: flex; flex-direction: column; max-height: min(80dvh, 720px); padding: 10px 20px max(24px, env(safe-area-inset-bottom)); }
 .bank-sheet-handle { background: #d8dee6; border-radius: 3px; flex-shrink: 0; height: 4px; margin: 0 auto 16px; width: 36px; }
 .bank-sheet-header { align-items: center; display: flex; flex-shrink: 0; gap: 12px; justify-content: space-between; margin-bottom: 20px; }
 .bank-sheet-header h2 { font-size: 19px; margin: 0; }
+.bank-sheet-header p { color: #6b7684; font-size: 13px; font-weight: 700; margin: 0 0 5px; }
 .bank-sheet-header .icon-button { background: #f2f4f6; color: #6b7684; flex-shrink: 0; }
+.bank-sheet-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.bank-sheet-body h3 { font-size: 16px; }
 @property --scroll-thumb-color { syntax: '<color>'; inherits: true; initial-value: transparent; }
 .bank-grid { --scroll-thumb-color: transparent; display: grid; gap: 8px; grid-template-columns: repeat(3, minmax(0, 1fr)); min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 6px; transition: --scroll-thumb-color .3s ease-out; }
 .bank-grid::-webkit-scrollbar { width: 10px; }
@@ -535,8 +530,6 @@ button.participant-card:not(:disabled):hover { background: #f8fbff; border-color
 @keyframes settlement-digit-roll-down { from { transform: translateY(var(--digit-offset)); } to { transform: translateY(0); } }
 @keyframes settlement-digit-collapse { to { width: 0; } }
 @keyframes settlement-symbol-collapse { to { max-width: 0; } }
-.account-dialog { max-height: calc(100dvh - 40px); overflow-y: auto; }
-.account-dialog h3 { font-size: 16px; }
 .onboarding-page { padding-bottom: 32px; }
 summary { color: #526a82; cursor: pointer; font-size: 13px; line-height: 1.6; padding: 8px 0; }
 .account-page-heading { align-items: center; display: flex; gap: 12px; margin: 24px 0 8px; }

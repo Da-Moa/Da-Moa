@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { ChevronDown, CircleUserRound, Search, X } from 'lucide-react'
 import { ApiError } from '../../../lib/api-client'
 
@@ -44,6 +44,34 @@ export function CopyLink({ path, label = '링크 복사', hideButton = false }: 
   </div>
 }
 
+function useSheetClose(dialogRef: RefObject<HTMLDialogElement | null>) {
+  const closing = useRef(false)
+  async function close() {
+    const dialog = dialogRef.current
+    if (!dialog?.open || closing.current) return
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { dialog.close(); return }
+    closing.current = true
+    const animation = dialog.animate([{ transform: getComputedStyle(dialog).transform }, { transform: 'translateY(100%)' }], { duration: 200, easing: 'ease-in', fill: 'forwards' })
+    try { await animation.finished } catch { /* A cancelled animation must still close the dialog. */ }
+    if (dialog.isConnected) dialog.close()
+    animation.cancel()
+    closing.current = false
+  }
+  return { close, closing }
+}
+
+export function BottomSheet({ dialogRef, id, titleId, title, subtitle, closeLabel, dismissible = true, onClose, children }: {
+  dialogRef: RefObject<HTMLDialogElement | null>; id: string; titleId: string; title: string; subtitle?: string;
+  closeLabel: string; dismissible?: boolean; onClose?: () => void; children: ReactNode;
+}) {
+  const { close } = useSheetClose(dialogRef)
+  return <dialog aria-labelledby={titleId} className="bank-sheet" id={id} ref={dialogRef} onCancel={event => { event.preventDefault(); if (dismissible) void close() }} onClick={event => { if (event.target === event.currentTarget && dismissible) void close() }} onClose={event => { if (!event.currentTarget.open) onClose?.() }}>
+    <div className="bank-sheet-content"><div aria-hidden="true" className="bank-sheet-handle" /><header className="bank-sheet-header"><div>{subtitle && <p>{subtitle}</p>}<h2 id={titleId}>{title}</h2></div><button aria-label={closeLabel} className="icon-button" disabled={!dismissible} onClick={() => void close()} type="button"><X aria-hidden="true" size={20} /></button></header>
+      <div className="bank-sheet-body"><div className="stack">{children}</div></div>
+    </div>
+  </dialog>
+}
+
 export function SheetSelect({ label, name, title, value, onChange, options, disabled, sheetClassName, showSelectedIcon, searchPlaceholder }: {
   label: string; name: string; title: string; value: string; onChange: (value: string) => void;
   options: readonly { value: string; label: string; icon?: ReactNode; searchText?: string }[]; disabled?: boolean; sheetClassName?: string; showSelectedIcon?: boolean; searchPlaceholder?: string;
@@ -51,7 +79,7 @@ export function SheetSelect({ label, name, title, value, onChange, options, disa
   const id = useId()
   const dialogRef = useRef<HTMLDialogElement>(null)
   const trigger = useRef<HTMLButtonElement>(null)
-  const closing = useRef(false)
+  const { close, closing } = useSheetClose(dialogRef)
   const scrollTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const [opened, setOpened] = useState(false)
   const [scrolling, setScrolling] = useState(false)
@@ -74,17 +102,6 @@ export function SheetSelect({ label, name, title, value, onChange, options, disa
     dialogRef.current?.showModal()
     setOpened(true)
     dialogRef.current?.querySelector<HTMLButtonElement>(`[data-value="${value || options[0].value}"]`)?.focus()
-  }
-  async function close() {
-    const dialog = dialogRef.current
-    if (!dialog?.open || closing.current) return
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { dialog.close(); return }
-    closing.current = true
-    const animation = dialog.animate([{ transform: getComputedStyle(dialog).transform }, { transform: 'translateY(100%)' }], { duration: 200, easing: 'ease-in', fill: 'forwards' })
-    try { await animation.finished } catch { /* A cancelled animation must still close the dialog. */ }
-    if (dialog.isConnected) dialog.close()
-    animation.cancel()
-    closing.current = false
   }
   function choose(next: string) {
     if (closing.current) return
