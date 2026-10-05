@@ -1,5 +1,6 @@
 import { AppError } from './errors'
 import { objectBody } from './mutations'
+import { getKakaoRedirectUris } from '../Global/Auth/Backend/native'
 
 export function requestOrigin(request: Request): URL | null {
   const host = request.headers.get('host') ?? new URL(request.url).host
@@ -8,7 +9,7 @@ export function requestOrigin(request: Request): URL | null {
   try {
     const origin = new URL(`${protocol}://${host}`)
     if (origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash) return null
-    if (process.env.NODE_ENV === 'production' && origin.origin !== new URL(process.env.KAKAO_REDIRECT_URI ?? '').origin) return null
+    if (process.env.NODE_ENV === 'production' && !getKakaoRedirectUris().some(uri => new URL(uri).origin === origin.origin)) return null
     return origin
   } catch { return null }
 }

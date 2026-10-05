@@ -1,5 +1,5 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { authenticateWebsocketToken } from '../../../Auth/Backend/native.ts'
+import { authenticateWebsocketToken, getKakaoRedirectUris } from '../../../Auth/Backend/native.ts'
 import { createWebsocketUtil } from '../websocket-util.mjs'
 
 export function createWsController(port) {
@@ -38,11 +38,11 @@ export function createWsController(port) {
     try {
       const source = new URL(origin)
       const target = new URL(`${source.protocol}//${host}`)
-      const publicOrigin = process.env.NODE_ENV === 'production' ? new URL(process.env.KAKAO_REDIRECT_URI).origin : null
+      const publicOrigins = process.env.NODE_ENV === 'production' ? getKakaoRedirectUris().map(uri => new URL(uri).origin) : null
       allowed = ['http:', 'https:'].includes(source.protocol) && source.origin === target.origin
         && !source.username && !source.password && source.pathname === '/' && !source.search && !source.hash
         && !target.username && !target.password && target.pathname === '/' && !target.search && !target.hash
-        && (!publicOrigin || source.origin === publicOrigin)
+        && (!publicOrigins || publicOrigins.includes(source.origin))
     } catch { /* Invalid Origin or Host. */ }
     if (!allowed) { socket.destroy(); return }
     const protocols = request.headers['sec-websocket-protocol']?.split(',').map(value => value.trim()) ?? []

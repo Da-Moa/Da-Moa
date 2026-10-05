@@ -1255,3 +1255,16 @@ GET /api/auth/kakao → 카카오 인증 → GET /auth/v1/kakao → KakaoCallbac
 [scripts/kakao-signin.integration.test.ts](../scripts/kakao-signin.integration.test.ts)는 실제 DB SQL 로그로 신규/기존/탈퇴 회원의 SQL 1회, 프로필·시각 보존, provider와 UID 조합 구분, 공통 advisory lock 보유 중 로그인 진행, 기존 회원 동시 로그인, 동시 첫 가입 충돌의 단일 생성·재시도 및 연결 반환을 검증한다. 기존 auth 통합 테스트는 온보딩·재가입·탈퇴 경합·JWT 계약을 검증한다. 실제 카카오 외부 인증은 자동 테스트의 검증 범위에 포함하지 않는다.
 
 검증 결과(2026-10-05): `npm test` **98개**, 전용 로컬 test DB·MinIO 및 개발 서버 복사본의 `npm run test:integration` **74개**, `npm run build` 통과. 신규/기존/탈퇴 회원·동시 첫 가입 충돌의 SQL **1회**, 명시적 트랜잭션·락 미실행, 기존 회원 행 보존, 공통 락과 무관한 로그인 진행을 실제 PostgreSQL에서 확인했다.
+
+### 10.1 접속 주소별 카카오 콜백 선택 (2026-10-05)
+
+`KAKAO_REDIRECT_URI`는 기존 단일 URI 또는 쉼표로 구분한 URI 목록을 받는다. 공백을 제거하고 중복을 정리하며 HTTP/HTTPS 주소만 허용한다. 사용자 정보·쿼리·fragment를 포함한 URI는 설정 오류로 처리한다. 카카오에도 각 URI를 등록해야 한다.
+
+1. `GET /api/auth/kakao`: 요청 Host와 프록시 프로토콜로 확인한 origin에 일치하는 등록 URI를 선택한다. scheme·host·port가 다르면 선택하지 않으며 목록에 없는 주소는 `error=configuration`으로 종료한다. 기존 state·nonce·PKCE와 함께 선택 URI를 state·만료 시각에 묶은 HMAC 서명 HttpOnly 쿠키에 저장한다. SQL은 0회다.
+2. `GET /auth/v1/kakao`: 기존 state 검사 후 URI 쿠키의 서명·state·만료를 검증하고, 선택 URI가 현재 목록에 존재하며 콜백 origin과 일치하는지 다시 확인한다. 카카오 인가 요청과 토큰 교환에 같은 URI를 전달한다. 목록 순서가 바뀌어도 저장한 URI를 유지하며 잘못된 쿠키·다른 origin·목록에서 삭제된 URI는 provider 토큰 교환 전에 거절한다. 이전 단일 URI 로그인은 새 쿠키가 없어도 같은 origin에서 완료할 수 있다.
+3. PKCE·OIDC 검증 이후 기존 `signInKakao()`의 회원 생성/조회 CTE와 JWT 발급 흐름을 유지한다. 콜백 선택 때문에 추가 DB 조회·트랜잭션·락을 도입하지 않는다. 성공·실패 후 새 URI 쿠키도 다른 OIDC 쿠키와 함께 지운다.
+4. 운영 API와 WebSocket은 등록 URI 목록의 origin을 허용하되, 요청 Host와 Origin의 동일 출처 검사는 유지한다. 등록된 두 origin 사이의 교차 출처 쓰기도 허용하지 않는다. 메타데이터 기준 주소는 목록의 첫 URI다.
+
+[카카오 REST API](https://developers.kakao.com/docs/ko/kakaologin/rest-api#request-token)의 인가/토큰 요청 URI 규칙을 따른다. [콜백 통합 테스트](../scripts/kakao-redirect.integration.test.ts)는 localhost·내부 IP의 로그인 시작, 서명 쿠키, 모의 카카오 토큰/JWKS와 실제 DB 회원 생성, 같은 URI의 토큰 교환, 목록 순서 변경, 잘못된 origin·쿠키 거절, 이전 단일 URI 로그인을 검증한다. 실제 카카오 계정 로그인과 콘솔 URI 등록은 별도의 외부 검증이다.
+
+검증 결과: `npm test` **102개**, 격리된 로컬 test DB·MinIO 및 서버 복사본의 `npm run test:integration` **82개**, `npm run build` 통과. 실제 Chrome에서 localhost·내부 IP 양쪽 로그인 버튼의 인가 요청 URI와 HttpOnly 쿠키를 확인했으며, 외부 카카오 요청은 보내기 전에 차단했다. 동일 브라우저에서 기존 라이트 색상 **33개 선택자** 보존, 다크모드 첫 화면과 새로고침 없는 기기 설정 전환도 확인했다.

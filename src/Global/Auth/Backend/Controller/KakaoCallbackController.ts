@@ -8,10 +8,12 @@ import {
   exchangeKakaoAuthorizationCode,
   getKakaoUserProfile,
   getKakaoConfig,
+  getKakaoRedirectUris,
   ONBOARDING_MAX_AGE_SECONDS,
   OIDC_COOKIE_NAMES,
   RETURN_TO_COOKIE_NAME,
   readReturnToCookie,
+  readRedirectUriCookie,
   type KakaoProfile,
   verifyKakaoIdToken,
 } from '../auth-util'
@@ -47,7 +49,13 @@ export async function getKakaoCallbackResponse(request: NextRequest) {
   if (!stateMatches) return loginRedirect(request, 'invalid')
 
   try {
-    const config = getKakaoConfig()
+    const redirectCookie = request.cookies.get(OIDC_COOKIE_NAMES.redirectUri)?.value
+    const redirectUri = readRedirectUriCookie(redirectCookie, state)
+    // Preserve in-flight logins from the previous single-URI configuration.
+    if (!redirectUri && (redirectCookie !== undefined || getKakaoRedirectUris().length !== 1)) {
+      return loginRedirect(request, 'invalid')
+    }
+    const config = getKakaoConfig(requestOrigin(request), redirectUri ?? undefined)
     const { accessToken, idToken } = await exchangeKakaoAuthorizationCode(config, code, codeVerifier)
     const subject = await verifyKakaoIdToken(idToken, config, expectedNonce)
     if (!subject) return loginRedirect(request, 'invalid')
