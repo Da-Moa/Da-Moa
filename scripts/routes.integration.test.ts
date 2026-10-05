@@ -70,12 +70,7 @@ test('Route Handler contracts enforce Bearer JWTs, origin, idempotency, normaliz
     assert.deepEqual(participantDetail.members.map((member: { userId: string }) => member.userId), [a.userId, b.userId])
     assert.equal(participantDetail.isCreator, false)
     assert.deepEqual(participantDetail.invites, [])
-    for (const currency of [undefined, 'XXX']) {
-      const rejected = await request(`groups/${groupId}/rounds`, a.accessToken, 'POST', { name: '통화 필요', participantIds: [a.userId, b.userId], ...(currency === undefined ? {} : { currency }) })
-      assert.equal(rejected.status, 400)
-      assert.equal((await rejected.json()).error, 'unsupported_currency')
-    }
-    const memberCreated = await request(`groups/${groupId}/rounds`, b.accessToken, 'POST', { name: '참여자가 만든 회차', currency: 'KRW', participantIds: [a.userId, b.userId] })
+    const memberCreated = await request(`groups/${groupId}/rounds`, b.accessToken, 'POST', { name: '참여자가 만든 회차', participantIds: [a.userId, b.userId] })
     assert.equal(memberCreated.status, 200)
     const memberRoundId = (await memberCreated.json()).data.id
     const memberRound = (await (await request(`rounds/${memberRoundId}`, b.accessToken)).json()).data
@@ -83,7 +78,7 @@ test('Route Handler contracts enforce Bearer JWTs, origin, idempotency, normaliz
     assert.equal(memberRound.groupCreatorId, a.userId)
     assert.equal(memberRound.isCreator, true)
     assert.equal((await request(`rounds/${memberRoundId}`, b.accessToken, 'DELETE', { expectedVersion: 1 })).status, 200)
-    const ticket = uuidV7(), body = { name: 'API 회차', currency: 'KRW', participantIds: [a.userId, b.userId] }
+    const ticket = uuidV7(), body = { name: 'API 회차', participantIds: [a.userId, b.userId] }
     const created = await request(`groups/${groupId}/rounds`, a.accessToken, 'POST', body, { 'Idempotency-Key': ticket })
     assert.equal(created.status, 200)
     const roundId = (await created.json()).data.id
@@ -92,19 +87,24 @@ test('Route Handler contracts enforce Bearer JWTs, origin, idempotency, normaliz
     assert.equal(duplicate.status, 409)
     assert.equal((await duplicate.json()).error, 'round_already_exists')
     for (const currency of CURRENCY_CODES) {
-      const foreign = await request(`groups/${groupId}/rounds`, a.accessToken, 'POST', { name: `${currency} API 회차`, currency, participantIds: [a.userId, b.userId] })
+      const foreign = await request(`groups/${groupId}/rounds`, a.accessToken, 'POST', { name: `${currency} API 회차`, participantIds: [a.userId, b.userId] })
       assert.equal(foreign.status, 200)
       const foreignId = (await foreign.json()).data.id
-      const saved = await request(`rounds/${foreignId}/expenses`, a.accessToken, 'POST', { description: '회차 통화', amount: ['KRW', 'JPY', 'VND'].includes(currency) ? '1025' : '10.25', payerId: b.userId, splitMode: 'ALL', expectedVersion: 1 })
+      const saved = await request(`rounds/${foreignId}/expenses`, a.accessToken, 'POST', { currency: currency, description: '회차 통화', amount: ['KRW', 'JPY', 'VND'].includes(currency) ? '1025' : '10.25', payerId: b.userId, splitMode: 'ALL', expectedVersion: 1 })
       assert.equal(saved.status, 200)
       const current = (await (await request(`rounds/${foreignId}`, a.accessToken)).json()).data
       assert.equal(current.groupId, groupId)
-      assert.equal(current.currency, currency)
+      assert.equal(current.expenses[0].currency, currency)
       assert.equal(current.expenses[0].amountMinor, '1025')
     }
-    assert.equal((await (await request(`rounds/${roundId}`, a.accessToken)).json()).data.currency, 'KRW')
-    const customRound = (await (await request(`groups/${groupId}/rounds`, a.accessToken, 'POST', { name: '개별 부담 API', currency: 'USD', participantIds: [a.userId, b.userId] })).json()).data
-    const customBody = { description: '개별 지출', amount: '0.30', payerId: b.userId, splitMode: 'CUSTOM', customShares: [{ userId: a.userId, amount: '0.10' }, { userId: b.userId, amount: '0.20' }], expectedVersion: 1 }
+    assert.equal('currency' in (await (await request(`rounds/${roundId}`, a.accessToken)).json()).data, false)
+    for (const currency of [undefined, 'XXX']) {
+      const rejected = await request(`rounds/${roundId}/expenses`, a.accessToken, 'POST', { description: '통화 필요', amount: '10', payerId: a.userId, splitMode: 'ALL', expectedVersion: 1, ...(currency === undefined ? {} : { currency }) })
+      assert.equal(rejected.status, 400)
+      assert.equal((await rejected.json()).error, 'unsupported_currency')
+    }
+    const customRound = (await (await request(`groups/${groupId}/rounds`, a.accessToken, 'POST', { name: '개별 부담 API', participantIds: [a.userId, b.userId] })).json()).data
+    const customBody = { currency: 'USD', description: '개별 지출', amount: '0.30', payerId: b.userId, splitMode: 'CUSTOM', customShares: [{ userId: a.userId, amount: '0.10' }, { userId: b.userId, amount: '0.20' }], expectedVersion: 1 }
     const mismatch = await request(`rounds/${customRound.id}/expenses`, a.accessToken, 'POST', { ...customBody, amount: '0.31' })
     assert.equal(mismatch.status, 400)
     assert.deepEqual(await mismatch.json(), { error: 'custom_share_total_mismatch', message: '부담금 합계가 총 금액과 일치해야 해요' })
@@ -122,10 +122,10 @@ test('Route Handler contracts enforce Bearer JWTs, origin, idempotency, normaliz
     const absent = await request(`rounds/${roundId}`, outsider.accessToken)
     assert.equal(absent.status, 404)
     assert.equal((await request(`rounds/${roundId}/confirm`, a.accessToken, 'POST', { expectedVersion: 1 })).status, 409)
-    const invalid = await request(`rounds/${roundId}/expenses`, a.accessToken, 'POST', { description: '잘못된금액', amount: 6000, payerId: b.userId, splitMode: 'ALL', expectedVersion: 1 })
+    const invalid = await request(`rounds/${roundId}/expenses`, a.accessToken, 'POST', { currency: 'KRW', description: '잘못된금액', amount: 6000, payerId: b.userId, splitMode: 'ALL', expectedVersion: 1 })
     assert.equal(invalid.status, 400)
     assert.equal((await invalid.json()).error, 'invalid_amount')
-    const requestKey = randomUUID(), expenseBody = { description: '식사', amount: '6000', payerId: b.userId, splitMode: 'ALL', expectedVersion: 1 }
+    const requestKey = randomUUID(), expenseBody = { currency: 'KRW', description: '식사', amount: '6000', payerId: b.userId, splitMode: 'ALL', expectedVersion: 1 }
     const save = await request(`rounds/${roundId}/expenses`, a.accessToken, 'POST', expenseBody, { 'Idempotency-Key': requestKey })
     const e = (await save.json()).data
     const replay = await request(`rounds/${roundId}/expenses`, a.accessToken, 'POST', expenseBody, { 'Idempotency-Key': requestKey })
@@ -164,22 +164,22 @@ test('Route Handler contracts enforce Bearer JWTs, origin, idempotency, normaliz
     const settlement = await request(`rounds/${roundId}/settlement?userId=${b.userId}`, a.accessToken)
     assert.equal(settlement.headers.get('cache-control'), 'private, no-store')
     const result = (await settlement.json()).data
-    assert.equal(result.balanceMinor, '3000')
+    assert.equal(result.balances[0].balanceMinor, '3000')
     assert.equal(result.outgoing[0].receiverId, b.userId)
     assert.equal(result.outgoing[0].account.accountNumber, '12340312345678')
     assert.equal(result.incoming.length, 0)
     assert.equal(result.sharePath, `/settlements/${roundId}`)
     assert.equal((await request(`rounds/${roundId}/settlement-check`, a.accessToken, 'POST', { expectedVersion: locked.version, checked: 'yes' })).status, 400)
     assert.equal((await request(`rounds/${roundId}/settlement-check`, a.accessToken, 'POST', { expectedVersion: locked.version, checked: true })).status, 403)
-    assert.equal((await request(`rounds/${roundId}/settlement-check`, b.accessToken, 'POST', { expectedVersion: locked.version, checked: true, senderId: a.userId })).status, 200)
-    const repeatedCheck = await request(`rounds/${roundId}/settlement-check`, b.accessToken, 'POST', { expectedVersion: locked.version, checked: true, senderId: a.userId })
+    assert.equal((await request(`rounds/${roundId}/settlement-check`, b.accessToken, 'POST', { expectedVersion: locked.version, checked: true, currency: 'KRW', senderId: a.userId })).status, 200)
+    const repeatedCheck = await request(`rounds/${roundId}/settlement-check`, b.accessToken, 'POST', { expectedVersion: locked.version, checked: true, currency: 'KRW', senderId: a.userId })
     assert.equal(repeatedCheck.status, 404)
     assert.equal((await repeatedCheck.json()).error, 'not_found')
     const checked = (await (await request(`rounds/${roundId}/settlement`, a.accessToken)).json()).data
     assert.deepEqual({ checkedCount: checked.checkedCount, requiredCount: checked.requiredCount, allChecked: checked.allChecked }, { checkedCount: 1, requiredCount: 1, allChecked: true })
     assert.equal((await request(`rounds/${roundId}/complete`, a.accessToken, 'POST', { expectedVersion: locked.version })).status, 200)
-    const drawRound = (await (await request(`groups/${groupId}/rounds`, b.accessToken, 'POST', { name: '추첨 API 계약', currency: 'KRW', participantIds: [a.userId, b.userId] })).json()).data
-    const drawExpense = (await (await request(`rounds/${drawRound.id}/expenses`, b.accessToken, 'POST', { description: '나머지', amount: '3', payerId: a.userId, splitMode: 'ALL', expectedVersion: drawRound.version })).json()).data
+    const drawRound = (await (await request(`groups/${groupId}/rounds`, b.accessToken, 'POST', { name: '추첨 API 계약', participantIds: [a.userId, b.userId] })).json()).data
+    const drawExpense = (await (await request(`rounds/${drawRound.id}/expenses`, b.accessToken, 'POST', { currency: 'KRW', description: '나머지', amount: '3', payerId: a.userId, splitMode: 'ALL', expectedVersion: drawRound.version })).json()).data
     const drawConfirm = (await (await request(`rounds/${drawRound.id}/confirm`, b.accessToken, 'POST', { expectedVersion: drawExpense.version })).json()).data
     const drawLocked = (await (await request(`rounds/${drawRound.id}/send`, b.accessToken, 'POST', { expectedVersion: drawConfirm.version })).json()).data
     const drawPath = `rounds/${drawRound.id}/draw`, drawBody = { expectedVersion: drawLocked.version }, drawKey = randomUUID()
@@ -195,7 +195,7 @@ test('Route Handler contracts enforce Bearer JWTs, origin, idempotency, normaliz
     assert.equal((await request(drawPath, b.accessToken, 'POST', { expectedVersion: drawResult.version }, { 'idempotency-key': drawKey })).status, 409)
     assert.equal((await (await request(`rounds/${drawRound.id}/settlement`, b.accessToken)).json()).data.finalized, true)
     assert.equal((await request(`invites/${token}/accept`, outsider.accessToken, 'POST')).status, 200)
-    const exclusionRound = (await (await request(`groups/${groupId}/rounds`, b.accessToken, 'POST', { name: '제외 API 계약', currency: 'KRW', participantIds: [a.userId, b.userId, outsider.userId] })).json()).data
+    const exclusionRound = (await (await request(`groups/${groupId}/rounds`, b.accessToken, 'POST', { name: '제외 API 계약', participantIds: [a.userId, b.userId, outsider.userId] })).json()).data
     const exclusionPath = `rounds/${exclusionRound.id}/members/${a.userId}/exclude`
     assert.equal((await request(exclusionPath, a.accessToken, 'POST', { expectedVersion: 1 })).status, 403, 'group creator cannot exclude in another member’s round')
     const exclusionKey = randomUUID()
@@ -207,7 +207,7 @@ test('Route Handler contracts enforce Bearer JWTs, origin, idempotency, normaliz
       assert.equal(repeated.status, 404)
       assert.equal((await repeated.json()).error, 'not_found')
     }
-    const reopeningExpense = (await (await request(`rounds/${exclusionRound.id}/expenses`, b.accessToken, 'POST', { description: '재오픈 검증', amount: '3', payerId: b.userId, splitMode: 'ALL', expectedVersion: 2 })).json()).data
+    const reopeningExpense = (await (await request(`rounds/${exclusionRound.id}/expenses`, b.accessToken, 'POST', { currency: 'KRW', description: '재오픈 검증', amount: '3', payerId: b.userId, splitMode: 'ALL', expectedVersion: 2 })).json()).data
     const reopeningConfirmed = (await (await request(`rounds/${exclusionRound.id}/confirm`, b.accessToken, 'POST', { expectedVersion: reopeningExpense.version })).json()).data
     const reopeningPath = `rounds/${exclusionRound.id}/reopen`, reopeningBody = { expectedVersion: reopeningConfirmed.version }, reopeningKey = randomUUID()
     assert.equal((await request(reopeningPath, a.accessToken, 'POST', reopeningBody)).status, 403, 'group creator cannot reopen another member’s round')

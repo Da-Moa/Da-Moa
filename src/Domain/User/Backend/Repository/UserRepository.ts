@@ -18,16 +18,21 @@ export async function findUser(client: Database, userId: string): Promise<UserRo
   return rows[0]
 }
 
-export async function upsertKakaoUser(client: Database, providerSubject: string, profile: KakaoProfile, now: number): Promise<SignInUserRow> {
+export async function findOrCreateKakaoUser(client: Database, providerSubject: string, profile: KakaoProfile, now: number): Promise<SignInUserRow | undefined> {
   const { rows } = await client.query<SignInUserRow>(`
+    WITH existing AS MATERIALIZED (
+      SELECT id, deleted_at, onboarding_completed_at
+      FROM users WHERE provider = 'kakao' AND provider_subject = $2
+    ), inserted AS (
       INSERT INTO users(id, provider, provider_subject, display_name, email, profile_image_url, created_at, updated_at)
-      VALUES ($1, 'kakao', $2, $3, $4, $5, $6, $6)
-      ON CONFLICT (provider, provider_subject) DO UPDATE SET
-        display_name = COALESCE(EXCLUDED.display_name, users.display_name),
-        email = COALESCE(EXCLUDED.email, users.email),
-        profile_image_url = COALESCE(EXCLUDED.profile_image_url, users.profile_image_url),
-        updated_at = EXCLUDED.updated_at
+      SELECT $1, 'kakao', $2, $3, $4, $5, $6, $6
+      WHERE NOT EXISTS (SELECT 1 FROM existing)
+      ON CONFLICT (provider, provider_subject) DO NOTHING
       RETURNING id, deleted_at, onboarding_completed_at
+    )
+    SELECT id, deleted_at, onboarding_completed_at FROM existing
+    UNION ALL
+    SELECT id, deleted_at, onboarding_completed_at FROM inserted
     `, [randomUUID(), providerSubject, profile.displayName, profile.email, profile.profileImageUrl, now])
   return rows[0]
 }

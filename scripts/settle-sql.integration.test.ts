@@ -76,7 +76,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
         if (count) assert.match(statements[0], /FROM users u WHERE u.id = \$1/)
         if (count === 2) {
-          assert.match(statements[1], /AS confirmations.*AS outgoing.*AS incoming.*FROM rounds r JOIN groups g.*JOIN round_members viewer.*LEFT JOIN settlement_balances/)
+          assert.match(statements[1], /AS confirmations.*AS outgoing.*AS incoming.*FROM rounds r JOIN groups g.*JOIN round_members viewer.*LEFT JOIN LATERAL.*FROM settlement_balances/)
           assert.match(statements[1], /t.sender_id = \$2.*t.received_at IS NULL.*t.receiver_id = \$2/)
         }
       } else if (write === 'draw') {
@@ -156,7 +156,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       return result
     }
     try {
-      const createKey = uuidV7(), body = { name: '호출 수 검증', currency: 'KRW', participantIds: [a.userId, b.userId, c.userId] }
+      const createKey = uuidV7(), body = { name: '호출 수 검증', participantIds: [a.userId, b.userId, c.userId] }
       const round = await trace(4, 'session', () => createRound(a, createKey, group.id, body))
       await trace(4, 'session', () => assert.rejects(createRound(a, createKey, group.id, body), (error: { code: string }) => error.code === 'round_already_exists'))
       assert.equal(round.id, createKey)
@@ -167,7 +167,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         [a, randomUUID(), body, 'invalid_request_key', 3],
         [a, '', body, 'invalid_request_key', 3],
         [a, uuidV7(), { ...body, name: '' }, 'invalid_input', 3],
-        [a, uuidV7(), { ...body, currency: 'INVALID' }, 'unsupported_currency', 3],
+        [a, uuidV7(), { ...body, currency: 'INVALID' }, 'invalid_input', 3],
         [a, uuidV7(), { ...body, participantIds: [a.userId] }, 'minimum_participants', 3],
         [a, uuidV7(), { ...body, participantIds: [a.userId, a.userId] }, 'invalid_participants', 3],
         [a, uuidV7(), { ...body, participantIds: [a.userId, randomUUID()] }, 'invalid_participants', 4],
@@ -209,8 +209,8 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       const empty = await trace(2, 'connection', () => getRound(a, round.id, new URLSearchParams()))
       assert.deepEqual(empty.expenses, [])
       assert.deepEqual(empty.transfers, [])
-      assert.equal(empty.totalMinor, '0')
-      assert.equal(empty.balanceMinor, null)
+      assert.equal(empty.totals.length, 0)
+      assert.equal(empty.totals[0]?.balanceMinor ?? null, null)
       assert.equal(empty.memberCount, 3)
       assert.equal(empty.expensesNextCursor, null)
       for (const [input, expected] of [
@@ -241,15 +241,15 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         await trace(2, 'exclude', () => assert.rejects(excludeMember(b, key(), minimum.id, a.userId, { expectedVersion: 1 }), (error: { code: string }) => error.code === 'minimum_participants'))
         for (const [splitMode, reason] of [['ALL', 'payer_and_participant'], ['SELECTED', 'selected_participant'], ['CUSTOM', 'custom_participant']] as const) {
           const inspection = await createRound(a, uuidV7(), group.id, body)
-          const saved = await saveExpense(a, key(), inspection.id, { description: splitMode, amount: '101', payerId: b.userId, splitMode, expectedVersion: 1,
+          const saved = await saveExpense(a, key(), inspection.id, { currency: 'KRW', description: splitMode, amount: '101', payerId: b.userId, splitMode, expectedVersion: 1,
             ...(splitMode === 'SELECTED' ? { participantIds: [c.userId] } : splitMode === 'CUSTOM' ? { customShares: [{ userId: c.userId, amount: '101' }] } : {}) })
           const target = splitMode === 'ALL' ? b.userId : c.userId
           assert.deepEqual(await trace(3, 'connection', () => checkExclusion(a, inspection.id, target)), {
-            allowed: false, reason: 'member_exclusion_blocked', expenses: [{ id: saved.id, description: splitMode, amountMinor: '101', authorId: a.userId, authorName: '회차 생성자', reason }],
+            allowed: false, reason: 'member_exclusion_blocked', expenses: [{ id: saved.id, description: splitMode, currency: 'KRW', amountMinor: '101', authorId: a.userId, authorName: '회차 생성자', reason }],
           })
           const allowed = splitMode === 'ALL' ? c.userId : b.userId
           await trace(2, 'exclude', () => assert.rejects(excludeMember(a, key(), inspection.id, target, { expectedVersion: saved.version }), (error: { code: string; details: unknown }) => {
-            assert.deepEqual(error.details, { allowed: false, reason: 'member_exclusion_blocked', expenses: [{ id: saved.id, description: splitMode, amountMinor: '101', authorId: a.userId, authorName: '회차 생성자', reason }] })
+            assert.deepEqual(error.details, { allowed: false, reason: 'member_exclusion_blocked', expenses: [{ id: saved.id, description: splitMode, currency: 'KRW', amountMinor: '101', authorId: a.userId, authorName: '회차 생성자', reason }] })
             return error.code === 'member_exclusion_blocked'
           }))
           assert.deepEqual(await trace(3, 'connection', () => checkExclusion(a, inspection.id, allowed)), { allowed: true, reason: null, expenses: [] })
@@ -270,7 +270,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         assert.equal(saved.memberCount, 2)
       })
       let version = 1
-      const expenseKey = key(), expenseBody = { description: '지출', amount: '100', payerId: b.userId, splitMode: 'ALL', expectedVersion: version }
+      const expenseKey = key(), expenseBody = { currency: 'KRW', description: '지출', amount: '100', payerId: b.userId, splitMode: 'ALL', expectedVersion: version }
       let expenseAudience: { groupId: string; userIds: string[] } | undefined
       const expense = await trace(6, 'expense', () => saveExpense(a, expenseKey, round.id, expenseBody, undefined, audience => { expenseAudience = audience }))
       assert.equal(expenseAudience?.groupId, group.id)
@@ -282,6 +282,8 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       for (const [input, expected] of [
         [{ ...expenseBody, description: '' }, 'invalid_input'],
         [{ ...expenseBody, amount: 100 }, 'invalid_amount'],
+        [{ ...expenseBody, amount: '1.00' }, 'invalid_amount'],
+        [{ ...expenseBody, splitMode: 'CUSTOM', customShares: [{ userId: a.userId, amount: '100.00' }] }, 'invalid_amount'],
         [{ ...expenseBody, amount: '100000001' }, 'expense_amount_limit_exceeded'],
         [{ ...expenseBody, expectedVersion: '1' }, 'invalid_version'],
         [{ ...expenseBody, participantIds: [a.userId] }, 'invalid_participants'],
@@ -292,10 +294,8 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         [nonParticipant, round.id, { ...expenseBody, expectedVersion: version }, 'not_found'],
         [a, randomUUID(), { ...expenseBody, expectedVersion: version }, 'not_found'],
         [a, round.id, expenseBody, 'stale_round'],
-        [a, round.id, { ...expenseBody, expectedVersion: version, amount: '1.00' }, 'invalid_amount'],
         [a, round.id, { ...expenseBody, expectedVersion: version, payerId: nonParticipant.userId }, 'invalid_participants'],
         [a, round.id, { ...expenseBody, expectedVersion: version, splitMode: 'SELECTED', participantIds: [nonParticipant.userId] }, 'invalid_participants'],
-        [a, round.id, { ...expenseBody, expectedVersion: version, splitMode: 'CUSTOM', customShares: [{ userId: a.userId, amount: '100.00' }] }, 'invalid_amount'],
       ] as const) await trace(5, 'expense', () => assert.rejects(saveExpense(actor, key(), id, input), (error: { code: string }) => error.code === expected))
       await trace(5, 'expense', () => assert.rejects(saveExpense(a, expenseKey, round.id, { ...expenseBody, description: '다른 지출' }), (error: { code: string }) => error.code === 'idempotency_conflict'))
       const failedExpenseKey = key(), expenseConstraint = `expense_create_test_${key().replaceAll('-', '')}`
@@ -327,7 +327,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
           [a, original.id, { expectedVersion: 1 }, 'stale_round'],
           [a, original.id, { expectedVersion: '2' }, 'invalid_version'],
           [a, original.id, { amount: '1.00', expectedVersion: patchVersion }, 'invalid_amount'],
-          [a, original.id, { currency: 'USD', expectedVersion: patchVersion }, 'invalid_input'],
+          [a, original.id, { currency: 'USD', expectedVersion: patchVersion }, 'invalid_amount'],
           [a, original.id, { payerId: nonParticipant.userId, expectedVersion: patchVersion }, 'invalid_participants'],
           [a, original.id, { splitMode: 'CUSTOM', customShares: [{ userId: a.userId, amount: '99' }], expectedVersion: patchVersion }, 'custom_share_total_mismatch'],
         ] as const) await trace(2, 'patch', () => assert.rejects(saveExpense(actor, key(), patchRound.id, input, id), (error: { code: string }) => error.code === expected))
@@ -397,7 +397,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
             ] as const) await trace(4, 'delete', () => assert.rejects(deleteExpense(caller, key(), deletionRound.id, id, input), (error: { code: string }) => error.code === expected))
 
             const before = await getRound(a, deletionRound.id, new URLSearchParams())
-            assert.equal(before.totalMinor, '300')
+            assert.equal(before.totals[0]?.totalMinor, '300')
             assert.equal(before.transfers.length, 1)
             const failureKey = key(), constraint = `expense_delete_test_${key().replaceAll('-', '')}`
             await db.query(`ALTER TABLE mutation_requests ADD CONSTRAINT ${constraint} CHECK (request_key <> '${failureKey}') NOT VALID`)
@@ -432,7 +432,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
               assert.equal(errors.mock.callCount(), actor === a ? 1 : 0)
               const current = await getRound(a, deletionRound.id, new URLSearchParams())
               assert.equal(current.version, result.version)
-              assert.equal(current.totalMinor, '0')
+              assert.equal(current.totals.length, 0)
               assert.deepEqual(current.expenses, [])
               assert.deepEqual(current.transfers, [])
               assert.equal((await db.query('SELECT 1 FROM expense_shares WHERE expense_id=$1', [original.id])).rowCount, 0)
@@ -446,8 +446,8 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       version = participantExpense.version!
       const firstPage = await trace(2, 'connection', () => getRound(a, round.id, new URLSearchParams({ limit: '1' })))
       const secondPage = await trace(2, 'connection', () => getRound(a, round.id, new URLSearchParams({ limit: '1', cursor: firstPage.expensesNextCursor! })))
-      assert.equal(firstPage.totalMinor, '201')
-      assert.equal(firstPage.pendingRemainderMinor, '3')
+      assert.equal(firstPage.totals[0]?.totalMinor, '201')
+      assert.equal(firstPage.pendingRemainders[0]?.amountMinor, '3')
       assert.deepEqual(secondPage.transfers, firstPage.transfers)
       assert.equal(secondPage.expensesNextCursor, null)
       assert.notEqual(firstPage.expenses[0].id, secondPage.expenses[0].id)
@@ -455,8 +455,8 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       const emptyPage = await trace(2, 'connection', () => getRound(a, round.id, new URLSearchParams({ cursor: pastEnd })))
       assert.deepEqual(emptyPage.expenses, [])
       assert.deepEqual(emptyPage.transfers, firstPage.transfers)
-      assert.equal(emptyPage.totalMinor, firstPage.totalMinor)
-      assert.equal(emptyPage.pendingRemainderMinor, firstPage.pendingRemainderMinor)
+      assert.equal(emptyPage.totals[0]?.totalMinor, firstPage.totals[0]?.totalMinor)
+      assert.equal(emptyPage.pendingRemainders[0]?.amountMinor, firstPage.pendingRemainders[0]?.amountMinor)
       const deleted = await trace(6, 'delete', () => deleteExpense(b, key(), round.id, participantExpense.id, { expectedVersion: version }))
       version = deleted.version!
       const receiptKey = key(), receiptVersion = version
@@ -499,7 +499,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       for (const ticket of [exclusionKey, key()]) await trace(2, 'exclude', () => assert.rejects(excludeMember(a, ticket, round.id, c.userId, { expectedVersion: exclusionVersion }, () => assert.fail('repeat must not publish')), (error: { code: string; status: number }) => error.code === 'not_found' && error.status === 404))
       const afterExclusion = await getRound(a, round.id, new URLSearchParams())
       assert.equal(afterExclusion.version, excluded.version)
-      assert.equal(afterExclusion.totalMinor, beforeExclusion.totalMinor)
+      assert.equal(afterExclusion.totals[0]?.totalMinor, beforeExclusion.totals[0]?.totalMinor)
       assert.ok(afterExclusion.expenses.every(item => item.participantIds.length === 2 && !item.participantIds.includes(c.userId)))
       assert.equal((await db.query('SELECT 1 FROM mutation_requests WHERE request_key=$1', [exclusionKey])).rowCount, 0)
       version = excluded.version!
@@ -517,7 +517,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         ] as const) await trace(count, 'confirm', () => assert.rejects(roundCommand(actor, ticket, id, 'confirm', input), (error: { code: string }) => error.code === expected))
         let expectedVersion = 1
         for (const splitMode of ['ALL', 'SELECTED', 'CUSTOM'] as const) {
-          expectedVersion = (await saveExpense(b, key(), confirmation.id, { description: splitMode, amount: '101', payerId: b.userId, splitMode, expectedVersion,
+          expectedVersion = (await saveExpense(b, key(), confirmation.id, { currency: 'KRW', description: splitMode, amount: '101', payerId: b.userId, splitMode, expectedVersion,
             ...(splitMode === 'SELECTED' ? { participantIds: [a.userId, b.userId] } : splitMode === 'CUSTOM' ? { customShares: [{ userId: a.userId, amount: '40' }, { userId: b.userId, amount: '61' }] } : {}) })).version!
         }
         const requestKey = key(), request = { expectedVersion }
@@ -572,7 +572,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
           for (const ticket of [requestKey, key()]) await trace(2, 'reopen', () => assert.rejects(roundCommand(b, ticket, confirmation.id, 'reopen', request, () => assert.fail('repeat must not publish')), (error: { code: string; status: number }) => error.code === 'invalid_round_state' && error.status === 409))
           const current = await getRound(b, confirmation.id, new URLSearchParams())
           assert.equal(current.version, reopened.version)
-          assert.equal(current.currency, confirmed.currency)
+          assert.deepEqual(current.totals, confirmed.totals)
           assert.deepEqual(current.members, confirmed.members)
           for (const expense of current.expenses) {
             assert.equal(expense.baseShareMinor, expense.splitMode === 'CUSTOM' ? null : '50')
@@ -595,7 +595,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
           const pending = await trace(2, 'settlement', () => getSettlement(actor, round.id))
           assert.equal(pending.status, 'RECORDING')
           assert.equal(pending.finalized, false)
-          assert.equal(pending.balanceMinor, null)
+          assert.equal(pending.balances.length, 0)
           assert.equal(pending.sharePath, null)
           assert.deepEqual(pending.outgoing, [])
           assert.deepEqual(pending.incoming, [])
@@ -650,7 +650,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       assert.equal(receiver.incoming[0].receivedAt, null)
       assert.equal(receiver.checkRequired, true)
       assert.deepEqual(receiver.outgoing, [])
-      const checkKey = key(), checkBody = { checked: true, senderId: a.userId, expectedVersion: version }
+      const checkKey = key(), checkBody = { checked: true, currency: 'KRW', senderId: a.userId, expectedVersion: version }
       for (const [actor, ticket, input, count, expected] of [
         [null, checkKey, { checked: 'yes' }, 0, 'unauthorized'],
         [{ ...b, userId: randomUUID() }, checkKey, { checked: 'yes' }, 1, 'unauthorized'],
@@ -659,7 +659,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         [b, checkKey, { ...checkBody, extra: true }, 1, 'invalid_input'],
         [b, 'invalid-key', checkBody, 1, 'invalid_request_key'],
         [b, checkKey, { ...checkBody, expectedVersion: version + 1 }, 2, 'stale_round'],
-        [b, checkKey, { ...checkBody, senderId: c.userId }, 2, 'forbidden'],
+        [b, checkKey, { ...checkBody, currency: 'KRW', senderId: c.userId }, 2, 'forbidden'],
         [a, checkKey, checkBody, 2, 'forbidden'],
         [b, checkKey, { ...checkBody, checked: false }, 2, 'not_found'],
       ] as const) await trace(count, 'check', () => assert.rejects(setSettlementCheck(actor, ticket, round.id, input), (error: { code: string }) => error.code === expected))
@@ -676,7 +676,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       assert.equal(received.checkedCount, 1)
       assert.equal(received.allChecked, true)
       assert.deepEqual((await trace(2, 'settlement', () => getSettlement(a, round.id))).outgoing, [])
-      assert.equal(received.balanceMinor, receiver.balanceMinor, 'original settlement balances are immutable')
+      assert.equal(received.balances[0]?.balanceMinor, receiver.balances[0]?.balanceMinor, 'original settlement balances are immutable')
       await trace(3, 'check', () => setSettlementCheck(b, key(), round.id, { ...checkBody, checked: false }))
       assert.notEqual((await trace(2, 'settlement', () => getSettlement(a, round.id))).outgoing.length, 0)
       await trace(3, 'check', () => setSettlementCheck(b, key(), round.id, checkBody))
@@ -724,16 +724,16 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       await trace(2, 'check', () => assert.rejects(setSettlementCheck(b, key(), round.id, { ...checkBody, expectedVersion: version, checked: false }),
         (error: { code: string }) => error.code === 'invalid_round_state'))
       await t.test('settlement omits accounts for non-KRW transfers in two SQL calls', async () => {
-        const foreign = await createRound(a, uuidV7(), group.id, { ...body, currency: 'USD', participantIds: [a.userId, b.userId] })
-        const saved = await saveExpense(a, key(), foreign.id, { description: '외화', amount: '0.30', payerId: b.userId, splitMode: 'ALL', expectedVersion: 1 })
+        const foreign = await createRound(a, uuidV7(), group.id, { ...body, participantIds: [a.userId, b.userId] })
+        const saved = await saveExpense(a, key(), foreign.id, { currency: 'USD', description: '외화', amount: '0.30', payerId: b.userId, splitMode: 'ALL', expectedVersion: 1 })
         const confirmed = await roundCommand(a, key(), foreign.id, 'confirm', { expectedVersion: saved.version })
         await roundCommand(a, key(), foreign.id, 'send', { expectedVersion: confirmed.version })
         const sender = await trace(2, 'settlement', () => getSettlement(a, foreign.id))
-        assert.equal(sender.balanceMinor, '15')
+        assert.equal(sender.balances[0]?.balanceMinor, '15')
         assert.equal(sender.outgoing[0].amountMinor, '15')
         assert.equal('account' in sender.outgoing[0], false)
         assert.equal(JSON.stringify(sender).includes('검증 은행'), false)
-        assert.equal((await trace(2, 'settlement', () => getSettlement(b, foreign.id))).balanceMinor, '-15')
+        assert.equal((await trace(2, 'settlement', () => getSettlement(b, foreign.id))).balances[0]?.balanceMinor, '-15')
       })
       const cancelled = await trace(4, 'session', () => createRound(a, uuidV7(), group.id, { ...body, participantIds: [a.userId, b.userId] }))
       for (const [actor, count] of [[null, 2], [{ ...a, userId: randomUUID() }, 3]] as const) {

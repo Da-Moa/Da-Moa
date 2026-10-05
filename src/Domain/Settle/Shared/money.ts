@@ -44,6 +44,7 @@ export const CURRENCIES = {
 } as const
 export type Currency = keyof typeof CURRENCIES
 export const CURRENCY_CODES = Object.keys(CURRENCIES) as Currency[]
+export const MAX_ROUND_CURRENCIES = 5
 export const MAX_EXPENSE_MAJOR = 100_000_000n
 export const MAX_ROUND_TOTAL_MAJOR = 1_000_000_000n
 

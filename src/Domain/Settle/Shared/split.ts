@@ -1,3 +1,5 @@
+import { MAX_ROUND_CURRENCIES, requireCurrency, type Currency } from './money'
+
 export function calculateBase(total: bigint, count: number): { base: bigint; remainder: number } {
   if (typeof total !== 'bigint' || total <= 0n) throw new Error('invalid_amount')
   if (!Number.isSafeInteger(count) || count <= 0) throw new Error('invalid_participants')
@@ -126,4 +128,38 @@ export function previewSettlement(expenses: SettlementExpense[], memberIds: stri
     return { ...expense, amountMinor: (base * BigInt(expense.participantIds.length)).toString() }
   })
   return { ...settle(allocated, memberIds, undefined, true), pendingRemainderMinor: pending.toString() }
+}
+
+
+type CurrencyExpense = SettlementExpense & { currency: Currency }
+
+function currencyGroups(expenses: CurrencyExpense[]) {
+  if (!expenses.length) throw new Error('empty_expenses')
+  if (new Set(expenses.map(expense => expense.id)).size !== expenses.length) throw new Error('invalid_expenses')
+  const groups = new Map<Currency, CurrencyExpense[]>()
+  for (const expense of expenses) {
+    const currency = requireCurrency(expense.currency)
+    const items = groups.get(currency) ?? []
+    items.push(expense)
+    groups.set(currency, items)
+  }
+  if (groups.size > MAX_ROUND_CURRENCIES) throw new Error('round_currency_limit_exceeded')
+  return [...groups].sort(([a], [b]) => a.localeCompare(b))
+}
+
+export function finalizeCurrencySettlement(expenses: CurrencyExpense[], memberIds: string[], draw?: (max: number) => number) {
+  const results = currencyGroups(expenses).map(([currency, items]) => ({ currency, result: finalizeSettlement(items, memberIds, draw) }))
+  return {
+    shares: results.flatMap(({ result }) => result.shares),
+    balances: results.flatMap(({ currency, result }) => result.balances.map(balance => ({ ...balance, currency }))),
+    transfers: results.flatMap(({ currency, result }) => result.transfers.map(transfer => ({ ...transfer, currency }))),
+  }
+}
+
+export function previewCurrencySettlement(expenses: CurrencyExpense[], memberIds: string[]) {
+  const results = currencyGroups(expenses).map(([currency, items]) => ({ currency, result: previewSettlement(items, memberIds) }))
+  return {
+    transfers: results.flatMap(({ currency, result }) => result.transfers.map(transfer => ({ ...transfer, currency }))),
+    pendingRemainders: results.map(({ currency, result }) => ({ currency, amountMinor: result.pendingRemainderMinor })),
+  }
 }

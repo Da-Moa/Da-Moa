@@ -1,5 +1,5 @@
 import 'server-only'
-import { createTestOnboardingUser, getTestSignInUser, upsertKakaoUser } from '../../../../Domain/User/Backend'
+import { createTestOnboardingUser, getTestSignInUser, findOrCreateKakaoUser } from '../../../../Domain/User/Backend'
 import { randomUUID } from 'node:crypto'
 import {
   ACCESS_TOKEN_MAX_AGE_SECONDS,
@@ -11,7 +11,7 @@ import {
   type KakaoProfile,
   type RefreshToken,
 } from '../auth-util'
-import { withWriteTransaction } from '../../../../lib/db'
+import { withDatabaseConnection, withWriteTransaction } from '../../../../lib/db'
 import { AppError } from '../../../../lib/errors'
 import { TEST_ONBOARDING_KEY, testAccountForKey } from '../../../../lib/test-accounts'
 
@@ -33,12 +33,12 @@ export function issueTokens(userId: string, purpose: 'app' | 'onboarding', now: 
   return { userId, purpose, accessToken, refreshToken, accessMaxAge, refreshMaxAge }
 }
 
-// Decide the signed JWT purpose from the user state under the same write lock.
+// The single statement returns either the existing account state or the new user.
 export function signInKakao(providerSubject: string, profile: KakaoProfile) {
   if (!providerSubject) throw new Error('Kakao subject is required')
-  return withWriteTransaction(async (client) => {
+  return withDatabaseConnection(async (client) => {
     const now = currentTimestamp()
-    const user = await upsertKakaoUser(client, providerSubject, profile, now)
+    const user = await findOrCreateKakaoUser(client, providerSubject, profile, now)
     const purpose = user.deletedAt !== null || user.onboardingCompletedAt === null ? 'onboarding' : 'app'
     return issueTokens(user.id, purpose, now)
   })

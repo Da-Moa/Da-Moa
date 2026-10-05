@@ -69,10 +69,19 @@ async function assertCurrencyUpgrade(client: ReturnType<typeof createDatabaseCli
         await client.query("UPDATE rounds SET status='COMPLETED',confirmed_at=$2,locked_at=$2,finalized_at=$2,completed_at=$2 WHERE id=$1", [roundId, now])
         await client.query('INSERT INTO settlement_transfers(round_id,sender_id,receiver_id,amount_minor) VALUES($1,$2,$3,1)', [roundId, legacyMemberId, userId])
       }
+      if (currency !== 'JPY') {
+        const expenseId = randomUUID()
+        await client.query(`INSERT INTO expenses(id,round_id,author_id,payer_id,description,amount_minor,split_mode,created_at,updated_at,updated_by)
+          VALUES($1,$2,$3,$3,'기존 통화 지출',123456789,'ALL',$4,$4,$3)`, [expenseId, roundId, userId, now])
+        await client.query('INSERT INTO expense_shares(expense_id,round_id,user_id) VALUES($1,$2,$3)', [expenseId, roundId, userId])
+        await client.query('INSERT INTO settlement_balances(round_id,user_id,paid_minor,burden_minor,balance_minor) VALUES($1,$2,123456789,123456789,0)', [roundId, userId])
+      }
       if (currency === 'JPY') missingCreatorRoundId = roundId
     }
     await client.query('DELETE FROM round_members WHERE round_id=$1 AND user_id=$2', [missingCreatorRoundId, userId])
     const beforeRounds = (await client.query('SELECT * FROM rounds ORDER BY id')).rows
+    const beforeExpenses = (await client.query('SELECT * FROM expenses ORDER BY id')).rows
+    const beforeBalances = (await client.query('SELECT * FROM settlement_balances ORDER BY round_id,user_id')).rows
     const beforeSession = (await client.query('SELECT * FROM refresh_sessions WHERE id=$1', [sessionId])).rows
     for (const version of ['004-round-currency.sql', '005-round-creator.sql', '006-receipt-avif.sql', '007-settlement-check.sql']) {
       await client.query(await readFile(new URL(`./migrations/${version}`, import.meta.url), 'utf8'))
@@ -89,8 +98,16 @@ async function assertCurrencyUpgrade(client: ReturnType<typeof createDatabaseCli
       WHERE r.status='COMPLETED' AND rm.settlement_checked_at=r.completed_at`)).rows[0].count, 2, '007 must persist its receiver-level state before 008 runs later')
     await applyMigrations(client)
     const upgradedRounds = (await client.query('SELECT * FROM rounds ORDER BY id')).rows
-    assert.deepEqual(upgradedRounds.map(({ creator_id: _, ...round }) => round), beforeRounds, '004 and 005 must preserve every existing round and its currency')
+    assert.deepEqual(upgradedRounds.map(({ creator_id: _, ...round }) => round), beforeRounds.map(({ currency: _, ...round }) => round), '016 removes round currency while preserving historical round fields')
     assert.ok(upgradedRounds.every(round => round.creator_id === userId), '005 must assign the prior group creator to existing rounds')
+    const legacyCurrency = new Map(beforeRounds.map(round => [round.id, round.currency]))
+    const expenses = (await client.query('SELECT * FROM expenses ORDER BY id')).rows
+    const balances = (await client.query('SELECT * FROM settlement_balances ORDER BY round_id,user_id')).rows
+    assert.deepEqual(expenses.map(({ currency: _, ...row }) => row), beforeExpenses)
+    assert.deepEqual(balances.map(({ currency: _, ...row }) => row), beforeBalances)
+    assert.ok([...expenses, ...balances].every(row => row.currency === legacyCurrency.get(row.round_id)))
+    assert.ok((await client.query('SELECT round_id,currency FROM settlement_transfers')).rows.every(row => row.currency === legacyCurrency.get(row.round_id)))
+    assert.equal((await client.query("SELECT 1 FROM information_schema.columns WHERE table_schema=$1 AND table_name='rounds' AND column_name='currency'", [schema])).rowCount, 0)
     assert.deepEqual((await client.query('SELECT * FROM refresh_sessions WHERE id=$1', [sessionId])).rows, beforeSession, '004 must not revoke or replace existing app sessions')
     assert.equal((await client.query("SELECT 1 FROM information_schema.columns WHERE table_schema=$1 AND table_name='groups' AND column_name='base_currency'", [schema])).rowCount, 0)
     assert.equal((await client.query("SELECT 1 FROM schema_migrations WHERE version='004-round-currency.sql'")).rowCount, 1)
@@ -163,7 +180,7 @@ test('withdrawal checks all unfinished history including excluded members; rejoi
   const now = currentTimestamp()
   await withWriteTransaction(async client => {
     for (const id of roundIds) {
-      await client.query("INSERT INTO rounds(id,group_id,creator_id,name,currency,status,created_at) VALUES($1,$2,$3,'진행 회차','KRW','RECORDING',$4)", [id, group.id, owner.session.userId, now])
+      await client.query("INSERT INTO rounds(id,group_id,creator_id,name,status,created_at) VALUES($1,$2,$3,'진행 회차','RECORDING',$4)", [id, group.id, owner.session.userId, now])
       for (const userId of [owner.session.userId, participant.session.userId, third.session.userId]) {
         await client.query('INSERT INTO round_members(round_id,user_id,display_name_snapshot,joined_at,excluded_at) VALUES($1,$2,$3,$4,$5)', [id, userId, profile.displayName, now, userId === participant.session.userId ? now : null])
       }
@@ -188,12 +205,12 @@ test('withdrawal checks all unfinished history including excluded members; rejoi
     const id = roundIds[1]
     const expenseId = randomUUID()
     await client.query('UPDATE round_members SET excluded_at=NULL WHERE round_id=$1', [id])
-    await client.query(`INSERT INTO expenses(id,round_id,author_id,payer_id,description,amount_minor,split_mode,base_share_minor,remainder_units,created_at,updated_at,updated_by)
-      VALUES($1,$2,$3,$3,'본인 부담 기록',100,'SELECTED',100,0,$4,$4,$3)`, [expenseId, id, owner.session.userId, now])
+    await client.query(`INSERT INTO expenses(id,round_id,author_id,payer_id,description,amount_minor,split_mode,base_share_minor,remainder_units,created_at,updated_at,updated_by,currency)
+      VALUES($1,$2,$3,$3,'본인 부담 기록',100,'SELECTED',100,0,$4,$4,$3,'KRW')`, [expenseId, id, owner.session.userId, now])
     await client.query('INSERT INTO expense_shares(expense_id,round_id,user_id,final_amount_minor,received_remainder) VALUES($1,$2,$3,100,false)', [expenseId, id, owner.session.userId])
     for (const userId of [owner.session.userId, participant.session.userId, third.session.userId]) {
       const amount = userId === owner.session.userId ? '100' : '0'
-      await client.query('INSERT INTO settlement_balances(round_id,user_id,paid_minor,burden_minor,balance_minor) VALUES($1,$2,$3,$3,0)', [id, userId, amount])
+      await client.query("INSERT INTO settlement_balances(round_id,user_id,paid_minor,burden_minor,balance_minor,currency) VALUES($1,$2,$3,$3,0,'KRW')", [id, userId, amount])
     }
     await client.query("UPDATE rounds SET status='COMPLETED',confirmed_at=$2,locked_at=$2,finalized_at=$2,completed_at=$2 WHERE id=$1", [id, now])
   })

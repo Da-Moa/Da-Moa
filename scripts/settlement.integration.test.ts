@@ -43,14 +43,14 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     for (const person of people.slice(1)) await acceptInvite(person, key(), token)
     const get = (id: string, actor = a) => getRound(actor, id, query())
     const command = async (id: string, action: string, actor = a) => roundCommand(actor, key(), id, action, { expectedVersion: (await get(id, actor)).version })
-    const expense = async (id: string, actor: AccessToken, payerId: string, amount: string, participantIds?: string[]) => saveExpense(actor, key(), id, {
+    const expense = async (id: string, actor: AccessToken, payerId: string, amount: string, participantIds?: string[], currency: typeof CURRENCY_CODES[number] = 'KRW') => saveExpense(actor, key(), id, { currency,
       description: '검증 지출', amount, payerId, splitMode: participantIds ? 'SELECTED' : 'ALL',
       ...(participantIds ? { participantIds } : {}), expectedVersion: (await get(id, actor)).version,
     })
     const clearExpenses = async (id: string, actor = a) => {
       for (const item of (await get(id, actor)).expenses) await deleteExpense(actor, key(), id, item.id, { expectedVersion: (await get(id, actor)).version })
     }
-    const round = async (members = [a, b, c]) => createRound(a, uuidV7(), g.id, { name: '검증 회차', currency: 'KRW', participantIds: members.map(m => m.userId) })
+    const round = async (members = [a, b, c]) => createRound(a, uuidV7(), g.id, { name: '검증 회차', participantIds: members.map(m => m.userId) })
 
     await t.test('explicit invites and membership do not auto-add new rounds; response loss has a recoverable invite flow', async () => {
       assert.equal('currency' in (await getGroup(a, g.id)), false)
@@ -68,14 +68,14 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       await assert.rejects(getInvite(b, token), code('not_found'))
       assert.ok(replacement.sharePath)
       await assert.rejects(createGroup(a, uuidV7(), { name: 'x'.repeat(101) }), code('invalid_input'))
-      await assert.rejects(createRound(a, uuidV7(), g.id, { name: '한 명', currency: 'KRW', participantIds: [a.userId] }), code('minimum_participants'))
-      await assert.rejects(createRound(b, uuidV7(), g.id, { name: '본인 누락', currency: 'KRW', participantIds: [a.userId, c.userId] }), code('minimum_participants'))
-      await assert.rejects(createRound(a, uuidV7(), g.id, { name: '외부인', currency: 'KRW', participantIds: [a.userId, outsider.userId] }), code('invalid_participants'))
+      await assert.rejects(createRound(a, uuidV7(), g.id, { name: '한 명', participantIds: [a.userId] }), code('minimum_participants'))
+      await assert.rejects(createRound(b, uuidV7(), g.id, { name: '본인 누락', participantIds: [a.userId, c.userId] }), code('minimum_participants'))
+      await assert.rejects(createRound(a, uuidV7(), g.id, { name: '외부인', participantIds: [a.userId, outsider.userId] }), code('invalid_participants'))
     })
 
     await t.test('round lists search group and round names with existing filters and cursors', async () => {
       const rounds = await Promise.all(['alpha 검색대상', 'beta 검색대상', 'gamma 검색대상'].map(name =>
-        createRound(a, uuidV7(), g.id, { name, currency: 'KRW', participantIds: [a.userId, b.userId] })))
+        createRound(a, uuidV7(), g.id, { name, participantIds: [a.userId, b.userId] })))
       const first = await listRounds(a, new URLSearchParams({ q: '검색대상', status: 'RECORDING', limit: '2' }), g.id)
       const second = await listRounds(a, new URLSearchParams({ q: '검색대상', status: 'RECORDING', limit: '2', cursor: first.nextCursor! }), g.id)
       assert.equal(first.items.length, 2)
@@ -117,11 +117,11 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     })
 
     await t.test('any active member starts and manages a round they create', async () => {
-      const withoutGroupOwner = await createRound(b, uuidV7(), g.id, { name: '모임 생성자 없는 회차', currency: 'KRW', participantIds: [b.userId, c.userId] })
+      const withoutGroupOwner = await createRound(b, uuidV7(), g.id, { name: '모임 생성자 없는 회차', participantIds: [b.userId, c.userId] })
       await assert.rejects(get(withoutGroupOwner.id, a), code('not_found'))
       await assert.rejects(leaveGroup(a, key(), g.id), code('unfinished_group_rounds'))
       await command(withoutGroupOwner.id, 'cancel', b)
-      const ownerExclusion = await createRound(b, uuidV7(), g.id, { name: '모임 생성자 제외', currency: 'KRW', participantIds: [a.userId, b.userId, c.userId] })
+      const ownerExclusion = await createRound(b, uuidV7(), g.id, { name: '모임 생성자 제외', participantIds: [a.userId, b.userId, c.userId] })
       assert.equal((await checkExclusion(b, ownerExclusion.id, a.userId)).allowed, true)
       assert.equal((await checkExclusion(b, ownerExclusion.id, b.userId)).reason, 'round_creator_cannot_leave')
       await excludeMember(b, key(), ownerExclusion.id, a.userId, { expectedVersion: (await get(ownerExclusion.id, b)).version })
@@ -132,10 +132,10 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       assert.notEqual(membership.excluded_at, null)
       assert.equal(membership.left_at, null)
       assert.equal((await getGroup(b, g.id)).members.some(member => member.userId === a.userId), true)
-      const next = await createRound(b, uuidV7(), g.id, { name: '제외 후 다음 회차', currency: 'KRW', participantIds: [a.userId, b.userId] })
+      const next = await createRound(b, uuidV7(), g.id, { name: '제외 후 다음 회차', participantIds: [a.userId, b.userId] })
       await command(next.id, 'cancel', b)
       await command(ownerExclusion.id, 'cancel', b)
-      const r = await createRound(b, uuidV7(), g.id, { name: 'B가 시작한 회차', currency: 'KRW', participantIds: [a.userId, b.userId, c.userId] })
+      const r = await createRound(b, uuidV7(), g.id, { name: 'B가 시작한 회차', participantIds: [a.userId, b.userId, c.userId] })
       const starterView = await get(r.id, b), groupOwnerView = await get(r.id, a)
       assert.equal(starterView.creatorId, b.userId)
       assert.equal(starterView.groupCreatorId, a.userId)
@@ -161,10 +161,10 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       const invitation = await createInvite(a, key(), leaving.id, {})
       const invitationToken = invitation.sharePath!.split('/').at(-1)!
       await acceptInvite(b, key(), invitationToken)
-      const past = await createRound(a, uuidV7(), leaving.id, { name: '과거 회차', currency: 'KRW', participantIds: [a.userId, b.userId] })
+      const past = await createRound(a, uuidV7(), leaving.id, { name: '과거 회차', participantIds: [a.userId, b.userId] })
       await assert.rejects(leaveGroup(b, key(), leaving.id), code('unfinished_rounds'))
       await assert.rejects(leaveGroup(a, key(), leaving.id), code('unfinished_group_rounds'))
-      await saveExpense(a, key(), past.id, { description: '완료할 지출', amount: '2', payerId: a.userId, splitMode: 'ALL', expectedVersion: 1 })
+      await saveExpense(a, key(), past.id, { currency: 'KRW', description: '완료할 지출', amount: '2', payerId: a.userId, splitMode: 'ALL', expectedVersion: 1 })
       for (const action of ['confirm', 'send', 'force-complete']) await roundCommand(a, key(), past.id, action, { expectedVersion: (await getRound(a, past.id, query())).version })
       await leaveGroup(b, key(), leaving.id)
       await assert.rejects(getGroup(b, leaving.id), code('not_found'))
@@ -191,8 +191,8 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       await assert.rejects(command(r.id, 'confirm'), code('empty_expenses'))
       const saved = await expense(r.id, c, b.userId, '6000')
       const first = await get(r.id)
-      assert.equal(first.pendingRemainderMinor, '0')
-      assert.deepEqual(first.transfers, [{ senderId: a.userId, receiverId: b.userId, amountMinor: '2000' }])
+      assert.equal(first.pendingRemainders[0]?.amountMinor, '0')
+      assert.deepEqual(first.transfers, [{ currency: 'KRW', senderId: a.userId, receiverId: b.userId, amountMinor: '2000' }])
       const update = { description: '생성자가 수정', amount: '9000', expectedVersion: first.version }
       await assert.rejects(saveExpense(b, key(), r.id, update, saved.id), code('forbidden'))
       await assert.rejects(saveExpense(a, key(), r.id, { ...update, description: null }, saved.id), code('invalid_input'))
@@ -200,7 +200,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       const changed = await get(r.id)
       assert.equal(changed.expenses[0].authorId, c.userId)
       assert.equal(changed.expenses[0].payerId, b.userId)
-      assert.deepEqual(changed.transfers, [{ senderId: a.userId, receiverId: b.userId, amountMinor: '3000' }])
+      assert.deepEqual(changed.transfers, [{ currency: 'KRW', senderId: a.userId, receiverId: b.userId, amountMinor: '3000' }])
       await assert.rejects(get(r.id, outsider), code('not_found'))
       await command(r.id, 'confirm')
       await assert.rejects(deleteExpense(a, key(), r.id, saved.id, { expectedVersion: (await get(r.id)).version }), code('invalid_round_state'))
@@ -208,9 +208,9 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       await command(r.id, 'confirm')
       await command(r.id, 'send')
       const sb = await getSettlement(b, r.id), sa = await getSettlement(a, r.id), sc = await getSettlement(c, r.id)
-      assert.equal(sb.balanceMinor, '-6000')
-      assert.equal(sa.balanceMinor, '3000')
-      assert.equal(sc.balanceMinor, '3000')
+      assert.equal(sb.balances[0]?.balanceMinor, '-6000')
+      assert.equal(sa.balances[0]?.balanceMinor, '3000')
+      assert.equal(sc.balances[0]?.balanceMinor, '3000')
       assert.equal(sa.outgoing[0].receiverId, b.userId)
       assert.equal(sa.outgoing[0].amountMinor, '3000')
       assert.equal(sa.outgoing[0].account?.verifiedAt, null)
@@ -218,12 +218,12 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       assert.equal(sb.outgoing.length, 0)
       assert.equal(JSON.stringify(sa).includes('D은행'), false)
       const detailA = await get(r.id), detailB = await get(r.id, b), detailC = await get(r.id, c)
-      assert.deepEqual(detailA.transfers, [{ senderId: a.userId, receiverId: b.userId, amountMinor: '3000' }])
+      assert.deepEqual(detailA.transfers, [{ currency: 'KRW', senderId: a.userId, receiverId: b.userId, amountMinor: '3000' }])
       assert.deepEqual(detailB.transfers, [
-        { senderId: a.userId, receiverId: b.userId, amountMinor: '3000' },
-        { senderId: c.userId, receiverId: b.userId, amountMinor: '3000' },
+        { currency: 'KRW', senderId: a.userId, receiverId: b.userId, amountMinor: '3000' },
+        { currency: 'KRW', senderId: c.userId, receiverId: b.userId, amountMinor: '3000' },
       ].sort((left, right) => left.senderId.localeCompare(right.senderId)))
-      assert.deepEqual(detailC.transfers, [{ senderId: c.userId, receiverId: b.userId, amountMinor: '3000' }])
+      assert.deepEqual(detailC.transfers, [{ currency: 'KRW', senderId: c.userId, receiverId: b.userId, amountMinor: '3000' }])
       for (const [viewer, detail] of [[a.userId, detailA], [b.userId, detailB], [c.userId, detailC]] as const) {
         assert.ok(detail.transfers.every(row => row.senderId === viewer || row.receiverId === viewer))
       }
@@ -255,7 +255,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       await assert.rejects(withdrawAccount(b), code('unfinished_rounds'))
       await command(r.id, 'confirm'); await command(r.id, 'send')
       const result = await getSettlement(b, r.id)
-      assert.equal(result.balanceMinor, '-6000')
+      assert.equal(result.balances[0]?.balanceMinor, '-6000')
       assert.deepEqual(result.incoming.map(x => x.amountMinor), ['3000', '3000'])
       assert.equal(result.checkRequired, true, 'an excluded payer with receivables must still confirm')
       assert.equal(result.requiredCount, 1)
@@ -265,17 +265,17 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       const [first, second] = result.incoming
       const firstSender = first.senderId === a.userId ? a : c
       assert.equal((await getSettlement(firstSender, r.id)).outgoing.some(transfer => transfer.receiverId === b.userId), true)
-      const firstCheck = await setSettlementCheck(b, key(), r.id, { expectedVersion: result.version, checked: true, senderId: first.senderId })
+      const firstCheck = await setSettlementCheck(b, key(), r.id, { expectedVersion: result.version, checked: true, currency: 'KRW', senderId: first.senderId })
       assert.equal(firstCheck.version, result.version, 'checks must not bump the round version')
       const partial = await getSettlement(b, r.id)
       assert.notEqual(partial.incoming.find(transfer => transfer.senderId === first.senderId)?.receivedAt, null)
       assert.equal(partial.incoming.find(transfer => transfer.senderId === second.senderId)?.receivedAt, null)
       assert.equal(partial.confirmations[0].checkedAt, null, 'a receiver remains pending until every incoming transfer is checked')
       assert.equal((await getSettlement(firstSender, r.id)).outgoing.some(transfer => transfer.receiverId === b.userId), false)
-      await setSettlementCheck(b, key(), r.id, { expectedVersion: result.version, checked: false, senderId: first.senderId })
+      await setSettlementCheck(b, key(), r.id, { expectedVersion: result.version, checked: false, currency: 'KRW', senderId: first.senderId })
       assert.equal((await getSettlement(firstSender, r.id)).outgoing.some(transfer => transfer.receiverId === b.userId), true)
-      await setSettlementCheck(b, key(), r.id, { expectedVersion: result.version, checked: true, senderId: first.senderId })
-      await setSettlementCheck(b, key(), r.id, { expectedVersion: result.version, checked: true, senderId: second.senderId })
+      await setSettlementCheck(b, key(), r.id, { expectedVersion: result.version, checked: true, currency: 'KRW', senderId: first.senderId })
+      await setSettlementCheck(b, key(), r.id, { expectedVersion: result.version, checked: true, currency: 'KRW', senderId: second.senderId })
       const confirmed = await getSettlement(a, r.id)
       assert.equal(confirmed.checkedCount, 1)
       assert.equal(confirmed.allChecked, true)
@@ -292,7 +292,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       assert.deepEqual({ checkedAt: initial.checkedAt, checkRequired: initial.checkRequired, checkedCount: initial.checkedCount, requiredCount: initial.requiredCount, allChecked: initial.allChecked },
         { checkedAt: null, checkRequired: true, checkedCount: 0, requiredCount: 1, allChecked: false })
       await assert.rejects(setSettlementCheck(outsider, key(), r.id, { expectedVersion: initial.version, checked: true }), code('not_found'))
-      await assert.rejects(setSettlementCheck(a, key(), r.id, { expectedVersion: initial.version, checked: true, senderId: outsider.userId }), code('forbidden'))
+      await assert.rejects(setSettlementCheck(a, key(), r.id, { expectedVersion: initial.version, checked: true, currency: 'KRW', senderId: outsider.userId }), code('forbidden'))
       const requestKey = key()
       await setSettlementCheck(a, requestKey, r.id, { expectedVersion: initial.version, checked: true })
       const checkedAt = (await getSettlement(a, r.id)).checkedAt
@@ -390,10 +390,10 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
 
     await t.test('custom shares validate exact totals atomically and survive partial edits and mode changes', async () => {
       for (const currency of ['KRW', 'JPY', 'USD']) {
-        const r = await createRound(a, uuidV7(), g.id, { name: '개별 부담금 검증', currency, participantIds: [a.userId, b.userId] })
+        const r = await createRound(a, uuidV7(), g.id, { name: '개별 부담금 검증', participantIds: [a.userId, b.userId] })
         const unit = (value: number) => currency === 'USD' ? `0.${value}` : String(value)
         const customShares = [{ userId: a.userId, amount: unit(10) }, { userId: b.userId, amount: unit(20) }]
-        const body = { description: '개별 지출', amount: unit(30), payerId: b.userId, splitMode: 'CUSTOM', customShares, expectedVersion: 1 }
+        const body = { currency: currency, description: '개별 지출', amount: unit(30), payerId: b.userId, splitMode: 'CUSTOM', customShares, expectedVersion: 1 }
         const empty = await get(r.id)
         const failedKey = key()
         await assert.rejects(saveExpense(a, failedKey, r.id, { ...body, amount: unit(40) }), code('custom_share_total_mismatch'))
@@ -418,7 +418,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
         assert.deepEqual(Object.fromEntries(original.expenses[0].shares.map(share => [share.userId, share.assignedAmountMinor])), expected)
         assert.ok(original.expenses[0].shares.every(share => share.amountMinor === null))
         assert.equal(original.expenses[0].remainderUnits, 0)
-        assert.deepEqual(original.transfers, [{ senderId: a.userId, receiverId: b.userId, amountMinor: '10' }])
+        assert.deepEqual(original.transfers, [{ currency, senderId: a.userId, receiverId: b.userId, amountMinor: '10' }])
 
         for (const change of [{ amount: unit(40) }, { customShares: [{ userId: a.userId, amount: unit(10) }] }]) {
           await assert.rejects(saveExpense(a, key(), r.id, { ...change, expectedVersion: original.version }, saved.id), code('custom_share_total_mismatch'))
@@ -447,7 +447,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     await t.test('custom and equal allocations share previews and finalization without redrawing original burdens', async () => {
       const r = await round([a, b, c, d])
       const customShares = [{ userId: a.userId, amount: '1' }, { userId: c.userId, amount: '4' }]
-      const saved = await saveExpense(a, key(), r.id, { description: '개별 부담', amount: '5', payerId: b.userId, splitMode: 'CUSTOM', customShares, expectedVersion: 1 })
+      const saved = await saveExpense(a, key(), r.id, { currency: 'KRW', description: '개별 부담', amount: '5', payerId: b.userId, splitMode: 'CUSTOM', customShares, expectedVersion: 1 })
       await expense(r.id, a, b.userId, '6', [a.userId, c.userId])
       const equal = await expense(r.id, a, b.userId, '10')
       const before = await get(r.id)
@@ -463,9 +463,9 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       await assert.rejects(saveExpense(a, key(), r.id, { customShares: [{ userId: d.userId, amount: '5' }], expectedVersion: excluded.version }, saved.id), code('invalid_participants'))
       const first = await getRound(a, r.id, new URLSearchParams('limit=1'))
       const second = await getRound(a, r.id, new URLSearchParams({ limit: '1', cursor: first.expensesNextCursor! }))
-      assert.equal(first.totalMinor, '21')
-      assert.equal(first.pendingRemainderMinor, '1')
-      assert.deepEqual(first.transfers, [{ senderId: a.userId, receiverId: b.userId, amountMinor: '7' }])
+      assert.equal(first.totals[0]?.totalMinor, '21')
+      assert.equal(first.pendingRemainders[0]?.amountMinor, '1')
+      assert.deepEqual(first.transfers, [{ currency: 'KRW', senderId: a.userId, receiverId: b.userId, amountMinor: '7' }])
       assert.deepEqual(second.transfers, first.transfers, 'preview must include expenses outside the displayed page')
       await command(r.id, 'confirm')
       assert.deepEqual((await get(r.id)).expenses.find(item => item.id === saved.id)?.shares, custom.shares)
@@ -481,7 +481,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       assert.equal(final.expenses.find(item => item.id === equal.id)!.shares.filter(share => share.receivedRemainder).length, 1)
       assert.equal(final.expenses.flatMap(item => item.shares).reduce((sum, share) => sum + BigInt(share.amountMinor!), 0n), 21n)
       const myBurden = final.expenses.flatMap(item => item.shares).filter(share => share.userId === a.userId).reduce((sum, share) => sum + BigInt(share.amountMinor!), 0n)
-      assert.equal((await getSettlement(a, r.id)).balanceMinor, myBurden.toString())
+      assert.equal((await getSettlement(a, r.id)).balances[0]?.balanceMinor, myBurden.toString())
       await command(r.id, 'draw')
       assert.deepEqual(await get(r.id), final)
       await command(r.id, 'force-complete')
@@ -489,7 +489,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
 
     await t.test('one random draw, deferred finalization, idempotency and rollback after share writes', async () => {
       const r = await round()
-      const submission = key(), body = { description: '나머지', amount: '10000', payerId: b.userId, splitMode: 'ALL', expectedVersion: 1 }
+      const submission = key(), body = { currency: 'KRW', description: '나머지', amount: '10000', payerId: b.userId, splitMode: 'ALL', expectedVersion: 1 }
       const e = await saveExpense(a, submission, r.id, body)
       const recording = await get(r.id)
       assert.equal(recording.expenses[0].baseShareMinor, '3333')
@@ -499,7 +499,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       await assert.rejects(saveExpense(a, submission, r.id, { ...body, amount: '10001' }), code('idempotency_conflict'))
       await command(r.id, 'confirm'); await command(r.id, 'send')
       const pending = await getSettlement(a, r.id)
-      assert.equal(pending.finalized, false); assert.equal(pending.sharePath, null); assert.equal(pending.balanceMinor, null)
+      assert.equal(pending.finalized, false); assert.equal(pending.sharePath, null); assert.equal(pending.balances.length, 0)
       assert.equal(pending.confirmations.length, 0, 'confirmation targets are derived only after transfers are finalized')
       assert.equal(pending.allChecked, true)
       await assert.rejects(command(r.id, 'complete'), code('invalid_round_state'))
@@ -554,8 +554,8 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       for (let i = 0; i < 3; i++) await expense(many.id, a, a.userId, '10')
       const first = await getRound(a, many.id, new URLSearchParams('limit=2'))
       const second = await getRound(a, many.id, new URLSearchParams({ limit: '2', cursor: first.expensesNextCursor! }))
-      assert.equal(first.totalMinor, '30')
-      assert.equal(first.pendingRemainderMinor, '3')
+      assert.equal(first.totals[0]?.totalMinor, '30')
+      assert.equal(first.pendingRemainders[0]?.amountMinor, '3')
       assert.deepEqual(second.transfers, first.transfers)
       assert.deepEqual(first.transfers.map(row => row.amountMinor), ['9', '9'])
       assert.equal(new Set([...first.expenses, ...second.expenses].map(x => x.id)).size, 3)
@@ -566,73 +566,75 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
 
     await t.test('expense and round total limits use each currency major unit and updates replace the old amount', async () => {
       for (const currency of ['KRW', 'JPY', 'USD'] as const) {
-        const r = await createRound(a, uuidV7(), g.id, { name: `${currency} 금액 상한`, currency, participantIds: [a.userId, b.userId] })
+        const r = await createRound(a, uuidV7(), g.id, { name: `${currency} 금액 상한`, participantIds: [a.userId, b.userId] })
         const maximum = currency === 'USD' ? '100000000.00' : '100000000'
         const overMaximum = currency === 'USD' ? '100000000.01' : '100000001'
         const belowMaximum = currency === 'USD' ? '99999999.99' : '99999999'
         const minimum = currency === 'USD' ? '0.01' : '1'
         const scale = currency === 'USD' ? 100n : 1n
-        const saved = [await expense(r.id, a, a.userId, maximum)]
+        const saved = [await expense(r.id, a, a.userId, maximum, undefined, currency)]
 
-        await assert.rejects(expense(r.id, a, a.userId, overMaximum), code('expense_amount_limit_exceeded'))
-        for (let index = 1; index < 10; index++) saved.push(await expense(r.id, a, a.userId, maximum))
-        assert.equal((await get(r.id)).totalMinor, (1_000_000_000n * scale).toString())
-        await assert.rejects(expense(r.id, a, a.userId, minimum), code('round_total_limit_exceeded'))
+        await assert.rejects(expense(r.id, a, a.userId, overMaximum, undefined, currency), code('expense_amount_limit_exceeded'))
+        for (let index = 1; index < 10; index++) saved.push(await expense(r.id, a, a.userId, maximum, undefined, currency))
+        assert.equal((await get(r.id)).totals[0]?.totalMinor, (1_000_000_000n * scale).toString())
+        await assert.rejects(expense(r.id, a, a.userId, minimum, undefined, currency), code('round_total_limit_exceeded'))
 
         await saveExpense(a, key(), r.id, { amount: belowMaximum, expectedVersion: (await get(r.id)).version }, saved[0].id)
-        await expense(r.id, a, a.userId, minimum)
+        await expense(r.id, a, a.userId, minimum, undefined, currency)
         const atLimit = await get(r.id)
-        assert.equal(atLimit.totalMinor, (1_000_000_000n * scale).toString())
+        assert.equal(atLimit.totals[0]?.totalMinor, (1_000_000_000n * scale).toString())
         await assert.rejects(
           saveExpense(a, key(), r.id, { amount: maximum, expectedVersion: atLimit.version }, saved[0].id),
           code('round_total_limit_exceeded'),
         )
         const unchanged = await get(r.id)
-        assert.equal(unchanged.totalMinor, atLimit.totalMinor)
+        assert.equal(unchanged.totals[0]?.totalMinor, atLimit.totals[0]?.totalMinor)
         assert.equal(unchanged.expenses.find(item => item.id === saved[0].id)?.amountMinor, (99_999_999n * scale + (currency === 'USD' ? 99n : 0n)).toString())
         await clearExpenses(r.id)
         await command(r.id, 'cancel')
       }
     })
 
-    await t.test('all supported currencies persist exact amounts, immutable rounds and KRW-only accounts without cross-round offset', async () => {
+    await t.test('all supported currencies persist exact amounts, editable expense currencies and KRW-only accounts without cross-round offset', async () => {
       const participants = [a.userId, b.userId]
       await assert.rejects(createGroup(a, uuidV7(), { name: '모임 통화 없음', currency: 'KRW' }), code('invalid_input'))
       for (const currency of [undefined, null, '', 'XXX', 'usd']) {
-        await assert.rejects(createRound(a, uuidV7(), g.id, { name: '잘못된 통화', participantIds: participants, ...(currency === undefined ? {} : { currency }) }), code('unsupported_currency'))
+        const invalid = await createRound(a, uuidV7(), g.id, { name: '잘못된 통화', participantIds: participants })
+        await assert.rejects(saveExpense(a, key(), invalid.id, { description: '통화 검증', amount: '10', payerId: a.userId, splitMode: 'ALL', expectedVersion: 1, ...(currency === undefined ? {} : { currency }) }), code('unsupported_currency'))
+        await command(invalid.id, 'cancel')
       }
       const currencies = CURRENCY_CODES
-      const rounds = await Promise.all(currencies.map(currency => createRound(a, uuidV7(), g.id, { name: `${currency} 회차`, currency, participantIds: participants })))
+      const rounds = await Promise.all(currencies.map(currency => createRound(a, uuidV7(), g.id, { name: `${currency} 회차`, participantIds: participants })))
       const settled: { id: string; currency: string; balanceMinor: string }[] = []
       for (const [index, currency] of currencies.entries()) {
         const r = rounds[index]
         const wholeUnits = ['KRW', 'JPY', 'VND'].includes(currency)
         const amount = wholeUnits ? '12345678' : '12345678.01'
-        const e = await expense(r.id, a, b.userId, amount)
+        const e = await expense(r.id, a, b.userId, amount, undefined, currency)
         assert.equal((await get(r.id)).groupId, g.id)
-        assert.equal((await get(r.id)).currency, currency)
+        assert.equal((await get(r.id)).expenses[0].currency, currency)
         assert.equal((await get(r.id)).expenses[0].amountMinor, wholeUnits ? '12345678' : '1234567801')
         await assert.rejects(saveExpense(a, key(), r.id, { amount: wholeUnits ? '1.5' : '1.001', expectedVersion: e.version }, e.id), code('invalid_amount'))
-        await assert.rejects(saveExpense(a, key(), r.id, { currency: 'KRW', expectedVersion: e.version }, e.id), code('invalid_input'))
+        await assert.rejects(saveExpense(a, key(), r.id, { currency: 'XXX', expectedVersion: e.version }, e.id), code('unsupported_currency'))
         await command(r.id, 'confirm')
         await command(r.id, 'reopen')
         const reopened = await get(r.id)
-        assert.equal(reopened.currency, currency)
+        assert.equal(reopened.expenses[0].currency, currency)
         await assert.rejects(roundCommand(a, key(), r.id, 'confirm', { expectedVersion: reopened.version, currency: 'USD' }), code('invalid_input'))
         assert.deepEqual(await get(r.id), reopened)
         await command(r.id, 'confirm'); await command(r.id, 'send'); await command(r.id, 'draw')
         const s = await getSettlement(a, r.id)
-        assert.equal(s.currency, currency)
+        assert.equal(s.balances[0].currency, currency)
         assert.equal('account' in s.outgoing[0], currency === 'KRW')
-        assert.ok(s.balanceMinor)
-        settled.push({ id: r.id, currency, balanceMinor: s.balanceMinor })
+        assert.ok(s.balances[0]?.balanceMinor)
+        settled.push({ id: r.id, currency, balanceMinor: s.balances[0].balanceMinor })
         await command(r.id, 'force-complete')
         await assert.rejects(saveExpense(a, key(), r.id, { amount: '2', expectedVersion: (await get(r.id)).version }, e.id), code('invalid_round_state'))
       }
       for (const previous of settled) {
         const still = await getSettlement(a, previous.id)
-        assert.equal(still.currency, previous.currency)
-        assert.equal(still.balanceMinor, previous.balanceMinor, 'later rounds must not offset this round')
+        assert.equal(still.balances[0].currency, previous.currency)
+        assert.equal(still.balances[0]?.balanceMinor, previous.balanceMinor, 'later rounds must not offset this round')
       }
       assert.equal('currency' in (await getGroup(a, g.id)), false)
       assert.equal((await listGroups(outsider, query())).items.length, 0)
@@ -647,7 +649,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       const profileGroup = await createGroup(a, uuidV7(), { name: '프로필 표시 검증' })
       const profileInvite = await createInvite(a, key(), profileGroup.id, {})
       await acceptInvite(departed, key(), profileInvite.sharePath!.split('/').at(-1)!)
-      const r = await createRound(a, uuidV7(), profileGroup.id, { name: '프로필 회차', currency: 'KRW', participantIds: [a.userId, departed.userId] })
+      const r = await createRound(a, uuidV7(), profileGroup.id, { name: '프로필 회차', participantIds: [a.userId, departed.userId] })
       await expense(r.id, a, departed.userId, '2000')
       await command(r.id, 'confirm'); await command(r.id, 'send'); await command(r.id, 'force-complete')
 

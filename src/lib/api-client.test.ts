@@ -326,7 +326,7 @@ test('round creation sends a UUIDv7 ticket and preserves it after a lost respons
     if (keys.length === 1) throw new TypeError('response lost')
     return Response.json({ error: 'round_already_exists' }, { status: 409 })
   }
-  const body = { name: '검증 회차', currency: 'KRW' as const, participantIds: ['a', 'b'] }
+  const body = { name: '검증 회차', participantIds: ['a', 'b'] }
   await assert.rejects(createRoundRequest('ticket-test', body), error => error instanceof ApiError && error.code === 'network_error')
   await assert.rejects(createRoundRequest('ticket-test', body), error => error instanceof ApiError && error.code === 'round_already_exists')
   assert.match(keys[0], /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)

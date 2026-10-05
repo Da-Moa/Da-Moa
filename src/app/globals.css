@@ -560,3 +560,13 @@ summary { color: #526a82; cursor: pointer; font-size: 13px; line-height: 1.6; pa
   .settlement-money-digit-changing::before { display: none; }
   .settlement-money-digit-changing > span { visibility: visible; }
 }
+
+
+.currency-total-list { display: flex; flex-direction: column; gap: 12px; list-style: none; margin: 0; padding: 0; }
+.currency-total-list > li { flex-wrap: wrap; gap: 8px 12px; }
+.currency-total-list .money, .currency-total-list .large-money { margin-left: auto; }
+.currency-transfer-groups { display: flex; flex-direction: column; gap: 16px; }
+.currency-divider { align-items: center; color: #6b7684; display: flex; font-size: 13px; gap: 12px; margin: 16px 0 0; }
+.currency-divider::before, .currency-divider::after { background: var(--box-border-color); content: ''; flex: 1; height: 1px; }
+.currency-divider span { flex-shrink: 0; }
+.settlement-summary .currency-divider { color: #d8dee6; }
