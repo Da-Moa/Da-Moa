@@ -366,7 +366,8 @@ select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3
 .bank-sheet[data-resized] { height: var(--sheet-height); max-height: calc(100dvh - max(12px, env(safe-area-inset-top))); transition: height .2s cubic-bezier(.2, .8, .2, 1); }
 .bank-sheet:has(.bank-sheet-drag-area[data-dragging]) { transition: none; }
 .bank-sheet[data-resized] .bank-sheet-content { height: 100%; max-height: none; }
-.bank-sheet[data-closing] { animation: none; transition: none; }
+.bank-sheet[data-closing] { animation: none; transition: none; will-change: transform; }
+.bank-sheet[data-dragging], .bank-sheet[data-settling] { transition: none; user-select: none; will-change: transform; }
 .bank-sheet[data-content-dragging] { transition: none; user-select: none; }
 .bank-sheet-drag-area { cursor: grab; flex-shrink: 0; margin: -10px -20px 0; padding: 10px 20px 20px; touch-action: none; user-select: none; }
 .bank-sheet-drag-area[data-dragging] { cursor: grabbing; }
