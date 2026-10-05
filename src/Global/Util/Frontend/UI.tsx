@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, CircleUserRound, Search, X } from 'lucide-react'
 import { ApiError } from '../../../lib/api-client'
@@ -49,7 +49,7 @@ export function CopyLink({ path, label = '링크 복사', hideButton = false }: 
 
 function useSheetClose(dialogRef: RefObject<HTMLDialogElement | null>) {
   const closing = useRef(false)
-  async function close() {
+  const close = useCallback(async () => {
     const dialog = dialogRef.current
     if (!dialog?.open || closing.current) return
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { dialog.close(); return }
@@ -69,8 +69,122 @@ function useSheetClose(dialogRef: RefObject<HTMLDialogElement | null>) {
       delete dialog.dataset.closing
       closing.current = false
     }
-  }
+  }, [dialogRef])
   return { close, closing }
+}
+
+function useSheetContentDrag(dialogRef: RefObject<HTMLDialogElement | null>, close: () => Promise<void>, closing: RefObject<boolean>, dismissible = true) {
+  useEffect(() => {
+    const dialog = dialogRef.current
+    if (!dialog) return
+    let drag: { id: number; x: number; y: number; active: boolean; samples: { y: number; time: number }[] } | null = null
+    let frame: number | null = null
+    let offset = 0
+    let suppressClickUntil = 0
+    let rebound: Animation | null = null
+    function reset() {
+      if (frame !== null) cancelAnimationFrame(frame)
+      frame = null
+      drag = null
+      offset = 0
+      dialog!.style.removeProperty('transform')
+      delete dialog!.dataset.contentDragging
+    }
+    function restore() {
+      const transform = dialog!.style.transform
+      reset()
+      if (transform && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        rebound?.cancel()
+        rebound = dialog!.animate([{ transform }, { transform: 'translate3d(0, 0, 0)' }], { duration: 180, easing: 'ease-out' })
+      }
+    }
+    function start(event: TouchEvent) {
+      if (event.touches.length !== 1) { restore(); return }
+      const target = event.target instanceof Element ? event.target : null
+      const body = target?.closest('.bank-sheet-body, .bank-grid')
+      if (!dismissible || !dialog!.open || closing.current || !body || body.closest('dialog') !== dialog || target?.closest('input, textarea, select, [contenteditable="true"]')) return
+      // Let native scrolling own the entire gesture if any enclosing list is
+      // away from its top, including scrollable content nested in the sheet.
+      for (let node = target; node && node !== dialog; node = node.parentElement) {
+        if (node.scrollTop > 1) return
+      }
+      rebound?.cancel()
+      const touch = event.touches[0]
+      drag = { id: touch.identifier, x: touch.clientX, y: touch.clientY, active: false, samples: [{ y: touch.clientY, time: event.timeStamp }] }
+    }
+    function move(event: TouchEvent) {
+      if (!drag) return
+      if (!dismissible || closing.current || event.touches.length !== 1) { restore(); return }
+      const touch = Array.from(event.touches).find(touch => touch.identifier === drag!.id)
+      if (!touch) return
+      const distance = touch.clientY - drag.y
+      if (!drag.active) {
+        if (Math.max(Math.abs(distance), Math.abs(touch.clientX - drag.x)) < 8) return
+        if (distance <= 0 || Math.abs(touch.clientX - drag.x) >= distance || !event.cancelable) { drag = null; return }
+        drag.active = true
+        // Cancel an unfinished entrance once, instead of toggling its CSS rule:
+        // restoring that rule on release would replay the entrance animation.
+        for (const animation of dialog!.getAnimations()) {
+          if (animation instanceof CSSAnimation && animation.animationName === 'bank-sheet-rise') animation.cancel()
+        }
+        dialog!.dataset.contentDragging = 'true'
+      }
+      if (!event.cancelable) { restore(); return }
+      event.preventDefault()
+      suppressClickUntil = performance.now() + 400
+      drag.samples.push({ y: touch.clientY, time: event.timeStamp })
+      while (drag.samples.length > 1 && drag.samples[0].time < event.timeStamp - 120) drag.samples.shift()
+      offset = Math.max(0, distance)
+      if (frame === null) frame = requestAnimationFrame(() => {
+        frame = null
+        dialog!.style.transform = `translate3d(0, ${offset}px, 0)`
+      })
+    }
+    function end(event: TouchEvent) {
+      if (!drag) return
+      const touch = Array.from(event.changedTouches).find(touch => touch.identifier === drag!.id)
+      if (!touch) return
+      if (!drag.active) { reset(); return }
+      if (event.cancelable) event.preventDefault()
+      suppressClickUntil = performance.now() + 400
+      const distance = Math.max(0, touch.clientY - drag.y)
+      const sample = drag.samples.find(sample => sample.time >= event.timeStamp - 120)
+      const elapsed = sample ? event.timeStamp - sample.time : 0
+      const recentDistance = sample ? touch.clientY - sample.y : 0
+      const flick = elapsed > 0 && recentDistance >= 16 && recentDistance / elapsed >= .7
+      const threshold = Math.max(64, Math.min(120, dialog!.offsetHeight * .2))
+      if (dismissible && !closing.current && distance >= 8 && (distance >= threshold || flick)) {
+        if (frame !== null) cancelAnimationFrame(frame)
+        frame = null
+        dialog!.style.transform = `translate3d(0, ${distance}px, 0)`
+        drag = null
+        void close().finally(reset)
+      } else restore()
+    }
+    function suppressClick(event: MouseEvent) {
+      if (event.detail > 0 && performance.now() < suppressClickUntil) { event.preventDefault(); event.stopPropagation() }
+    }
+    dialog.addEventListener('touchstart', start, { passive: true })
+    // A native non-passive listener can take over a downward pull before the
+    // browser starts scrolling; React's delegated touch listeners are passive.
+    dialog.addEventListener('touchmove', move, { passive: false })
+    dialog.addEventListener('touchend', end, { passive: false })
+    dialog.addEventListener('touchcancel', restore)
+    dialog.addEventListener('click', suppressClick, true)
+    dialog.addEventListener('close', reset)
+    window.addEventListener('resize', restore)
+    return () => {
+      reset()
+      rebound?.cancel()
+      dialog.removeEventListener('touchstart', start)
+      dialog.removeEventListener('touchmove', move)
+      dialog.removeEventListener('touchend', end)
+      dialog.removeEventListener('touchcancel', restore)
+      dialog.removeEventListener('click', suppressClick, true)
+      dialog.removeEventListener('close', reset)
+      window.removeEventListener('resize', restore)
+    }
+  }, [dialogRef, close, closing, dismissible])
 }
 
 function SheetHeader({ dialogRef, titleId, title, subtitle, closeLabel, dismissible = true, close, closing }: {
@@ -221,6 +335,7 @@ export function BottomSheet({ dialogRef, id, titleId, title, subtitle, closeLabe
   closeLabel: string; dismissible?: boolean; fillHeight?: boolean; onClose?: () => void; children: ReactNode;
 }) {
   const { close, closing } = useSheetClose(dialogRef)
+  useSheetContentDrag(dialogRef, close, closing, dismissible)
   return <dialog aria-labelledby={titleId} className={`bank-sheet${fillHeight ? ' bank-sheet-fill' : ''}`} id={id} ref={dialogRef} onCancel={event => { event.preventDefault(); if (dismissible) void close() }} onClick={event => { if (event.target === event.currentTarget && dismissible) void close() }} onClose={event => { if (!event.currentTarget.open) onClose?.() }}>
     <div className="bank-sheet-content"><SheetHeader close={close} closeLabel={closeLabel} closing={closing} dialogRef={dialogRef} dismissible={dismissible} subtitle={subtitle} title={title} titleId={titleId} />
       <div className="bank-sheet-body"><div className="stack">{children}</div></div>
@@ -236,6 +351,7 @@ export function SheetSelect({ label, name, title, value, onChange, options, disa
   const dialogRef = useRef<HTMLDialogElement>(null)
   const trigger = useRef<HTMLButtonElement>(null)
   const { close, closing } = useSheetClose(dialogRef)
+  useSheetContentDrag(dialogRef, close, closing)
   const scrollTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const [opened, setOpened] = useState(false)
   const [scrolling, setScrolling] = useState(false)

@@ -367,6 +367,7 @@ select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3
 .bank-sheet:has(.bank-sheet-drag-area[data-dragging]) { transition: none; }
 .bank-sheet[data-resized] .bank-sheet-content { height: 100%; max-height: none; }
 .bank-sheet[data-closing] { animation: none; transition: none; }
+.bank-sheet[data-content-dragging] { transition: none; user-select: none; }
 .bank-sheet-drag-area { cursor: grab; flex-shrink: 0; margin: -10px -20px 0; padding: 10px 20px 20px; touch-action: none; user-select: none; }
 .bank-sheet-drag-area[data-dragging] { cursor: grabbing; }
 .bank-sheet-resize-handle { background: transparent; border: 0; cursor: inherit; display: block; height: 20px; margin: 0 auto; padding: 0 0 16px; width: 36px; }
