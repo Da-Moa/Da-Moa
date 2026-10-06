@@ -18,6 +18,9 @@ dist-ssr
 .env*
 !.env.example
 
+# 성능 측정 결과
+perf/*
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
