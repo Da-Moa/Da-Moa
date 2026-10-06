@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from 'react'
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, CircleUserRound, Search, X } from 'lucide-react'
 import { ApiError } from '../../../lib/api-client'
@@ -447,7 +447,7 @@ export function BottomSheet({ dialogRef, id, titleId, title, subtitle, closeLabe
   </dialog>
 }
 
-export function SheetSelect({ label, name, title, value, onChange, options, disabled, sheetClassName, showSelectedIcon, searchPlaceholder }: {
+export const SheetSelect = memo(function SheetSelect({ label, name, title, value, onChange, options, disabled, sheetClassName, showSelectedIcon, searchPlaceholder }: {
   label: string; name: string; title: string; value: string; onChange: (value: string) => void;
   options: readonly { value: string; label: string; icon?: ReactNode; searchText?: string }[]; disabled?: boolean; sheetClassName?: string; showSelectedIcon?: boolean; searchPlaceholder?: string;
 }) {
@@ -469,7 +469,8 @@ export function SheetSelect({ label, name, title, value, onChange, options, disa
     clearTimeout(scrollTimer.current)
     scrollTimer.current = setTimeout(() => setScrolling(false), 800)
   }
-  const filtered = options.filter(option => `${option.label} ${option.searchText ?? ''}`.toLocaleLowerCase('ko-KR').includes(search.trim().toLocaleLowerCase('ko-KR')))
+  const searchTerm = search.trim().toLocaleLowerCase('ko-KR')
+  const filtered = opened ? options.filter(option => `${option.label} ${option.searchText ?? ''}`.toLocaleLowerCase('ko-KR').includes(searchTerm)) : []
   const selected = options.find(option => option.value === value)
   useLayoutEffect(() => {
     const dialog = dialogRef.current
@@ -496,12 +497,12 @@ export function SheetSelect({ label, name, title, value, onChange, options, disa
       <button aria-controls={`${id}-sheet`} aria-expanded={opened} aria-haspopup="dialog" aria-labelledby={`${id}-label ${id}-value`} className="bank-select-trigger" disabled={disabled} onClick={open} ref={trigger} type="button"><span className="bank-select-value" id={`${id}-value`}>{showSelectedIcon && selected?.icon}{selected?.label}</span><ChevronDown aria-hidden="true" size={20} /></button>
       <select aria-hidden="true" autoComplete="off" className="bank-select-native" disabled={disabled} name={name} onChange={event => choose(event.currentTarget.value)} onInvalid={event => { event.preventDefault(); open() }} required tabIndex={-1} value={value}>{!value && <option value="" disabled>{title}</option>}{options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
     </div>
-    <dialog aria-labelledby={`${id}-title`} className={`bank-sheet ${sheetClassName ?? ''}`} id={`${id}-sheet`} onCancel={event => { event.preventDefault(); void close() }} onClick={event => { if (event.target === event.currentTarget) void close() }} onClose={() => { setOpened(false); trigger.current?.focus() }} ref={dialogRef}>
-      <div className="bank-sheet-content"><SheetHeader close={close} closeLabel={`${label} 닫기`} closing={closing} dialogRef={dialogRef} motion={motion} sizing={sizing} title={title} titleId={`${id}-title`} />
+    <dialog aria-label={title} className={`bank-sheet ${sheetClassName ?? ''}`} id={`${id}-sheet`} onCancel={event => { event.preventDefault(); void close() }} onClick={event => { if (event.target === event.currentTarget) void close() }} onClose={event => { if (!event.currentTarget.open) { setOpened(false); trigger.current?.focus() } }} ref={dialogRef}>
+      {opened && <div className="bank-sheet-content"><SheetHeader close={close} closeLabel={`${label} 닫기`} closing={closing} dialogRef={dialogRef} motion={motion} sizing={sizing} title={title} titleId={`${id}-title`} />
         {searchPlaceholder && <div className="round-search-bar currency-search"><Search aria-hidden="true" size={21} /><input aria-label={searchPlaceholder} autoComplete="off" maxLength={100} onChange={event => setSearch(event.target.value)} placeholder={searchPlaceholder} type="search" value={search} /></div>}
         <div aria-label={`${label} 목록`} className="bank-grid" data-scrolling={scrolling || undefined} data-scrollbar-hovered={scrollbarHovered || undefined} onPointerMove={event => { const list = event.currentTarget; setScrollbarHovered(event.pointerType === 'mouse' && event.clientX >= list.getBoundingClientRect().left + list.clientLeft + list.clientWidth) }} onPointerLeave={() => setScrollbarHovered(false)} onScroll={showScrollbar} role="group">{filtered.map(option => <button aria-pressed={value === option.value} className="bank-tile" data-value={option.value} key={option.value} onClick={() => choose(option.value)} type="button">{option.icon}<span>{option.label}</span></button>)}</div>
         {filtered.length === 0 && <p className="help-text" role="status">검색 결과가 없어요.</p>}
-      </div>
+      </div>}
     </dialog>
   </>
-}
+})

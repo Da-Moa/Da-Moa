@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { ArrowRight, ChevronDown, ChevronLeft, ImagePlus, Pencil, Plus, Trash2 } from 'lucide-react'
@@ -22,14 +22,16 @@ function expenseDay(createdAt: number) {
   return { dateTime, label: expenseDayFormatter.format(date) }
 }
 
-function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: RoundDetail; expense: Expense | null; onSaved: () => void; onCancel: () => void; reload: () => Promise<RoundDetail | null> }) {
+function ExpenseForm({ round, expense, onSaved, onCancel, reload, saving }: { round: RoundDetail; expense: Expense | null; onSaved: (result: MutationResult) => void; onCancel: () => void; reload: () => Promise<RoundDetail | null>; saving: boolean }) {
   const { account } = useAccount()
   const action = useAction()
+  const busy = action.busy || saving
   const expectedVersion = useRef(round.version)
   const [mode, setMode] = useState<Expense['splitMode']>(expense?.splitMode ?? 'ALL')
   const [participants, setParticipants] = useState(expense?.participantIds ?? [])
   const [payerId, setPayerId] = useState(expense?.payerId ?? account.id)
   const [currency, setCurrency] = useState<Currency>(expense?.currency ?? round.totals[0]?.currency ?? 'KRW')
+  const payerOptions = useMemo(() => round.members.filter(member => !member.excludedAt || member.userId === expense?.payerId).map(member => ({ value: member.userId, label: `${member.displayName}${member.excludedAt ? ' (제외됨 · 기존 결제 유지)' : ''}`, icon: <ParticipantAvatar profileImageUrl={member.profileImageUrl} /> })), [round.members, expense?.payerId])
   const maximumMinor = expenseInputMaximum(round.totals.find(total => total.currency === currency)?.totalMinor ?? '0', expense?.currency === currency ? expense.amountMinor : null, currency)
   function minorToInput(minor: string) {
     const amount = minor ? minorToAmount(minor, currency) : ''
@@ -38,15 +40,15 @@ function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: Rou
   const [amountInput, setAmountInput] = useState(() => minorToInput(expense?.amountMinor ?? ''))
   const [customAmounts, setCustomAmounts] = useState<Record<string, string>>(() => Object.fromEntries((expense?.shares ?? []).flatMap(share => share.assignedAmountMinor == null ? [] : [[share.userId, minorToInput(share.assignedAmountMinor)]])))
   useEffect(() => setAmountInput(current => formatAmountInput(current, currency, maximumMinor) ?? current), [maximumMinor, currency])
-  function changeCurrency(next: Currency) {
+  const changeCurrency = useCallback((next: Currency) => {
     if (next === currency) return
     setCurrency(next)
     setAmountInput('')
     setCustomAmounts({})
     action.setError(null)
-  }
+  }, [currency, action.setError])
   async function save(form: HTMLFormElement) {
-    if (maximumMinor === 0n) return
+    if (saving || maximumMinor === 0n) return
     const values = new FormData(form)
     const body = {
       currency, description: String(values.get('description') ?? ''), amount: String(values.get('amount') ?? '').replace(/,/g, ''), payerId: String(values.get('payerId') ?? ''), splitMode: mode,
@@ -75,7 +77,7 @@ function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: Rou
         return apiRequest<MutationResult>(path, { method, body })
       }
     })
-    if (result) onSaved()
+    if (result) onSaved(result)
   }
   function changeAmount(input: HTMLInputElement, userId?: string) {
     const cursor = input.selectionStart ?? input.value.length
@@ -93,14 +95,14 @@ function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: Rou
       if (input.isConnected) input.setSelectionRange(position, position)
     })
   }
-  return <form className="domain-card expense-form stack" id="expense-editor" onSubmit={event => { event.preventDefault(); void save(event.currentTarget) }}>
+  return <form aria-busy={busy} className="domain-card expense-form stack" id="expense-editor" onSubmit={event => { event.preventDefault(); void save(event.currentTarget) }}>
     <h2>{expense ? '지출 수정' : '지출 기록'}</h2>
-    <label className="field line-field"><span>지출 내용</span><input autoFocus defaultValue={expense?.description ?? ''} name="description" maxLength={200} placeholder=" " required /></label>
-    <CurrencySelect disabled={action.busy} onChange={changeCurrency} value={currency} />
+    <label className="field line-field"><span>지출 내용</span><input autoFocus defaultValue={expense?.description ?? ''} disabled={busy} name="description" maxLength={200} placeholder=" " required /></label>
+    <CurrencySelect disabled={busy} onChange={changeCurrency} value={currency} />
     <p className="help-text">한 회차에 최대 5개 통화를 기록할 수 있어요. 통화를 변경하면 금액과 개별 부담금을 다시 입력해 주세요.</p>
-    <label className="field line-field"><span>총 금액 ({currency})</span><input value={amountInput} onChange={event => changeAmount(event.currentTarget)} name="amount" inputMode={currencyDecimals(currency) ? 'decimal' : 'numeric'} type="text" pattern={amountInputPattern(currency)} placeholder=" " required /></label>
-    <SheetSelect disabled={action.busy} label="실제로 결제한 사람" name="payerId" onChange={setPayerId} options={round.members.filter(member => !member.excludedAt || member.userId === expense?.payerId).map(member => ({ value: member.userId, label: `${member.displayName}${member.excludedAt ? ' (제외됨 · 기존 결제 유지)' : ''}`, icon: <ParticipantAvatar profileImageUrl={member.profileImageUrl} /> }))} sheetClassName="currency-sheet" showSelectedIcon title="결제한 사람을 선택해 주세요" value={payerId} />
-    <fieldset className="member-picker"><legend>부담할 사람</legend>
+    <label className="field line-field"><span>총 금액 ({currency})</span><input disabled={busy} value={amountInput} onChange={event => changeAmount(event.currentTarget)} name="amount" inputMode={currencyDecimals(currency) ? 'decimal' : 'numeric'} type="text" pattern={amountInputPattern(currency)} placeholder=" " required /></label>
+    <SheetSelect disabled={busy} label="실제로 결제한 사람" name="payerId" onChange={setPayerId} options={payerOptions} sheetClassName="currency-sheet" showSelectedIcon title="결제한 사람을 선택해 주세요" value={payerId} />
+    <fieldset className="member-picker" disabled={busy}><legend>부담할 사람</legend>
       <label className="check-row"><input type="radio" name="splitMode" value="ALL" checked={mode === 'ALL'} onChange={() => setMode('ALL')} /><span>전체 참여자 균등 분배</span></label>
       <label className="check-row"><input type="radio" name="splitMode" value="SELECTED" checked={mode === 'SELECTED'} onChange={() => setMode('SELECTED')} /><span>특정 사용자 균등 분배</span></label>
       <label className="check-row"><input type="radio" name="splitMode" value="CUSTOM" checked={mode === 'CUSTOM'} onChange={() => setMode('CUSTOM')} /><span>개별 항목 분배</span></label>
@@ -111,7 +113,7 @@ function ExpenseForm({ round, expense, onSaved, onCancel, reload }: { round: Rou
     </fieldset>
     {round.status !== 'RECORDING' && <p className="notice notice-warning">다른 변경으로 기록 단계가 끝났어요. 입력을 확인한 뒤 창을 닫고 최신 상태를 확인해 주세요.</p>}
     <ErrorNotice error={action.error} />
-    <div className="quick-actions"><button className="primary-button" disabled={action.busy || round.status !== 'RECORDING' || maximumMinor === 0n} type="submit">{action.busy ? '저장 중…' : '지출 저장'}</button><button className="secondary-button" disabled={action.busy} type="button" onClick={onCancel}>닫기</button></div>
+    <div className="quick-actions"><button className="primary-button" disabled={busy || round.status !== 'RECORDING' || maximumMinor === 0n} type="submit">{busy ? '저장 중…' : '지출 저장'}</button><button className="secondary-button" disabled={busy} type="button" onClick={onCancel}>닫기</button></div>
   </form>
 }
 
@@ -196,12 +198,22 @@ export default function RoundClient({ roundId }: { roundId: string }) {
   const action = useAction()
   const more = useAction()
   const [editing, setEditing] = useState<Expense | 'new' | null>(null)
+  const [savedExpense, setSavedExpense] = useState<MutationResult | null>(null)
   const [expensesOpen, setExpensesOpen] = useState(true)
   const [check, setCheck] = useState<(ExclusionCheck & { userId: string }) | null>(null)
   const exclusionDialog = useRef<HTMLDialogElement>(null)
   const data = resource.data
   const myself = data?.members.find(member => member.userId === account.id)
   const recording = data?.status === 'RECORDING'
+  useLayoutEffect(() => {
+    if (!savedExpense || !data || data.version < (savedExpense.version ?? 0)) return
+    // Keep the form until the WebSocket read contains the saved version, then anchor once.
+    if (editing) { setEditing(null); setCheck(null); return }
+    const target = document.getElementById(`expense-${savedExpense.id}`) ?? document.getElementById('expense-section-heading')
+    target?.scrollIntoView({ block: 'start', behavior: 'instant' })
+    target?.focus({ preventScroll: true })
+    setSavedExpense(null)
+  }, [savedExpense, data, editing])
   useEffect(() => {
     if (check && !exclusionDialog.current?.open) exclusionDialog.current?.showModal()
   }, [check])
@@ -315,7 +327,7 @@ export default function RoundClient({ roundId }: { roundId: string }) {
       </BottomSheet>
       <div className="row-between expense-heading" id="expense-section-heading"><h2 className="section-heading">지출 내역</h2><div className="inline-actions">{recording && myself && !myself.excludedAt && !editing && <button className="text-button" onClick={() => { setExpensesOpen(true); setEditing('new') }} type="button"><Plus size={17} /> 지출 추가</button>}<button aria-controls="round-expenses" aria-expanded={expensesOpen} aria-label={expensesOpen ? '모든 지출 내역 숨기기' : '모든 지출 내역 펼치기'} className="text-button expense-toggle" onClick={() => setExpensesOpen(open => !open)} title={expensesOpen ? '모든 지출 내역 숨기기' : '모든 지출 내역 펼치기'} type="button"><ChevronDown aria-hidden="true" className={expensesOpen ? 'expense-toggle-open' : undefined} size={24} /></button></div></div>
       <div className="stack" hidden={!expensesOpen} id="round-expenses">
-        {editing && <ExpenseForm key={editing === 'new' ? 'new' : editing.id} round={data} expense={editing === 'new' ? null : editing} reload={refresh} onSaved={() => { setEditing(null); setCheck(null) }} onCancel={closeEditor} />}
+        {editing && <ExpenseForm key={editing === 'new' ? 'new' : editing.id} round={data} expense={editing === 'new' ? null : editing} reload={refresh} saving={Boolean(savedExpense)} onSaved={setSavedExpense} onCancel={closeEditor} />}
         {data.expenses.length === 0 && <p className="empty-card">지출 내역이 없습니다. 지출을 기록한 뒤 정산을 확정해 주세요.</p>}
         {orderedExpenses.map((expense, index) => {
           const day = expenseDay(expense.createdAt), previousDay = index ? expenseDay(orderedExpenses[index - 1].createdAt).dateTime : null
