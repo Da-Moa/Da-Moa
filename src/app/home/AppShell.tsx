@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
+import Image from 'next/image'
 import { usePathname } from 'next/navigation'
 import { History, House, Menu, Users } from 'lucide-react'
 import { AccountProvider } from '../../Domain/User/Frontend'
@@ -13,7 +14,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() ?? '/home'
   const hasBackButton = pathname === '/home/account' || pathname.startsWith('/home/groups/') || pathname.startsWith('/home/rounds/') || pathname.startsWith('/settlements/')
   const tabTitle = pathname === '/home/groups' ? '내 모임' : pathname === '/home/history' ? '정산 기록' : pathname === '/home/all' ? '전체' : null
-  const topbarContent = pathname === '/home' ? <Link className="brand" href="/home" aria-label="다모아 홈"><img alt="다모아" height="38" src="/logo/da-moa-trans.png" width="46" /></Link> : tabTitle ? <h1 className="topbar-title">{tabTitle}</h1> : pathname.startsWith('/invites/') ? <span className="topbar-title">모임 초대</span> : null
+  const topbarContent = pathname === '/home' ? <Link className="brand" href="/home" aria-label="다모아 홈"><Image alt="다모아" height={38} src="/logo/da-moa-trans.png" width={46} /></Link> : tabTitle ? <h1 className="topbar-title">{tabTitle}</h1> : pathname.startsWith('/invites/') ? <span className="topbar-title">모임 초대</span> : null
   const me = useResource<Account>('/api/me')
   const previousPath = useRef(pathname)
   const [checkedPath, setCheckedPath] = useState(pathname)

@@ -288,7 +288,7 @@ export default function LandingPage() {
     <main className="landing-page">
       <header className="landing-header">
         <Link className="landing-brand" href="/" aria-label="다모아 홈">
-          <img alt="다모아" height="34" src="/logo/da-moa-trans.png" width="41" />
+          <Image alt="다모아" height={34} src="/logo/da-moa-trans.png" width={41} />
         </Link>
         <Link className="landing-login" href="/login">로그인</Link>
       </header>
