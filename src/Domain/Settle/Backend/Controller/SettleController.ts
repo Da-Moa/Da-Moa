@@ -2,7 +2,8 @@ import 'server-only'
 import { after, NextRequest } from 'next/server'
 import { readRequestAccessToken } from '../../../../Global/Auth/Backend'
 import { AppError, errorResponse } from '../../../../Global/Util/Backend'
-import { readJsonBody as jsonBody, sameOrigin } from '../../../../Global/Util/Backend'
+import { readBytes, readJsonBody as jsonBody, sameOrigin } from '../../../../Global/Util/Backend'
+import { MAX_RECEIPT_REQUEST_BYTES } from '../../Shared'
 import { realtimeEnabled } from '../../../../Global/Websocket/Backend'
 import { publishRoundInvalidation, type RoundAudience } from './SettleInvalidation'
 import { addReceipt, checkExclusion, createRound, deleteExpense, excludeMember, getReceipt, getRound, getSettlement, listRounds, removeReceipt, roundCommand, saveExpense, setSettlementCheck } from '../Service/SettleService'
@@ -50,7 +51,8 @@ export async function getSettleResponse(request: NextRequest, path: string[]): P
     else if (path[0] === 'rounds' && path.length === 5 && path[2] === 'expenses' && path[4] === 'receipts' && method === 'POST') {
       data = await addReceipt(access, key, path[1], path[3], async () => {
         let form: FormData
-        try { form = await request.formData() } catch { throw new AppError(400, 'invalid_input', '영수증 업로드 형식을 확인해 주세요') }
+        const bytes = await readBytes(request, MAX_RECEIPT_REQUEST_BYTES, 'receipt_too_large')
+        try { form = await new Response(bytes.buffer, { headers: request.headers }).formData() } catch { throw new AppError(400, 'invalid_input', '영수증 업로드 형식을 확인해 주세요') }
         const file = form.get('file')
         if (!(file instanceof File) || form.getAll('file').length !== 1 || form.getAll('expectedVersion').length !== 1 || [...form.keys()].some(k => !['file', 'expectedVersion'].includes(k))) throw new AppError(400, 'invalid_input', '이미지를 한 개씩 올려 주세요')
         return { expectedVersion: Number(form.get('expectedVersion')), bytes: new Uint8Array(await file.arrayBuffer()), type: file.type, name: file.name }
@@ -66,6 +68,7 @@ export async function getSettleResponse(request: NextRequest, path: string[]): P
       if (path[0] === 'groups' && path[2] === 'rounds') after(() => publishRoundInvalidation((data as { roundId?: string; id: string }).roundId ?? (data as { id: string }).id, affectedAudience))
       else if (path[0] === 'rounds') after(() => publishRoundInvalidation(path[1], affectedAudience, path[2] === 'settlement-check'))
     }
-    return Response.json({ data }, { headers: { 'Cache-Control': 'private, no-store' } })
+    const queuedReceipt = method === 'POST' && path[0] === 'rounds' && path.length === 5 && path[4] === 'receipts'
+    return Response.json({ data }, { status: queuedReceipt ? 202 : 200, headers: { 'Cache-Control': 'private, no-store' } })
   } catch (error) { return errorResponse(error) }
 }

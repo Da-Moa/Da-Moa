@@ -13,6 +13,7 @@ import { BottomSheet, Loading, ParticipantAvatar, SheetSelect, useAction, useRes
 import { useAccount } from '../../../User/Frontend'
 import { StatusBadge } from './StatusBadge'
 import { ErrorNotice } from './ErrorNotice'
+import { encodeReceipt } from '../ReceiptEncoder'
 
 const expenseDayFormatter = new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' })
 function expenseDay(createdAt: number) {
@@ -123,7 +124,9 @@ function ReceiptImage({ receipt, index, canEdit, remove, busy }: { receipt: Rece
     if (blob) setUrl(URL.createObjectURL(blob))
   }
   return <div className="receipt-item">
-    <div className="row-between"><button className="text-button" disabled={action.busy} onClick={() => url ? setUrl(null) : void view()} type="button">{url ? '증빙 접기' : `증빙 ${index + 1} 보기`}</button>{canEdit && <button aria-label={`증빙 ${index + 1} 삭제`} className="icon-button danger-text" disabled={busy} onClick={remove} type="button"><Trash2 size={17} /></button>}</div>
+    <div className="row-between">{receipt.storageStatus === 'PENDING' || receipt.storageStatus === 'FAILED'
+      ? <span role="status">{receipt.storageStatus === 'PENDING' ? `증빙 ${index + 1} 저장 중…` : `증빙 ${index + 1} 저장 실패 · 삭제 후 다시 올려 주세요`}</span>
+      : <button className="text-button" disabled={action.busy} onClick={() => url ? setUrl(null) : void view()} type="button">{url ? '증빙 접기' : `증빙 ${index + 1} 보기`}</button>}{canEdit && <button aria-label={`증빙 ${index + 1} 삭제`} className="icon-button danger-text" disabled={busy} onClick={remove} type="button"><Trash2 size={17} /></button>}</div>
     <ErrorNotice error={action.error} retry={() => void view()} />
     {url && <img className="receipt-preview" src={url} alt={`지출 증빙 ${index + 1}`} />}
   </div>
@@ -135,6 +138,8 @@ function ExpenseCard({ expense, round, canEdit, highlighted, edit, reload }: { e
   const input = useRef<HTMLInputElement>(null)
   const uploadDialog = useRef<HTMLDialogElement>(null)
   const [file, setFile] = useState<File | null>(null)
+  const encodedFile = useRef<File | null>(null)
+  const [encoding, setEncoding] = useState(false)
   const name = (id: string) => round.members.find(member => member.userId === id)?.displayName ?? '과거 참여자'
   async function remove() {
     if (!window.confirm('이 지출과 첨부한 증빙을 삭제할까요?')) return
@@ -142,9 +147,15 @@ function ExpenseCard({ expense, round, canEdit, highlighted, edit, reload }: { e
   }
   async function upload() {
     if (!file) return
-    if (file.type && !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { uploadAction.setError(new Error('JPEG·PNG·WebP 이미지만 올릴 수 있어요.')); return }
-    const form = new FormData(); form.set('file', file); form.set('expectedVersion', String(round.version))
-    const result = await uploadAction.run(() => apiRequest(`/api/rounds/${round.id}/expenses/${expense.id}/receipts`, { method: 'POST', body: form }))
+    const result = await uploadAction.run(async () => {
+      if (!encodedFile.current) {
+        setEncoding(true)
+        try { encodedFile.current = await encodeReceipt(file) }
+        finally { setEncoding(false) }
+      }
+      const form = new FormData(); form.set('file', encodedFile.current); form.set('expectedVersion', String(round.version))
+      return apiRequest(`/api/rounds/${round.id}/expenses/${expense.id}/receipts`, { method: 'POST', body: form })
+    })
     if (result) uploadDialog.current?.close()
   }
   async function removeReceipt(id: string) {
@@ -159,10 +170,10 @@ function ExpenseCard({ expense, round, canEdit, highlighted, edit, reload }: { e
     {(expense.splitMode === 'CUSTOM' || expense.shares.some(share => share.amountMinor !== null)) && <details><summary>{round.finalizedAt !== null ? '최종 부담액 보기' : '개별 부담금 보기'}</summary><ul className="member-list">{expense.shares.map(share => <li key={share.userId}><span>{name(share.userId)}{share.receivedRemainder && <small className="subtle-tag">나머지 부담</small>}</span><strong className="money">{formatMoney(share.amountMinor ?? share.assignedAmountMinor ?? '0', expense.currency)}</strong></li>)}</ul></details>}
     {canEdit && <div className="inline-actions expense-card-actions"><button className="text-button" disabled={action.busy} onClick={edit} type="button"><Pencil size={15} /> 수정</button><button aria-controls={`receipt-upload-${expense.id}`} aria-haspopup="dialog" className="text-button" disabled={action.busy} onClick={() => uploadDialog.current?.showModal()} type="button"><ImagePlus size={15} /> 영수증 추가</button><button className="text-button danger-text" disabled={action.busy} onClick={() => void remove()} type="button"><Trash2 size={15} /> 삭제</button></div>}
     {expense.receipts.map((receipt, index) => <ReceiptImage key={receipt.id} receipt={receipt} index={index} canEdit={canEdit} busy={action.busy} remove={() => void removeReceipt(receipt.id)} />)}
-    {canEdit && <BottomSheet closeLabel="영수증 이미지 추가 팝업 닫기" dialogRef={uploadDialog} dismissible={!uploadAction.busy} id={`receipt-upload-${expense.id}`} onClose={() => { setFile(null); uploadAction.setError(null); if (input.current) input.current.value = '' }} subtitle="영수증 이미지" title="영수증 이미지 추가" titleId={`receipt-upload-heading-${expense.id}`}>
-        <label className="field"><span>이미지 파일</span><input accept="image/jpeg,image/png,image/webp" onChange={event => { setFile(event.target.files?.[0] ?? null); uploadAction.setError(null) }} ref={input} type="file" /></label>
-        <p className="help-text">사용 가능한 타입: JPEG, PNG, WebP</p>
-        <button className="primary-button" disabled={!file || uploadAction.busy} onClick={() => void upload()} type="button">{uploadAction.busy ? '업로드 중…' : '선택한 영수증 업로드'}</button>
+    {canEdit && <BottomSheet closeLabel="영수증 이미지 추가 팝업 닫기" dialogRef={uploadDialog} dismissible={!uploadAction.busy} id={`receipt-upload-${expense.id}`} onClose={() => { setFile(null); encodedFile.current = null; uploadAction.setError(null); if (input.current) input.current.value = '' }} subtitle="영수증 이미지" title="영수증 이미지 추가" titleId={`receipt-upload-heading-${expense.id}`}>
+        <label className="field"><span>이미지 파일</span><input accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" disabled={uploadAction.busy} onChange={event => { setFile(event.target.files?.[0] ?? null); encodedFile.current = null; uploadAction.setError(null) }} ref={input} type="file" /></label>
+        <p className="help-text">JPEG·PNG·WebP 이미지를 AVIF로 변환해 올려요. 변환한 파일은 10MB 이하만 사용할 수 있어요.</p>
+        <button className="primary-button" disabled={!file || uploadAction.busy} onClick={() => void upload()} type="button">{encoding ? '이미지 변환 중…' : uploadAction.busy ? '업로드 중…' : '선택한 영수증 업로드'}</button>
         <ErrorNotice error={uploadAction.error} retry={uploadAction.error instanceof ApiError && uploadAction.error.code === 'stale_round' ? () => void reload() : undefined} />
     </BottomSheet>}
     <ErrorNotice error={action.error} retry={action.error instanceof ApiError && action.error.code === 'stale_round' ? () => void reload() : undefined} />

@@ -10,7 +10,7 @@ export type RoundSummary = {
   version: number; createdAt: number; finalizedAt: number | null; completedAt: number | null;
   totals: CurrencyTotal[]; memberCount: number
 }
-export type Receipt = { id: string; mimeType: string; byteSize: number }
+export type Receipt = { id: string; mimeType: string; byteSize: number; storageStatus: 'PENDING' | 'READY' | 'FAILED' }
 export type Expense = {
   id: string; authorId: string; payerId: string; description: string; currency: Currency; amountMinor: string;
   splitMode: 'ALL' | 'SELECTED' | 'CUSTOM'; participantIds: string[]; baseShareMinor: string | null; remainderUnits: number | null;

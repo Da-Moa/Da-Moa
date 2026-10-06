@@ -1,3 +1,4 @@
+import { addStoredReceipt as addReceipt } from './receipt-worker-test-support'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import test from 'node:test'
@@ -9,7 +10,7 @@ import { getDatabasePool } from '../src/lib/db-client.mjs'
 import { uuidV7 } from '../src/lib/uuid.ts'
 import { signInKakao } from '../src/Global/Auth/Backend/index.ts'
 import { acceptInvite, createGroup, createInvite } from '../src/Domain/Group/Backend/index.ts'
-import { addReceipt, createRound, getReceipt, saveExpense } from '../src/Domain/Settle/Backend/index.ts'
+import { createRound, getReceipt, saveExpense } from '../src/Domain/Settle/Backend/index.ts'
 import { completeTestOnboarding } from './bank-test-support.ts'
 import { applyMigrations } from './migrations.mjs'
 
@@ -37,8 +38,8 @@ test('receipt read checks account and round participation in two SQL calls befor
     for (const actor of [participant, groupOnly]) await acceptInvite(actor, key(), invite.sharePath!.split('/').at(-1)!)
     const round = await createRound(owner, uuidV7(), group.id, { name: '영수증 조회 회차', participantIds: [owner.userId, participant.userId] })
     const expense = await saveExpense(owner, key(), round.id, { currency: 'KRW', description: '조회 검증 지출', amount: '10', payerId: owner.userId, splitMode: 'ALL', expectedVersion: round.version })
-    const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#fff' } }).png().toBuffer()
-    const saved = await addReceipt(owner, key(), round.id, expense.id, expense.version!, bytes, 'image/png')
+    const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#fff' } }).avif().toBuffer()
+    const saved = await addReceipt(owner, key(), round.id, expense.id, expense.version!, bytes, 'image/avif')
     const objectKey = (await db.query('SELECT object_key FROM expense_receipts WHERE id=$1', [saved.id])).rows[0].object_key
     let events: string[] = [], statements: string[] = []
     process.env.DB_QUERY_LOG = 'true'
