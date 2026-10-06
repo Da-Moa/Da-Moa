@@ -68,6 +68,7 @@ export async function getSettleResponse(request: NextRequest, path: string[]): P
       if (path[0] === 'groups' && path[2] === 'rounds') after(() => publishRoundInvalidation((data as { roundId?: string; id: string }).roundId ?? (data as { id: string }).id, affectedAudience))
       else if (path[0] === 'rounds') after(() => publishRoundInvalidation(path[1], affectedAudience, path[2] === 'settlement-check'))
     }
-    return Response.json({ data }, { headers: { 'Cache-Control': 'private, no-store' } })
+    const queuedReceipt = method === 'POST' && path[0] === 'rounds' && path.length === 5 && path[4] === 'receipts'
+    return Response.json({ data }, { status: queuedReceipt ? 202 : 200, headers: { 'Cache-Control': 'private, no-store' } })
   } catch (error) { return errorResponse(error) }
 }

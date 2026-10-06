@@ -1,3 +1,4 @@
+import { addStoredReceipt as addReceipt } from './receipt-worker-test-support'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import test from 'node:test'
@@ -9,7 +10,7 @@ import { getDatabasePool } from '../src/lib/db-client.mjs'
 import { uuidV7 } from '../src/lib/uuid.ts'
 import { signInKakao } from '../src/Global/Auth/Backend/index.ts'
 import { acceptInvite, createGroup, createInvite } from '../src/Domain/Group/Backend/index.ts'
-import { addReceipt, createRound, getReceipt, removeReceipt, saveExpense } from '../src/Domain/Settle/Backend/index.ts'
+import { createRound, getReceipt, removeReceipt, saveExpense } from '../src/Domain/Settle/Backend/index.ts'
 import { completeTestOnboarding } from './bank-test-support.ts'
 import { applyMigrations } from './migrations.mjs'
 

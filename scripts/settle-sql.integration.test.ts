@@ -1,3 +1,4 @@
+import { drainReceiptQueue } from './receipt-worker-test-support'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import test from 'node:test'
@@ -383,6 +384,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
             const original = await saveExpense(b, key(), deletionRound.id, { ...expenseBody, amount: '300', expectedVersion: 1 })
             const receipt = await addReceipt(b, key(), deletionRound.id, original.id, original.version!, bytes, 'image/avif')
             const request = { expectedVersion: receipt.version! }, requestKey = key()
+            await drainReceiptQueue()
             const objectKey = (await db.query('SELECT object_key FROM expense_receipts WHERE id=$1', [receipt.id])).rows[0].object_key
             const head = { Bucket: process.env.MINIO_BUCKET!, Key: objectKey }
             await trace(2, 'delete', () => assert.rejects(deleteExpense(null, '', deletionRound.id, original.id, {}), (error: { code: string }) => error.code === 'unauthorized'))
@@ -462,6 +464,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       const receiptKey = key(), receiptVersion = version
       const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#ffffff' } }).avif().toBuffer()
       const receipt = await trace(2, 'receipt', () => addReceipt(a, receiptKey, round.id, expense.id, receiptVersion, bytes, 'image/avif'))
+      await drainReceiptQueue()
       version = receipt.version!
       await trace(2, 'receipt', () => addReceipt(a, receiptKey, round.id, expense.id, receiptVersion, bytes, 'image/avif'))
       const stored = await trace(2, 'receipt-read', () => getReceipt(b, receipt.id))

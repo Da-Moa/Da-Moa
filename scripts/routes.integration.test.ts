@@ -1,3 +1,4 @@
+import { drainReceiptQueue } from './receipt-worker-test-support'
 import { uuidV7 } from '../src/lib/uuid.ts'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
@@ -136,8 +137,9 @@ test('Route Handler contracts enforce Bearer JWTs, origin, idempotency, normaliz
     form.set('file', new File([avif], 'receipt.avif', { type: 'image/avif' }))
     form.set('expectedVersion', String(e.version))
     const uploaded = await request(`rounds/${roundId}/expenses/${e.id}/receipts`, a.accessToken, 'POST', form)
-    assert.equal(uploaded.status, 200)
+    assert.equal(uploaded.status, 202)
     const receipt = (await uploaded.json()).data
+    await drainReceiptQueue()
     const binary = await request(`receipts/${receipt.id}`, b.accessToken)
     assert.equal(binary.headers.get('content-type'), 'image/avif')
     assert.equal(binary.headers.get('x-content-type-options'), 'nosniff')
@@ -154,8 +156,9 @@ test('Route Handler contracts enforce Bearer JWTs, origin, idempotency, normaliz
     largeForm.set('file', new File([largeAvif], 'large.avif', { type: 'image/avif' }))
     largeForm.set('expectedVersion', String(receipt.version))
     const largeUpload = await request(`rounds/${roundId}/expenses/${e.id}/receipts`, a.accessToken, 'POST', largeForm)
-    assert.equal(largeUpload.status, 200, await largeUpload.clone().text())
+    assert.equal(largeUpload.status, 202, await largeUpload.clone().text())
     const largeReceipt = (await largeUpload.json()).data
+    await drainReceiptQueue()
     const largeBinary = await request(`receipts/${largeReceipt.id}`, b.accessToken)
     assert.equal(largeBinary.headers.get('content-type'), 'image/avif')
     assert.deepEqual(Buffer.from(await largeBinary.arrayBuffer()), largeAvif)

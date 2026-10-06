@@ -249,18 +249,23 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     receiptForm.set('file', new File([avif], 'receipt.AVIF', { type: 'image/avif' }))
     receiptForm.set('expectedVersion', String(savedExpense.version))
     const receiptPath = `${origin}/api/rounds/${expenseRoundId}/expenses/${savedExpense.id}/receipts`
-    const receiptMessages = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
+    const receiptMessages = [mine, other].map(person => new Promise((resolve, reject) => {
+      const messages = [], timeout = setTimeout(() => { person.socket.off('message', receive); reject(new Error('Receipt completion notification timed out')) }, 10000)
+      function receive(bytes) { messages.push(bytes); if (messages.length === 2) { clearTimeout(timeout); person.socket.off('message', receive); resolve(messages) } }
+      person.socket.on('message', receive)
+    }))
     const receiptOutput = output.length
     const receiptResponse = await fetch(receiptPath, { method: 'POST', headers: receiptHeaders, body: receiptForm })
-    assert.equal(receiptResponse.status, 200, await receiptResponse.clone().text())
+    assert.equal(receiptResponse.status, 202, await receiptResponse.clone().text())
     const savedReceipt = (await receiptResponse.json()).data
-    for (const [bytes] of await Promise.all(receiptMessages)) assert.deepEqual(JSON.parse(bytes.toString()), {
+    for (const bytes of (await Promise.all(receiptMessages)).flat()) assert.deepEqual(JSON.parse(bytes.toString()), {
       type: 'invalidate', keys: ['rounds', `group-rounds:${groupId}`, `round:${expenseRoundId}`, `settlement:${expenseRoundId}`],
     })
     const receiptSql = output.slice(receiptOutput).split('SQL:').slice(1).map(sql => sql.trim())
-    assert.equal(receiptSql.length, 2, 'receipt upload including WebSocket publication uses two SQL calls')
+    assert.equal(receiptSql.length, 3, 'receipt enqueue uses two SQL calls and worker storage uses one')
     assert.match(receiptSql[0], /FROM\s+users/)
-    assert.match(receiptSql[1], /UPDATE\s+rounds[\s\S]*INSERT INTO\s+expense_receipts[\s\S]*INSERT INTO\s+mutation_requests/)
+    assert.match(receiptSql[1], /UPDATE\s+rounds[\s\S]*INSERT INTO\s+expense_receipts[\s\S]*graphile_worker\.add_job[\s\S]*INSERT INTO\s+mutation_requests/)
+    assert.match(receiptSql[2], /UPDATE\s+expense_receipts[\s\S]*storage_status/)
     assert.ok(receiptSql.every(sql => !/\b(BEGIN|COMMIT|ROLLBACK)\b|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
     const receiptReadOutput = output.length
     const receiptImage = await fetch(`${origin}/api/receipts/${savedReceipt.id}`, { headers: { authorization: `Bearer ${other.accessToken}` } })
@@ -281,7 +286,7 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     try {
       const replayOutput = output.length
       const replay = await fetch(receiptPath, { method: 'POST', headers: receiptHeaders, body: receiptForm })
-      assert.equal(replay.status, 200)
+      assert.equal(replay.status, 202)
       assert.deepEqual((await replay.json()).data, savedReceipt)
       await new Promise(resolve => setTimeout(resolve, 250))
       assert.equal(receiptReplayPublished, false)

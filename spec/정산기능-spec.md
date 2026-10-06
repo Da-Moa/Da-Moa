@@ -39,7 +39,7 @@ OCR, 계좌 검증 API, 금융기관을 통한 실제 송금·입금 자동 검�
 | 일반 참여자 나가기 | 본인이 제외되지 않은 미종료 회차에 참여 중이면 차단. 그 외에는 현재 모임 멤버십의 `left_at`만 설정 |
 | 모임 생성자 모임 닫기 | 일반 나가기는 제공하지 않음. 모임 전체에 미종료 회차가 있으면 차단하고, 회차가 없거나 모두 완료됐으면 모임·회차를 보존한 채 모든 활성 멤버십과 초대를 종료 |
 | 탈퇴 차단 관련성 | 제외 여부와 무관하게 참여 이력이 있는 모든 미종료 회차. 수취인으로 남은 제외자도 포함 |
-| 영수증 저장 | 비공개 MinIO. 브라우저 WASM Worker가 JPEG·PNG·WebP를 AVIF로 변환하며 서버는 AV1 코덱·10 MiB 이하를 검사해 받은 바이트 그대로 저장. 기존 세 형식 자료 조회 호환, 여러 파일은 각각 업로드 |
+| 영수증 저장 | 비공개 MinIO. 브라우저 WASM Worker가 JPEG·PNG·WebP를 AVIF로 변환하며 서버는 AV1 코덱·10 MiB 이하를 검사하고 PostgreSQL 영속 큐에 접수. 워커가 받은 바이트 그대로 MinIO에 저장. 기존 세 형식 자료 조회 호환, 여러 파일은 각각 업로드 |
 | 초대 | 모임 생성자 발급·폐기, 발급 후 7일 유효한 다회 수락 링크. 원문 토큰은 저장하지 않음 |
 | 동시 쓰기 | 초기에는 공통 DB 트랜잭션 잠금 하나로 직렬화. 읽기는 직렬화하지 않음 |
 | 실시간 반영 | Ably WebSocket의 인증된 사용자별 채널로 재조회 키만 발행. DB와 기존 REST API가 원본 |
@@ -168,7 +168,7 @@ stateDiagram-v2
 | `round_members` | `(round_id, user_id)` PK, `display_name_snapshot`, `joined_at`, `excluded_at`. 제외해도 행 삭제 금지. `excluded_at` 변경은 `group_members.left_at`에 전파하지 않음 |
 | `expenses` | `id`, `round_id`, `author_id`, `payer_id`, `description`, `currency`(지원 통화 CHECK), `amount_minor`, `split_mode`(`ALL/SELECTED/CUSTOM`), `base_share_minor` nullable, `remainder_units` nullable, `created_at`, `updated_at`, `updated_by` |
 | `expense_shares` | `(expense_id, user_id)` PK, `round_id`, `assigned_amount_minor` nullable, `final_amount_minor` nullable, `received_remainder` nullable. 행 자체가 실제 부담자 목록이며 CUSTOM의 양의 원본 부담금은 assigned_amount_minor에 보존 |
-| `expense_receipts` | `id`, `expense_id`, `uploaded_by`, `mime_type`, `byte_size`, `sha256`, `object_key`, `created_at`. 기존 BYTEA 자료는 조회 호환. 신규 AVIF와 기존 JPEG·PNG·WebP 조회 호환 MIME, 양의 바이트 크기 CHECK |
+| `expense_receipts` | `id`, `expense_id`, `uploaded_by`, `mime_type`, `byte_size`, `sha256`, `object_key`, `storage_status`, `created_at`. 기존 BYTEA 자료는 조회 호환. 신규 AVIF와 기존 JPEG·PNG·WebP 조회 호환 MIME, 양의 바이트 크기 CHECK |
 | `settlement_balances` | `(round_id, user_id, currency)` PK, `paid_minor`, `burden_minor`, `balance_minor`. `balance_minor = burden_minor - paid_minor` CHECK |
 | `settlement_transfers` | `(round_id, sender_id, receiver_id, currency)` PK, `amount_minor > 0`, `received_at` nullable. `sender_id <> receiver_id` CHECK. 수취인만 자신의 송금 행 확인 여부를 변경 |
 | `mutation_requests` | `(actor_id, operation, request_key)` PK, `request_digest`, `resource_id`, `response_metadata JSONB`, `created_at`. 성공한 명령의 최소 결과만 저장 |
@@ -534,9 +534,9 @@ USD·JPY 응답은 `account` 필드를 포함하지 않는다. 계좌 일부가 
 
 브라우저는 JPEG·PNG·WebP를 WASM AVIF 인코더의 Web Worker에서 처리한다. 방향을 보정하고 긴 변을 최대 2048px로 줄이며 확대하지 않는다. quality 80·speed 8·4:4:4로 인코딩하고 메타데이터를 전달하지 않는다. 변환 실패는 업로드 전에 표시하며 지출 원본을 유지한다.
 
-서버는 `.avif` 확장자·image/avif MIME·실제 HEIF/AV1 코덱·단일 이미지를 확인한다. 파일은 10 MiB(10,485,760바이트) 이하이며 초과하면 413 `receipt_too_large`다. AUTH 뒤 multipart 본문을 10 MiB + 64 KiB로 제한한다. Sharp는 메타데이터 검사에만 사용하고 입력 픽셀 수 안전장치를 유지한다. 서버는 픽셀 변환·재인코딩 없이 받은 바이트 그대로 저장하고 그 바이트로 SHA-256을 계산한다. 다른 포맷·위장 파일은 415 `unsupported_receipt_type`이다. Nginx와 Next Proxy의 본문 버퍼 상한은 multipart 부가 데이터를 고려해 11 MiB로 설정한다.
+서버는 `.avif` 확장자·image/avif MIME·실제 HEIF/AV1 코덱·단일 이미지를 확인한다. 파일은 10 MiB(10,485,760바이트) 이하이며 초과하면 413 `receipt_too_large`다. AUTH 뒤 multipart 본문을 10 MiB + 64 KiB로 제한한다. Sharp는 메타데이터 검사에만 사용하고 입력 픽셀 수 안전장치를 유지한다. 서버는 받은 바이트로 SHA-256을 계산하고 AUTH 회원 조회 후 권한·상태·버전 확인과 큐 등록을 단일 SQL로 처리한다. PENDING 영수증·멱등 결과·Graphile Worker 작업(base64 파일 포함)을 원자적으로 저장하고 202로 응답한다. 워커는 픽셀 변환·재인코딩 없이 MinIO에 저장하고 업무 SQL 한 번으로 객체 키·READY 상태를 기록한다. 큐 제어 SQL은 이 횟수와 별도다. 동시 처리는 2개, 실패는 최대 25회 지수 백오프로 재시도한다. 최종 실패는 FAILED로 표시하고 사용자에게 삭제 후 다시 업로드하도록 안내한다. 다른 포맷·위장 파일은 415 `unsupported_receipt_type`이다. Nginx와 Next Proxy의 본문 버퍼 상한은 multipart 부가 데이터를 고려해 11 MiB로 설정한다.
 
-증빙은 비공개 MinIO에 저장하고 PostgreSQL에는 객체 키·MIME·크기·해시와 지출 FK만 남긴다. 목록에는 바이트 본문을 포함하지 않는다. 지출 삭제·회차 취소의 DB 삭제 후 객체를 정리하며, 저장 거절·성공 재생에는 이번 시도의 객체만 정리한다. 기존 BYTEA와 JPEG·PNG·WebP 자료 조회를 유지한다.
+증빙은 비공개 MinIO에 저장하고 PostgreSQL의 영수증 행에는 객체 키·MIME·크기·해시·저장 상태와 지출 FK를 남긴다. 큐의 AVIF 바이트는 성공 후 제거하며 미처리·실패 작업은 DB에 보관한다. 프로세스가 중지돼도 미처리 작업이 유지되고 재시작한 워커가 이어서 처리한다. 목록에는 바이트 본문을 포함하지 않는다. 지출 삭제·회차 취소의 DB 삭제 후 객체를 정리하며, 권한 거절·성공 재생은 작업을 추가하거나 MinIO에 접근하지 않는다. 영수증·지출 삭제는 대기·실패 작업도 함께 제거하고 이미 처리 중이면 워커가 뒤늦게 생성한 객체를 정리한다. 기존 BYTEA와 JPEG·PNG·WebP 자료 조회를 유지한다.
 
 계좌·정산·증빙 API는 `Cache-Control: private, no-store`를 사용한다. 이미지에는 검증된 Content-Type과 `X-Content-Type-Options: nosniff`를 지정한다. 계좌 조회에 공유 서버 캐시를 쓰지 않으며, 안내 화면 진입·새로고침 시 서버에서 현재값을 읽는다. 클라이언트 라우터의 사전 로드된 화면만으로 최신 계좌를 확정하지 않는다.
 

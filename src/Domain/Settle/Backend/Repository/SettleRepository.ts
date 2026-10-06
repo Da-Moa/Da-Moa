@@ -30,7 +30,7 @@ export function findRoundDetail(client: Database, id: string, userId: string, cr
         'shares',COALESCE((SELECT jsonb_agg(jsonb_build_object('user_id',s.user_id,'assigned_amount_minor',s.assigned_amount_minor::text,
           'final_amount_minor',s.final_amount_minor::text,'received_remainder',s.received_remainder) ORDER BY s.user_id)
           FROM expense_shares s WHERE s.expense_id=e.id),'[]'::jsonb),
-        'receipts',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',rc.id,'mime_type',rc.mime_type,'byte_size',rc.byte_size)
+        'receipts',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',rc.id,'mime_type',rc.mime_type,'byte_size',rc.byte_size,'storage_status',rc.storage_status)
           ORDER BY rc.created_at,rc.id) FROM expense_receipts rc WHERE rc.expense_id=e.id),'[]'::jsonb))
         ORDER BY e.created_at DESC,e.id DESC) AS items
       FROM (SELECT * FROM expenses WHERE round_id=r.id AND ($3::bigint IS NULL OR (created_at,id)<($3::bigint,$4::text))
@@ -533,7 +533,7 @@ export function findSettlement(client: Database, roundId: string, userId: string
     ) incoming ON true WHERE r.id=$1`, [roundId, userId])
 }
 
-export async function insertReceipt(client: Database, roundId: string, expenseId: string, userId: string, key: string, digest: string, expectedVersion: number, id: string, mimeType: string, byteSize: number, sha256: string, objectKey: string, now: number) {
+export async function enqueueReceipt(client: Database, roundId: string, expenseId: string, userId: string, key: string, digest: string, expectedVersion: number, id: string, mimeType: string, byteSize: number, sha256: string, content: string, now: number) {
   return (await client.query<ReceiptCreationRow>(`WITH actor AS (
     SELECT EXISTS(SELECT 1 FROM users WHERE id=$3 AND deleted_at IS NULL AND onboarding_completed_at IS NOT NULL) AS active
   ), context AS MATERIALIZED (
@@ -551,18 +551,29 @@ export async function insertReceipt(client: Database, roundId: string, expenseId
         WHERE e.id=$2 AND e.round_id=r.id AND (r.creator_id=$3 OR (viewer.excluded_at IS NULL AND e.author_id=$3)))
     RETURNING r.id,r.status,r.version
   ), inserted AS (
-    INSERT INTO expense_receipts(id,expense_id,uploaded_by,mime_type,byte_size,sha256,object_key,created_at)
-    SELECT $7,$2,$3,$8,$9,$10,$11,$12 FROM changed RETURNING id
+    INSERT INTO expense_receipts(id,expense_id,uploaded_by,mime_type,byte_size,sha256,storage_status,created_at)
+    SELECT $7,$2,$3,$8,$9,$10,'PENDING',$12 FROM changed RETURNING id
+  ), queued AS MATERIALIZED (
+    SELECT graphile_worker.add_job('store_receipt', json_build_object('id',inserted.id,'userId',$3::text,'content',$11::text),
+      max_attempts := 25, job_key := 'receipt:' || inserted.id::text) AS job FROM inserted
   ), recorded AS (
     INSERT INTO mutation_requests(actor_id,operation,request_key,request_digest,resource_id,response_metadata,created_at)
     SELECT $3,'receipt.create',$4,$5,inserted.id,
       jsonb_build_object('id',inserted.id,'roundId',changed.id,'status',changed.status,'version',changed.version),$12
-    FROM inserted CROSS JOIN changed RETURNING request_digest,response_metadata
+    FROM inserted CROSS JOIN changed CROSS JOIN queued WHERE (queued.job).id IS NOT NULL RETURNING request_digest,response_metadata
   ) SELECT context.*,actor.active AS actor_active,
     COALESCE(recorded.request_digest,saved.request_digest) AS request_digest,
     COALESCE(recorded.response_metadata,saved.response_metadata) AS response_metadata,EXISTS(SELECT 1 FROM inserted) AS inserted
     FROM actor LEFT JOIN context ON true LEFT JOIN saved ON true LEFT JOIN recorded ON true`,
-  [roundId, expenseId, userId, key, digest, expectedVersion, id, mimeType, byteSize, sha256, objectKey, now])).rows[0]
+  [roundId, expenseId, userId, key, digest, expectedVersion, id, mimeType, byteSize, sha256, content, now])).rows[0]
+}
+
+export async function finishReceiptStorage(client: Database, id: string, objectKey: string | null) {
+  return (await client.query<{ round_id: string; group_id: string; user_ids: string[] }>(`WITH saved AS (
+    UPDATE expense_receipts SET object_key=$2,storage_status=CASE WHEN $2::text IS NULL THEN 'FAILED' ELSE 'READY' END
+    WHERE id=$1 AND ($2::text IS NOT NULL OR storage_status='PENDING') RETURNING expense_id
+  ) SELECT r.id AS round_id,r.group_id,ARRAY(SELECT user_id FROM round_members WHERE round_id=r.id) AS user_ids
+    FROM saved JOIN expenses e ON e.id=saved.expense_id JOIN rounds r ON r.id=e.round_id`, [id, objectKey])).rows[0]
 }
 
 const receiptDeletionContextSql = `context AS MATERIALIZED (

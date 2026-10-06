@@ -1,3 +1,4 @@
+import { addStoredReceipt as addReceipt } from './receipt-worker-test-support'
 import { uuidV7 } from '../src/lib/uuid.ts'
 import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
@@ -7,7 +8,7 @@ import { readAccessToken } from '../src/lib/auth.ts'
 import { signInKakao } from '../src/Global/Auth/Backend/index.ts'
 import { createDatabaseClient } from '../src/lib/db.ts'
 import { acceptInvite, createGroup, createInvite } from '../src/Domain/Group/Backend/index.ts'
-import { addReceipt, createRound, deleteExpense, getReceipt, getRound, removeReceipt, roundCommand, saveExpense } from '../src/Domain/Settle/Backend/index.ts'
+import { createRound, deleteExpense, getReceipt, getRound, removeReceipt, roundCommand, saveExpense } from '../src/Domain/Settle/Backend/index.ts'
 import { completeTestOnboarding } from './bank-test-support.ts'
 import { applyMigrations } from './migrations.mjs'
 
@@ -29,11 +30,7 @@ test('legacy receipt migration preserves images and restores expense deletion an
     await client.query(`SET search_path TO ${schema}`)
     process.env.DATABASE_URL = scopedUrl.toString()
     await applyMigrations(client)
-    // Reproduce the already-applied migration's historical inline-storage schema.
-    await client.query(`ALTER TABLE expense_receipts DROP COLUMN object_key;
-      ALTER TABLE expense_receipts ADD COLUMN content BYTEA NOT NULL;
-      ALTER TABLE expense_receipts ADD CHECK (byte_size = octet_length(content));
-      DELETE FROM schema_migrations WHERE version='014-legacy-receipt-storage.sql'`)
+
 
     const members = []
     for (const name of ['A', 'B', '외부인']) {
@@ -51,6 +48,14 @@ test('legacy receipt migration preserves images and restores expense deletion an
     const empty = await expense()
     const original = await expense()
     const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#fff' } }).png().toBuffer()
+    // Reproduce the already-applied migration's historical inline-storage schema.
+    await client.query(`DROP TRIGGER cancel_receipt_upload ON expense_receipts;
+      DROP FUNCTION cancel_receipt_upload();
+      ALTER TABLE expense_receipts DROP COLUMN object_key;
+      ALTER TABLE expense_receipts DROP COLUMN storage_status;
+      ALTER TABLE expense_receipts ADD COLUMN content BYTEA NOT NULL;
+      ALTER TABLE expense_receipts ADD CHECK (byte_size = octet_length(content));
+      DELETE FROM schema_migrations WHERE version IN ('014-legacy-receipt-storage.sql','017-receipt-upload-queue.sql')`)
     const seed = async (expenseId: string) => {
       const id = key()
       await client.query('INSERT INTO expense_receipts(id,expense_id,uploaded_by,mime_type,byte_size,sha256,content,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
@@ -58,7 +63,7 @@ test('legacy receipt migration preserves images and restores expense deletion an
       return id
     }
     const receiptId = await seed(original.id!)
-    const deleteKey = key(), deleteBody = await version()
+    const deleteKey = key(), deleteBody = { expectedVersion: original.version! }
     await assert.rejects(deleteExpense(a, deleteKey, round.id, empty.id!, deleteBody), (error: unknown) => (error as { code: string }).code === '42703')
     await applyMigrations(client)
     await applyMigrations(client)

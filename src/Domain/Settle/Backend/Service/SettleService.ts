@@ -3,7 +3,7 @@ import { randomInt, randomUUID } from 'node:crypto'
 import { requireAccount } from '../../../../Global/Auth/Backend'
 import { MAX_GROUP_MEMBERS } from '../../../Group/Shared'
 import { bankDisplayName } from '../../../User/Shared'
-import { AppError, badInput, withDatabaseConnection, withWriteLock, withWriteTransaction, mutationDigest, mutationResult, deleteReceiptObject, putReceipt, readReceipt, type Database, domainMutation, idsInput, nowSeconds, onlyKeys, pageOf, pagination, textInput, type Identity } from '../../../../Global/Util/Backend'
+import { AppError, badInput, withDatabaseConnection, withWriteLock, withWriteTransaction, mutationDigest, mutationResult, deleteReceiptObject, readReceipt, type Database, domainMutation, idsInput, nowSeconds, onlyKeys, pageOf, pagination, textInput, type Identity } from '../../../../Global/Util/Backend'
 import { validateReceipt } from './ReceiptFile'
 import { MAX_ROUND_CURRENCIES, formatMoney, MAX_EXPENSE_MAJOR, MAX_ROUND_TOTAL_MAJOR, minorLimit, parseAmount, requireCurrency, type Currency, type CreateRoundRequestDTO, type ExpenseRequestDTO, type VersionRequestDTO, type SettlementCheckRequestDTO } from '../../Shared'
 import { calculateBase, finalizeCurrencySettlement, previewCurrencySettlement, validateCustomShares } from '../../Shared'
@@ -49,13 +49,13 @@ async function membersFor(client: Database, roundId: string): Promise<RoundMembe
   return rows.map(memberDetails)
 }
 
-function expenseDetails(row: ExpenseRow, part: Omit<ShareRow, 'expense_id'>[], receipts: Pick<ReceiptRow, 'id' | 'mime_type' | 'byte_size'>[]): Expense {
+function expenseDetails(row: ExpenseRow, part: Omit<ShareRow, 'expense_id'>[], receipts: Pick<ReceiptRow, 'id' | 'mime_type' | 'byte_size' | 'storage_status'>[]): Expense {
   const base = row.split_mode === 'CUSTOM' ? null : calculateBase(BigInt(row.amount_minor), part.length)
   return {
     id: row.id, authorId: row.author_id, payerId: row.payer_id, description: row.description, currency: row.currency, amountMinor: row.amount_minor,
     splitMode: row.split_mode, participantIds: part.map(s => s.user_id), baseShareMinor: base ? row.base_share_minor ?? base.base.toString() : null, remainderUnits: base ? row.remainder_units ?? base.remainder : 0,
     shares: part.map(s => ({ userId: s.user_id, assignedAmountMinor: s.assigned_amount_minor, amountMinor: s.final_amount_minor, receivedRemainder: s.received_remainder })),
-    receipts: receipts.map(r => ({ id: r.id, mimeType: r.mime_type, byteSize: r.byte_size })),
+    receipts: receipts.map(r => ({ id: r.id, mimeType: r.mime_type, byteSize: r.byte_size, storageStatus: r.storage_status })),
     createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
   }
 }
@@ -649,31 +649,22 @@ export async function addReceipt(access: Identity, key: string, roundId: string,
   const sourceSha256 = file.sha256
   const digest = mutationDigest(key, { roundId, expenseId, expectedVersion, sourceSha256, type })
   const id = randomUUID()
-  // Each attempt owns its object so a rejected retry cannot overwrite or delete a saved receipt.
-  const objectKey = await putReceipt(`receipts/${account.id}/${id}.avif`, file.content, file.mimeType)
-  let retained = false, resolved = false
+  // Only an accepted attempt creates a receipt and its durable job, in the same SQL statement.
+  let current
   try {
-    const current = await withDatabaseConnection(client => repository.insertReceipt(client, roundId, expenseId, account.id, key, digest, expectedVersion, id, file.mimeType, file.content.length, file.sha256, objectKey, nowSeconds()))
-    resolved = true
-    retained = current.inserted
-    if (!current.actor_active) throw new AppError(401, 'unauthorized', '로그인이 필요합니다')
-    const result = mutationResult<MutationResult>(current, digest)
-    if (!result) {
-      validateEditableExpense(current, account.id, expectedVersion)
-      throw new AppError(409, 'stale_round', '다른 변경이 먼저 저장됐어요. 최신 내역을 확인해 주세요')
-    }
-    if (current.inserted) captureAudience?.({ groupId: current.group_id, userIds: current.user_ids })
-    return result
+    current = await withDatabaseConnection(client => repository.enqueueReceipt(client, roundId, expenseId, account.id, key, digest, expectedVersion, id, file.mimeType, file.content.length, file.sha256, file.content.toString('base64'), nowSeconds()))
   } catch (error) {
-    // A PostgreSQL statement error rolls back every CTE; a lost response may have committed.
-    if (error && typeof error === 'object' && 'code' in error && /^(?:22|23|40|P0)/.test(String(error.code))) resolved = true
-    if (error && typeof error === 'object' && 'code' in error && error.code === '23505') {
-      throw new AppError(409, 'idempotency_conflict', '같은 요청 키로 다른 내용을 저장할 수 없어요')
-    }
+    if (error && typeof error === 'object' && 'code' in error && error.code === '23505') throw new AppError(409, 'idempotency_conflict', '같은 요청 키로 다른 내용을 저장할 수 없어요')
     throw error
-  } finally {
-    if (resolved && !retained) await cleanupReceiptObjects([objectKey])
   }
+  if (!current.actor_active) throw new AppError(401, 'unauthorized', '로그인이 필요합니다')
+  const result = mutationResult<MutationResult>(current, digest)
+  if (!result) {
+    validateEditableExpense(current, account.id, expectedVersion)
+    throw new AppError(409, 'stale_round', '다른 변경이 먼저 저장됐어요. 최신 내역을 확인해 주세요')
+  }
+  if (current.inserted) captureAudience?.({ groupId: current.group_id, userIds: current.user_ids })
+  return result
 }
 
 export async function removeReceipt(access: Identity, key: string, roundId: string, expenseId: string, receiptId: string, body: VersionRequestDTO | Record<string, unknown>, captureAudience?: ReceiptAudience) {
@@ -725,6 +716,8 @@ export async function getReceipt(access: Identity, receiptId: string) {
     if (!rows[0]) throw missing()
     return rows[0]
   })
+  if (receipt.storage_status === 'PENDING') throw new AppError(409, 'receipt_pending', '영수증을 저장하고 있어요')
+  if (receipt.storage_status === 'FAILED') throw new AppError(503, 'storage_unavailable', '영수증 저장에 실패했어요. 삭제 후 다시 올려 주세요')
   const content = receipt.object_key ? await readReceipt(receipt.object_key) : receipt.content
   if (!content) throw missing()
   return { mimeType: receipt.mime_type, content }

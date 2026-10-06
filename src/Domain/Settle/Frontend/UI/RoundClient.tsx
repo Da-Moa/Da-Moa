@@ -124,7 +124,9 @@ function ReceiptImage({ receipt, index, canEdit, remove, busy }: { receipt: Rece
     if (blob) setUrl(URL.createObjectURL(blob))
   }
   return <div className="receipt-item">
-    <div className="row-between"><button className="text-button" disabled={action.busy} onClick={() => url ? setUrl(null) : void view()} type="button">{url ? '증빙 접기' : `증빙 ${index + 1} 보기`}</button>{canEdit && <button aria-label={`증빙 ${index + 1} 삭제`} className="icon-button danger-text" disabled={busy} onClick={remove} type="button"><Trash2 size={17} /></button>}</div>
+    <div className="row-between">{receipt.storageStatus === 'PENDING' || receipt.storageStatus === 'FAILED'
+      ? <span role="status">{receipt.storageStatus === 'PENDING' ? `증빙 ${index + 1} 저장 중…` : `증빙 ${index + 1} 저장 실패 · 삭제 후 다시 올려 주세요`}</span>
+      : <button className="text-button" disabled={action.busy} onClick={() => url ? setUrl(null) : void view()} type="button">{url ? '증빙 접기' : `증빙 ${index + 1} 보기`}</button>}{canEdit && <button aria-label={`증빙 ${index + 1} 삭제`} className="icon-button danger-text" disabled={busy} onClick={remove} type="button"><Trash2 size={17} /></button>}</div>
     <ErrorNotice error={action.error} retry={() => void view()} />
     {url && <img className="receipt-preview" src={url} alt={`지출 증빙 ${index + 1}`} />}
   </div>

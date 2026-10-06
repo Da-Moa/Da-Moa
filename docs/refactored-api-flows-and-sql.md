@@ -1136,21 +1136,21 @@ SQL: AUTH **1회** + 미완료 수취인/권한/알림/멱등 통합 조회 **1�
 
 ### S19. POST /api/rounds/{roundId}/expenses/{expenseId}/receipts — 영수증 추가
 
-ExpenseCard.upload() → 브라우저 WASM Worker AVIF 변환 → Nginx 본문 제한 → POST multipart → Node Proxy/JWT Guard → SettleController → SettleService.addReceipt() → AUTH → 본문 크기 제한·AVIF/AV1 검사 → 원본 바이트 MinIO PUT → 조건부 저장 단일 SQL → MutationResult → 대화상자 종료 → WebSocket invalidation으로 상세 재조회.
+ExpenseCard.upload() → 브라우저 WASM Worker AVIF 변환 → Nginx/Next Proxy 본문 제한 → POST multipart → JWT Guard → AUTH → AVIF 크기·코덱 검증 → 권한·상태·버전 검사와 영속 큐 접수 단일 SQL → 202 Accepted → WebSocket GET으로 PENDING 표시.
 
-1. 운영 Nginx는 영수증 경로에 `client_max_body_size 11m`과 `proxy_request_buffering on`을 적용한다. 파일·폼 필드를 포함한 요청 본문 전체가 11 MiB를 초과하면 앱에 전달하기 전에 413으로 거절한다. Next Proxy 버퍼는 11 MiB로 설정한다. 앱은 AUTH 뒤 본문을 10 MiB + 64 KiB로 제한하고 파일은 10 MiB 이하만 허용한다.
-2. Service는 공용 연결에서 `requireAccount()`로 **AUTH 회원 조회 1회**를 수행한다. Controller의 multipart reader는 그 뒤에 실행하므로 탈퇴/미가입 사용자에게는 파일을 해석하지 않는다. 파일·expectedVersion 각 한 개와 허용 폼 키, 버전 형식, 요청 키를 검사한다.
-3. 클라이언트는 JPEG/JPG·PNG·WebP를 WASM Worker에서 방향 보정·긴 변 최대 2048px의 AVIF로 변환하고 재시도에는 같은 변환 파일을 사용한다. 서버 ReceiptFile은 10 MiB 이하·AVIF 확장자·MIME·실제 HEIF/AV1 코덱·단일 페이지를 확인한다. Sharp는 메타데이터 검사에만 사용하고 재인코딩하지 않는다. 받은 AVIF의 SHA-256·경로·버전·claimed type을 기존 멱등 digest로 사용한다.
-4. Global MinIOUtil은 시도마다 다른 `receipts/{userId}/{receiptId}.avif` 키로 비공개 버킷에 저장하고 **PUT 성공 뒤 객체 키를 반환**한다. 같은 요청의 동시 시도·재시도도 저장된 객체를 덮어쓰지 않는다.
-5. `insertReceipt()`의 단일 CTE SQL은 활성 사용자·회차 참여 이력·지출 존재·RECORDING·작성자/회차 생성자·expectedVersion·기존 성공을 검사한다. `UPDATE rounds ... WHERE`로 버전·상태를 조건부 변경하고, 성공한 행에서만 객체 키/MIME/크기/해시 INSERT와 멱등 결과 INSERT를 함께 수행한다. 모두 한 문장으로 자동 커밋하며 일부 실패는 문장 전체가 취소된다. 명시적 트랜잭션·advisory lock은 없다. 회차 UPDATE의 행 잠금 대기 후 상태/버전 조건을 다시 검사하여 먼저 확정·잠긴 회차에는 저장하지 않는다.
-6. 알림 대상도 같은 SQL에 포함한다. 저장 성공에만 확보한 audience로 WebSocket invalidation을 발행하므로 추가 SQL이 없고, 성공 재생은 알림을 발행하지 않는다. 같은 키·본문은 이전 결과를 반환하고 다른 본문은 409 idempotency_conflict다. 동시 요청에서 한 요청이 먼저 버전을 바꾸면 나머지는 stale_round로 거절될 수 있으며 같은 키로 재시도하여 저장 결과를 확인한다.
-7. DB가 저장을 거절하거나 성공을 재생하면 이번 시도의 객체를 삭제한다. PostgreSQL의 명확한 문장 오류도 롤백 후 정리한다. 연결 단절 등 저장 여부가 불명확하면 커밋된 영수증을 지우지 않도록 객체를 보존한다. 객체 삭제 실패/불명확한 저장 결과에는 별도 저장소 점검이 필요하다.
-
-정상 저장·성공 재생·권한/상태/버전 거절은 **AUTH 1 + 저장 SQL 1 = 총 2회**다. 입력·확장자·실제 이미지 오류 또는 MinIO PUT 실패는 **AUTH 1회**로 끝나며 인증 토큰 누락은 **0회**다. 재생도 요청한 순서대로 AVIF 검사·PUT 후 마지막 SQL에서 판별한다. 메타데이터 검사·MinIO 작업은 SQL 횟수에 포함하지 않는다.
+1. Nginx와 Next Proxy 버퍼는 multipart 부가 데이터를 고려해 11 MiB로 설정한다. AUTH 후 앱 본문 상한은 10 MiB + 64 KiB이며 AVIF 파일은 10 MiB 이하만 허용한다.
+2. `requireAccount()`로 **AUTH 회원 조회 1회**를 수행한 뒤 multipart를 읽는다. 입력 키·파일 한 개·버전·AVIF 확장자·MIME·실제 AV1 코덱·단일 페이지를 검증한다. 서버는 재인코딩하지 않는다.
+3. `enqueueReceipt()` 단일 CTE는 참여 이력과 **지출 작성자 또는 회차 생성자** 권한·제외·RECORDING·expectedVersion을 검사한다. 조건부 회차 버전 변경, PENDING 영수증, Graphile Worker 작업(base64 AVIF), 멱등 결과를 원자적으로 기록한다. `graphile_worker.add_job()`은 이 SQL 안에서 호출한다. 저장 거절·다른 본문·성공 재생은 작업이나 MinIO PUT을 추가하지 않는다. 명시적 트랜잭션·advisory lock은 없다.
+4. 접수 성공은 **202**이며 완료 응답이 아니다. 접수 시 scoped invalidation을 보내 저장 중 상태를 표시한다. 요청 업무 SQL은 **AUTH 1 + 권한 확인·큐 등록 1 = 총 2회**다. 회원/이미지 검증 실패는 AUTH 1회, 토큰 누락은 0회다.
+5. Next instrumentation이 Graphile Worker를 시작하며 동시 2개까지 처리한다. PostgreSQL에 보관된 작업을 인스턴스 재시작 후에도 가져온다. `RECEIPT_WORKER_ENABLED=false`는 처리를 중지하고 접수는 유지한다. `npm run db:migrate`가 프레임워크 큐 스키마와 영수증 상태 이행을 설치한다.
+6. 워커는 `receipts/{userId}/{receiptId}.avif`라는 고정 키로 MinIO PUT한다. 재시도는 같은 키·바이트를 사용한다. **업무 SQL 1회**로 객체 키·READY를 저장하고 완료 invalidation을 보낸다. 요청 후 성공에 직접 GET을 추가하지 않는다. 큐의 작업 획득·완료·재시도·마이그레이션 SQL은 업무 SQL과 별도다.
+7. MinIO/DB 실패는 최대 25회 지수 백오프로 재시도하며 마지막 실패를 FAILED로 표시한다. 사용자는 실패 증빙을 삭제 후 다시 올릴 수 있다. 프레임워크는 성공 작업의 파일 payload를 제거하고 실패 작업의 시도 횟수·오류를 DB에 남긴다. 영수증/지출 삭제 트리거가 대기·실패 큐 작업을 같은 DB 문장에서 제거한다. 이미 처리 중이면 워커가 뒤늦게 PUT한 객체를 정리한다. 강제 종료된 처리 중 작업은 Graphile Worker의 기본 4시간 잠금 만료 뒤 재실행된다. 불명확한 DB 결과는 객체를 지우지 않고 같은 키로 재시도한다.
 
 검증(2026-10-04): `npm test` **96개**, 격리 복사본의 `npm run test:integration` **68개**, `npm run build` 통과. 실제 PostgreSQL SQL 로그와 MinIO 명령으로 AUTH → multipart reader → AVIF PUT → 단일 SQL 순서, 총 2회, 권한/버전 거절·재생 시 이번 객체만 정리, 기존 객체 보존, INSERT 실패 시 버전/영수증 전체 롤백, 회차 잠금 대기 후 저장 거절을 확인했다. 운영 Nginx는 백업·`nginx -t`·reload 후 10 MiB 본문의 앱 도달(403), 10 MiB+1바이트의 Nginx 413을 확인했다. 실제 HTTP 요청은 WebSocket 발행까지 SQL 2회이며 재생은 알림 0회다. 별도 모바일 Chrome 시나리오에서 작성자 업로드·AVIF 응답/미리보기와 POST 직후 GET 0회 → WebSocket 후 상세 GET 1회를 확인했다. 전체 `browser-check.mjs`는 영수증 이전 단계의 지출 삭제 409에서 중단되어 전체 UI 통과로 기록하지 않는다.
 
 검증(2026-10-06, 클라이언트 변환): 단위 테스트 107개·새 격리 DB의 통합 테스트 84개와 프로덕션 빌드 통과. 서버 인코딩 금지·바이트 동일성, AUTH → AVIF 검증 → PUT → 단일 SQL, 10 MiB 경계값·초과·위장 포맷 거절 및 기존 BYTEA 조회를 확인했다. 실제 HTTP Proxy에서도 10 MiB 저장·10 MiB+1바이트 413·위장 PNG 415를 확인했다. Safari WASM Worker에서 제공 사진(1536×2048, 179,113바이트)과 스크린샷(650×1262, 27,295바이트)을 변환해 테스트 회차에 업로드하고 AV1 메타데이터를 확인했다.
+
+검증(2026-10-06, 영속 큐): 단위 테스트 **107개**, 새 격리 DB·MinIO의 통합 테스트 **82개**, 프로덕션 빌드 통과. AUTH → 요청 본문 읽기 → 권한·큐 접수의 업무 SQL 2회와 워커 PUT → 저장 SQL 1회, 재생 시 추가 작업 없음, MinIO 장애 재시도·최종 FAILED, 대기 삭제 시 큐 제거·처리 중 삭제 시 객체 정리, 기존 BYTEA 이행을 확인했다. 실제 HTTP/WebSocket에서도 접수·완료 알림을 각각 확인했다. 워커를 중지한 프로덕션 서버에 제공 사진의 AVIF를 접수(202/PENDING·조회 409)한 뒤 해당 서버를 강제 종료하고 같은 DB로 재시작했으며, READY·조회 200·179,113바이트 동일성과 성공 작업 제거를 확인했다.
 
 ### S20. GET /api/receipts/{receiptId} — 인증된 영수증 이미지 조회
 

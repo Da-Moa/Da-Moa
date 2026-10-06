@@ -1,9 +1,15 @@
 import { readFile } from 'node:fs/promises'
+import { Pool } from 'pg'
+import { runMigrations } from 'graphile-worker'
 
-export const migrationFiles = ['001-auth-lifecycle.sql', '002-groups-settlement.sql', '003-round-cascade-constraints.sql', '004-round-currency.sql', '005-round-creator.sql', '006-receipt-avif.sql', '007-settlement-check.sql', '008-transfer-receipt-check.sql', '009-openbanking.sql', '010-custom-expense-shares.sql', '011-formatted-account-number.sql', '012-correct-account-number-format.sql', '013-bank-display-groups.sql', '014-legacy-receipt-storage.sql', '015-expanded-round-currencies.sql', '016-expense-currencies.sql']
+export const migrationFiles = ['001-auth-lifecycle.sql', '002-groups-settlement.sql', '003-round-cascade-constraints.sql', '004-round-currency.sql', '005-round-creator.sql', '006-receipt-avif.sql', '007-settlement-check.sql', '008-transfer-receipt-check.sql', '009-openbanking.sql', '010-custom-expense-shares.sql', '011-formatted-account-number.sql', '012-correct-account-number-format.sql', '013-bank-display-groups.sql', '014-legacy-receipt-storage.sql', '015-expanded-round-currencies.sql', '016-expense-currencies.sql', '017-receipt-upload-queue.sql']
 
 // Accepts a connected PostgreSQL client; tests can use their isolated database.
 export async function applyMigrations(client) {
+  const pgPool = new Pool({ ...client.connectionParameters, password: client.connectionParameters.password, max: 1 })
+  pgPool.on('error', error => console.error('Worker migration pool error', error))
+  pgPool.on('connect', connection => connection.on('error', error => console.error('Worker migration connection error', error)))
+  try { await runMigrations({ pgPool }) } finally { await pgPool.end() }
   await client.query('BEGIN')
   try {
     await client.query("SET LOCAL lock_timeout = '15s'")
