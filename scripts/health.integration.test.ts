@@ -3,6 +3,9 @@ import { channel } from 'node:diagnostics_channel'
 import { createServer } from 'node:http'
 import test from 'node:test'
 import { GET } from '../src/app/api/health/[[...check]]/route.ts'
+import { startReceiptWorker } from '../src/Domain/Settle/Backend/index.ts'
+import { createDatabaseClient } from '../src/lib/db-client.mjs'
+import { applyMigrations } from './migrations.mjs'
 
 const testUrl = process.env.TEST_DATABASE_URL
 if (!testUrl || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(testUrl).hostname) || !new URL(testUrl).pathname.toLowerCase().includes('test')) throw new Error('TEST_DATABASE_URL must name an isolated local test database')
@@ -53,6 +56,64 @@ test('individual health routes probe PostgreSQL and MinIO independently', async 
     assert.equal(failedDatabase.status, 503)
     assert.deepEqual(await failedDatabase.json(), { status: 'down', checks: { database: 'down' } })
   } finally {
+    await new Promise<void>(resolve => minio.close(() => resolve()))
+  }
+})
+
+test('receipt worker probes distinguish startup, queue errors, dependencies and shutdown', async () => {
+  process.env.DATABASE_URL = testUrl
+  const db = createDatabaseClient(testUrl)
+  await db.connect()
+  try { await applyMigrations(db) } finally { await db.end() }
+  let minioStatus = 200
+  const minio = createServer((_request, response) => response.writeHead(minioStatus).end())
+  await new Promise<void>(resolve => minio.listen(0, '127.0.0.1', resolve))
+  Object.assign(process.env, { MINIO_ENDPOINT: `http://127.0.0.1:${(minio.address() as { port: number }).port}`, MINIO_BUCKET: 'worker-health-test', MINIO_ACCESS_KEY: 'test', MINIO_SECRET_KEY: 'test' })
+  const get = (scope: string) => GET(new Request(`http://localhost/api/health/${scope}`), { params: Promise.resolve({ check: scope.split('/') }) })
+  let runner: Awaited<ReturnType<typeof startReceiptWorker>> | undefined
+  try {
+    assert.equal((await get('worker')).status, 503)
+    runner = await startReceiptWorker()
+    assert.equal((await get('worker')).status, 200)
+    process.env.RECEIPT_WORKER_ENABLED = 'false'
+    assert.equal((await get('worker')).status, 503)
+    assert.equal((await get('worker/readyz')).status, 503)
+    delete process.env.RECEIPT_WORKER_ENABLED
+    const workers = new Map<string, import('graphile-worker').Worker>()
+    runner.events.on('worker:getJob:empty', ({ worker }) => workers.set(worker.workerId, worker))
+    const deadline = Date.now() + 5000
+    while (workers.size < 2 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(workers.size, 2)
+    assert.equal((await get('worker/readyz')).status, 200)
+    for (const worker of workers.values()) runner.events.emit('worker:getJob:error', { ctx: {} as never, worker, error: new Error('secret queue error') })
+    assert.equal((await get('worker')).status, 200, 'a recoverable queue error must not fail liveness')
+    const queueDown = await get('worker/readyz')
+    assert.equal(queueDown.status, 503)
+    assert.equal((await queueDown.json()).checks.worker, 'down')
+    const recoverDeadline = Date.now() + 5000
+    while ((await get('worker/readyz')).status !== 200 && Date.now() < recoverDeadline) await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal((await get('worker/readyz')).status, 200)
+    delete process.env.MINIO_ACCESS_KEY
+    assert.equal((await get('worker/readyz')).status, 503, 'storage configuration is required')
+    process.env.MINIO_ACCESS_KEY = 'test'
+    minioStatus = 503
+    assert.equal((await get('worker')).status, 200)
+    const storageDown = await get('worker/readyz')
+    assert.equal(storageDown.status, 503)
+    assert.equal((await storageDown.json()).checks.minio, 'down')
+    minioStatus = 200
+    process.env.DATABASE_URL = ''
+    const databaseDown = await get('worker/readyz')
+    assert.equal(databaseDown.status, 503)
+    assert.equal((await databaseDown.json()).checks.database, 'down')
+    process.env.DATABASE_URL = testUrl
+    await runner.stop()
+    await runner.promise
+    runner = undefined
+    assert.equal((await get('worker')).status, 503)
+    assert.equal((await get('worker/readyz')).status, 503)
+  } finally {
+    if (runner) { await runner.stop(); await runner.promise }
     await new Promise<void>(resolve => minio.close(() => resolve()))
   }
 })

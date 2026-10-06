@@ -7,7 +7,32 @@ import type { HealthProbes } from '../Domain/Health/Backend/Service/HealthServic
 import type { HealthScope } from '../Domain/Health/Shared/DTO/HealthDTO'
 import { openApiDocument } from './openapi'
 
-const healthResponse = (scope: HealthScope, checks: HealthProbes) => getHealthResponse(scope === 'overall' ? undefined : [scope], checks)
+const healthResponse = (scope: HealthScope, checks: HealthProbes) => getHealthResponse(scope === 'overall' ? undefined : scope.split('/'), checks)
+
+test('worker liveness skips dependencies and readiness reports each failure without exposing errors', async () => {
+  for (const failed of [undefined, 'worker', 'database', 'minio'] as const) {
+    const calls: string[] = []
+    const probe = async (name: string) => { calls.push(name); if (name === failed) throw new Error('secret connection detail') }
+    const checks = { database: () => probe('database'), minio: () => probe('minio'), worker: () => probe('worker'), workerReady: () => probe('worker') }
+    const live = await healthResponse('worker', checks)
+    assert.deepEqual(calls, ['worker'])
+    assert.equal(live.status, failed === 'worker' ? 503 : 200)
+    calls.length = 0
+    const ready = await healthResponse('worker/readyz', checks)
+    assert.equal(ready.status, failed ? 503 : 200)
+    assert.deepEqual(calls.sort(), ['database', 'minio', 'worker'])
+    assert.deepEqual(await ready.json(), { status: failed ? 'down' : 'ok', checks: { worker: failed === 'worker' ? 'down' : 'ok', database: failed === 'database' ? 'down' : 'ok', minio: failed === 'minio' ? 'down' : 'ok' } })
+    assert.equal(ready.headers.get('Cache-Control'), 'no-store')
+  }
+  for (const check of [['worker', 'extra'], ['worker', 'readyz', 'extra'], ['overall']]) {
+    assert.equal((await getHealthResponse(check)).status, 404)
+  }
+  for (const path of ['/api/health/worker', '/api/health/worker/readyz'] as const) {
+    const operation = openApiDocument.paths[path].get
+    assert.deepEqual(operation.security, [])
+    assert.ok(operation.responses['503'])
+  }
+})
 
 test('individual health checks only probe the selected dependency and report failures', async () => {
   for (const scope of ['database', 'minio'] as const) {

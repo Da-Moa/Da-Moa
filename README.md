@@ -46,7 +46,9 @@ npm run dev
 
 상태 확인 API는 인증 없이 사용할 수 있습니다. `/api/health/live`는 앱 응답만, `/api/health/database`는 PostgreSQL `SELECT 1`만, `/api/health/minio`는 MinIO 저장소의 읽기·쓰기 정족수만 확인합니다. `/api/health/dependencies`는 DB와 MinIO를 함께, `/api/health`는 앱과 두 의존 서비스를 종합해 반환합니다. 검사 실패 시 해당 API는 `503`과 검사 결과를 반환하며 응답을 캐시하지 않습니다. MinIO 검사는 실제 객체 작업이나 영수증 버킷·키 권한까지 검증하지 않습니다.
 
-모든 `/api` 요청은 Node.js `src/proxy.ts` → Global Auth `JwtGuard`를 먼저 통과합니다. JWT 누락·서명/만료/종류 오류는 입력 검증·DB 접근 전에 `401`로 차단합니다. 공개 예외는 위 다섯 헬스체크의 GET/HEAD와 로그인 시작 `GET /api/auth/kakao`, 기존 개발 전용 `POST /api/auth/test-login`입니다. `POST /api/auth/access-token`·갱신은 Refresh JWT, 로그아웃은 Refresh 또는 Access JWT를 요구합니다. 카카오 콜백은 기존 OIDC 검증을 유지하며 페이지·정적 파일은 API Guard 대상이 아닙니다. `/api/docs`·`/api/openapi.json`도 인증 대상입니다. 인증은 서명된 JWT만 사용하며 로그인·가입·갱신·로그아웃 모두 DB 세션을 생성하거나 조회하지 않습니다. Access JWT는 10분이며 localStorage에 저장하고 Authorization: Bearer 헤더로 보냅니다. Refresh JWT는 HttpOnly 쿠키에 저장합니다. 로그인 완료 페이지는 Refresh JWT로 Access JWT를 받아 저장합니다. 갱신은 JWT의 app/onboarding 목적을 보존하며 onboarding의 원래 만료는 연장하지 않습니다. 로그아웃은 localStorage의 Access 토큰과 Refresh 쿠키를 삭제하며 이전 토큰은 자체 만료까지 유효합니다. 회원 가입·탈퇴 상태 및 모임·회차 권한 검사는 유지합니다.
+`GET/HEAD /api/health/worker`는 현재 인스턴스의 영수증 워커 실행 상태만 확인합니다(DB·MinIO 호출 없음). `GET/HEAD /api/health/worker/readyz`는 워커가 실행 중이고 적어도 한 실행 슬롯이 큐 조회에 성공했는지, MinIO 환경변수가 갖춰졌는지, PostgreSQL `SELECT 1`과 MinIO 읽기·쓰기 정족수 검사가 성공하는지 확인합니다. 둘 다 정상 `200`, 시작 전·비활성화·종료 또는 검사 실패 `503`이며 `Cache-Control: no-store`입니다. 큐 조회 실패는 다음 성공한 조회에서 회복되며 빈 큐도 정상입니다. 개별 작업 실패나 큐 적체만으로 워커 liveness를 실패시키지 않습니다. readyz도 실제 영수증 버킷·키 권한이나 PUT 성공까지 검증하지 않습니다. 워커는 앱과 같은 Node 프로세스에 있으므로 앱이 종료되면 두 API에도 접속할 수 없습니다.
+
+모든 `/api` 요청은 Node.js `src/proxy.ts` → Global Auth `JwtGuard`를 먼저 통과합니다. JWT 누락·서명/만료/종류 오류는 입력 검증·DB 접근 전에 `401`로 차단합니다. 공개 예외는 위 헬스체크의 GET/HEAD와 로그인 시작 `GET /api/auth/kakao`, 기존 개발 전용 `POST /api/auth/test-login`입니다. `POST /api/auth/access-token`·갱신은 Refresh JWT, 로그아웃은 Refresh 또는 Access JWT를 요구합니다. 카카오 콜백은 기존 OIDC 검증을 유지하며 페이지·정적 파일은 API Guard 대상이 아닙니다. `/api/docs`·`/api/openapi.json`도 인증 대상입니다. 인증은 서명된 JWT만 사용하며 로그인·가입·갱신·로그아웃 모두 DB 세션을 생성하거나 조회하지 않습니다. Access JWT는 10분이며 localStorage에 저장하고 Authorization: Bearer 헤더로 보냅니다. Refresh JWT는 HttpOnly 쿠키에 저장합니다. 로그인 완료 페이지는 Refresh JWT로 Access JWT를 받아 저장합니다. 갱신은 JWT의 app/onboarding 목적을 보존하며 onboarding의 원래 만료는 연장하지 않습니다. 로그아웃은 localStorage의 Access 토큰과 Refresh 쿠키를 삭제하며 이전 토큰은 자체 만료까지 유효합니다. 회원 가입·탈퇴 상태 및 모임·회차 권한 검사는 유지합니다.
 
 헬스체크 구현은 `src/Domain/Health/Backend`의 Controller·Service·Repository와 `src/Domain/Health/Shared/DTO`로 분리합니다. Next.js Route Handler는 Backend의 공개 진입점만 호출합니다. DB 검사는 공용 연결 풀에서 `SELECT 1`을 한 번 실행하며 별도 트랜잭션·명시적 락·`SET LOCAL`을 사용하지 않습니다.
 
@@ -191,6 +193,10 @@ location = /api/health/minio { return 404; }
 location = /api/health/minio/ { return 404; }
 location = /api/health/dependencies { return 404; }
 location = /api/health/dependencies/ { return 404; }
+location = /api/health/worker { return 404; }
+location = /api/health/worker/ { return 404; }
+location = /api/health/worker/readyz { return 404; }
+location = /api/health/worker/readyz/ { return 404; }
 location ~ ^/api/rounds/[^/]+/expenses/[^/]+/receipts/?$ {
     client_max_body_size 11m;
     proxy_request_buffering on;

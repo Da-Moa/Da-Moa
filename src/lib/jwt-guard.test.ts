@@ -31,11 +31,11 @@ test('Node JWT guard rejects protected requests before body validation and permi
     }
     assert.equal(proxy(request('/api/groups', 'POST', `${ACCESS_TOKEN_COOKIE_NAME}=${access}`)).headers.get('x-middleware-next'), '1')
     assert.equal(proxy(new NextRequest('http://localhost/api/groups', { headers: { cookie: `${ACCESS_TOKEN_COOKIE_NAME}=${access}` } })).status, 401)
-    for (const path of ['/api/health', '/api/health/live', '/api/health/database', '/api/health/minio', '/api/health/dependencies']) {
+    for (const path of ['/api/health', '/api/health/live', '/api/health/database', '/api/health/minio', '/api/health/dependencies', '/api/health/worker', '/api/health/worker/readyz']) {
       for (const method of ['GET', 'HEAD']) assert.equal(proxy(request(path, method)).headers.get('x-middleware-next'), '1')
       assert.equal(proxy(request(path, 'POST')).status, 401)
     }
-    for (const path of ['/api/health-extra', '/api/health/live/extra', '/api/auth/kakao/extra', '/api/auth/test-login/extra', '/api/auth/unknown']) {
+    for (const path of ['/api/health-extra', '/api/health/live/extra', '/api/health/worker/extra', '/api/health/worker/readyz/extra', '/api/auth/kakao/extra', '/api/auth/test-login/extra', '/api/auth/unknown']) {
       assert.equal(proxy(request(path)).status, 401)
     }
     assert.equal(proxy(request('/api/auth/kakao')).headers.get('x-middleware-next'), '1')

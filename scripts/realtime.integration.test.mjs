@@ -58,12 +58,20 @@ test('authenticated WebSocket receives only its own committed invalidations', as
       const denied = await fetch(`${origin}/api/groups`, { method: 'POST', headers: { origin, authorization: `Bearer ${token}` }, body: '{invalid json' })
       assert.equal(denied.status, 401)
     }
-    for (const path of ['', '/live', '/database', '/minio', '/dependencies']) {
+    for (const path of ['', '/live', '/database', '/minio', '/dependencies', '/worker', '/worker/readyz']) {
       const health = await fetch(`${origin}/api/health${path}`)
       assert.equal(health.status, 200, `Public health ${path}`)
       assert.equal((await health.json()).status, 'ok')
     }
     assert.equal((await fetch(`${origin}/api/health/live`, { method: 'HEAD' })).status, 200)
+    for (const path of ['/api/health/worker', '/api/health/worker/readyz']) {
+      const head = await fetch(`${origin}${path}`, { method: 'HEAD' })
+      assert.equal(head.status, 200)
+      assert.equal(head.headers.get('cache-control'), 'no-store')
+      assert.equal(await head.text(), '')
+      assert.equal((await fetch(`${origin}${path}`, { method: 'POST' })).status, 401)
+      assert.equal((await fetch(`${origin}${path}/extra`)).status, 401)
+    }
     const invalidRefresh = await fetch(`${origin}/api/auth/refresh`, { method: 'POST', headers: { origin } })
     assert.equal(invalidRefresh.status, 401)
     assert.equal(invalidRefresh.headers.getSetCookie().length, 2)

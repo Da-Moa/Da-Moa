@@ -1,5 +1,5 @@
 import 'server-only'
-export { startReceiptWorker } from './Service/ReceiptWorker'
+export { startReceiptWorker, checkReceiptWorker, checkReceiptWorkerReady } from './Service/ReceiptWorker'
 
 export { hasUnfinishedGroupRounds, hasUnfinishedGroupParticipation } from './Repository/ParticipationRepository'
 export { getUnfinishedUserRounds, unfinishedUserRoundsSql } from './Repository/ParticipationRepository'

@@ -115,7 +115,7 @@ function operation(tag: string, summary: string, options: OperationOptions = {})
 const roundCommand = (summary: string, description: string) => operation('정산', summary, { mutation: true, request: versionBody, description })
 const healthCheck: Schema = { type: 'string', enum: ['ok', 'down'] }
 function healthOperation(summary: string, names: string[]) {
-  const dependencyCheck = names.some(name => name === 'database' || name === 'minio')
+  const dependencyCheck = names.some(name => name !== 'application')
   const checks = object(Object.fromEntries(names.map(name => [name, name === 'application' ? { type: 'string', enum: ['ok'] } : healthCheck])), names)
   const response = { content: { 'application/json': { schema: object({ status: dependencyCheck ? healthCheck : { type: 'string', enum: ['ok'] }, checks }, ['status', 'checks']) } } }
   return { tags: ['상태'], summary, description: '인증 없이 조회합니다. 결과를 캐시하지 않으며 내부 오류·연결 정보는 반환하지 않습니다.', security: [], responses: { '200': { description: '모든 검사 정상', ...response }, ...(dependencyCheck ? { '503': { description: '하나 이상의 의존 서비스 장애', ...response } } : {}) } }
@@ -185,6 +185,8 @@ export const openApiDocument = {
     '/api/health/database': { get: healthOperation('PostgreSQL 연결 확인', ['database']) },
     '/api/health/minio': { get: healthOperation('MinIO 저장소 읽기·쓰기 상태 확인', ['minio']) },
     '/api/health/dependencies': { get: healthOperation('PostgreSQL·MinIO 저장소 읽기·쓰기 상태 확인', ['database', 'minio']) },
+    '/api/health/worker': { get: healthOperation('영수증 워커 실행 상태 확인', ['worker']) },
+    '/api/health/worker/readyz': { get: healthOperation('영수증 워커 큐 조회·PostgreSQL·MinIO 처리 준비 상태 확인', ['worker', 'database', 'minio']) },
     '/api/health': { get: healthOperation('전체 상태 확인', ['application', 'database', 'minio']) },
     '/api/auth/kakao': {
       get: {

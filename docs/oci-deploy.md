@@ -231,6 +231,10 @@ server {
     location = /api/health/minio/ { return 404; }
     location = /api/health/dependencies { return 404; }
     location = /api/health/dependencies/ { return 404; }
+    location = /api/health/worker { return 404; }
+    location = /api/health/worker/ { return 404; }
+    location = /api/health/worker/readyz { return 404; }
+    location = /api/health/worker/readyz/ { return 404; }
     location ~ ^/api/rounds/[^/]+/expenses/[^/]+/receipts/?$ {
         client_max_body_size 11m;
         proxy_request_buffering on;

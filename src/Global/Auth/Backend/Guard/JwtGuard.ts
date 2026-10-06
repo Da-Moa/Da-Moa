@@ -7,7 +7,7 @@ import {
 } from '../auth-util'
 import { AppError, errorResponse } from '../../../../lib/errors'
 
-const publicHealthPaths = ['/api/health', '/api/health/live', '/api/health/database', '/api/health/minio', '/api/health/dependencies']
+const publicHealthPaths = ['/api/health', '/api/health/live', '/api/health/database', '/api/health/minio', '/api/health/dependencies', '/api/health/worker', '/api/health/worker/readyz']
 
 export function jwtGuard(request: NextRequest): Response | null {
   const { pathname } = request.nextUrl
