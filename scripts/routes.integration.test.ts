@@ -1,6 +1,6 @@
 import { uuidV7 } from '../src/lib/uuid.ts'
 import assert from 'node:assert/strict'
-import { randomBytes, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import test from 'node:test'
 import { NextRequest } from 'next/server'
 import sharp from 'sharp'
@@ -132,8 +132,8 @@ test('Route Handler contracts enforce Bearer JWTs, origin, idempotency, normaliz
     assert.deepEqual((await replay.json()).data, e)
     assert.equal((await request(`rounds/${roundId}/expenses/${e.id}/receipts`, null, 'POST', {})).status, 401)
     const form = new FormData()
-    const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#369' } }).png().toBuffer()
-    form.set('file', new File([png], 'receipt.png', { type: 'image/png' }))
+    const avif = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#369' } }).avif().toBuffer()
+    form.set('file', new File([avif], 'receipt.avif', { type: 'image/avif' }))
     form.set('expectedVersion', String(e.version))
     const uploaded = await request(`rounds/${roundId}/expenses/${e.id}/receipts`, a.accessToken, 'POST', form)
     assert.equal(uploaded.status, 200)
@@ -144,19 +144,28 @@ test('Route Handler contracts enforce Bearer JWTs, origin, idempotency, normaliz
     assert.equal(binary.headers.get('cache-control'), 'private, no-store')
     const converted = Buffer.from(await binary.arrayBuffer())
     assert.equal((await sharp(converted).metadata()).mediaType, 'image/avif')
-    assert.notDeepEqual(converted, png)
+    assert.deepEqual(converted, avif)
     assert.equal((await request(`receipts/${receipt.id}`, outsider.accessToken)).status, 404)
-    const largePng = await sharp(randomBytes(1024 * 1024 * 3), { raw: { width: 1024, height: 1024, channels: 3 } }).png({ compressionLevel: 0 }).toBuffer()
-    assert.ok(largePng.length > 2097152)
+    const largeAvif = Buffer.alloc(10 * 1024 * 1024)
+    avif.copy(largeAvif)
+    largeAvif.writeUInt32BE(largeAvif.length - avif.length, avif.length)
+    largeAvif.write('free', avif.length + 4, 'ascii')
     const largeForm = new FormData()
-    largeForm.set('file', new File([largePng], 'large.png', { type: 'image/png' }))
+    largeForm.set('file', new File([largeAvif], 'large.avif', { type: 'image/avif' }))
     largeForm.set('expectedVersion', String(receipt.version))
     const largeUpload = await request(`rounds/${roundId}/expenses/${e.id}/receipts`, a.accessToken, 'POST', largeForm)
     assert.equal(largeUpload.status, 200, await largeUpload.clone().text())
     const largeReceipt = (await largeUpload.json()).data
     const largeBinary = await request(`receipts/${largeReceipt.id}`, b.accessToken)
     assert.equal(largeBinary.headers.get('content-type'), 'image/avif')
-    assert.equal((await sharp(await largeBinary.arrayBuffer()).metadata()).mediaType, 'image/avif')
+    assert.deepEqual(Buffer.from(await largeBinary.arrayBuffer()), largeAvif)
+    largeForm.set('expectedVersion', String(largeReceipt.version))
+    largeForm.set('file', new File([Buffer.alloc(10 * 1024 * 1024 + 1)], 'too-large.avif', { type: 'image/avif' }))
+    const tooLarge = await request(`rounds/${roundId}/expenses/${e.id}/receipts`, a.accessToken, 'POST', largeForm)
+    assert.equal(tooLarge.status, 413)
+    assert.equal((await tooLarge.json()).error, 'receipt_too_large')
+    largeForm.set('file', new File([Buffer.alloc(10 * 1024 * 1024 + 65536)], 'too-large-body.avif', { type: 'image/avif' }))
+    assert.equal((await request(`rounds/${roundId}/expenses/${e.id}/receipts`, a.accessToken, 'POST', largeForm)).status, 413)
     const confirmed = (await (await request(`rounds/${roundId}/confirm`, a.accessToken, 'POST', { expectedVersion: largeReceipt.version })).json()).data
     const sent = await request(`rounds/${roundId}/send`, a.accessToken, 'POST', { expectedVersion: confirmed.version })
     assert.equal(sent.status, 200)

@@ -345,15 +345,11 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     await t.test('receipt storage, authorization, failed upload preservation and nonempty cancel rejection', async () => {
       const r = await round()
       const e = await expense(r.id, b, b.userId, '10')
-      const sources = [
-        { mimeType: 'image/jpeg', content: await sharp({ create: { width: 2, height: 2, channels: 3, background: '#f33' } }).jpeg().toBuffer() },
-        { mimeType: 'image/png', content: await sharp({ create: { width: 2, height: 2, channels: 3, background: '#3f3' } }).png().toBuffer() },
-        { mimeType: 'image/webp', content: await sharp({ create: { width: 2, height: 2, channels: 3, background: '#33f' } }).webp().toBuffer() },
-      ]
-      await assert.rejects(addReceipt(c, key(), r.id, e.id, e.version!, sources[1].content, 'image/png'), code('forbidden'))
+      const sources = await Promise.all(['#f33', '#3f3', '#33f'].map(async background => ({ mimeType: 'image/avif', content: await sharp({ create: { width: 2, height: 2, channels: 3, background } }).avif().toBuffer() })))
+      await assert.rejects(addReceipt(c, key(), r.id, e.id, e.version!, sources[1].content, 'image/avif'), code('forbidden'))
       await assert.rejects(addReceipt(b, key(), r.id, e.id, e.version!, Buffer.from('<svg/>'), 'image/svg+xml'), code('unsupported_receipt_type'))
       await assert.rejects(addReceipt(b, key(), r.id, e.id, e.version!, sources[1].content, 'image/jpeg'), code('unsupported_receipt_type'))
-      await assert.rejects(addReceipt(b, key(), r.id, e.id, e.version!, sources[0].content.subarray(0, -2), 'image/jpeg'), code('unsupported_receipt_type'))
+      await assert.rejects(addReceipt(b, key(), r.id, e.id, e.version!, sources[0].content.subarray(0, 32), 'image/avif'), code('unsupported_receipt_type'))
       const uploaded: MutationResult[] = []
       for (const source of sources) {
         const expectedVersion = (await get(r.id)).version, uploadKey = key()
@@ -361,7 +357,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
         const stored = await getReceipt(a, receipt.id)
         assert.equal(stored.mimeType, 'image/avif')
         assert.equal((await sharp(stored.content).metadata()).mediaType, 'image/avif')
-        assert.notDeepEqual(Buffer.from(stored.content), source.content)
+        assert.deepEqual(Buffer.from(stored.content), source.content)
         const metadata = (await get(r.id)).expenses[0].receipts.find(item => item.id === receipt.id)
         assert.equal(metadata?.mimeType, 'image/avif')
         assert.equal(metadata?.byteSize, stored.content.length)

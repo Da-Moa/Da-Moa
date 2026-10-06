@@ -245,8 +245,8 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     const receiptTicket = randomUUID()
     const receiptHeaders = { origin, authorization: `Bearer ${mine.accessToken}`, 'idempotency-key': receiptTicket }
     const receiptForm = new FormData()
-    const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#fff' } }).png().toBuffer()
-    receiptForm.set('file', new File([png], 'receipt.PNG', { type: 'image/png' }))
+    const avif = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#fff' } }).avif().toBuffer()
+    receiptForm.set('file', new File([avif], 'receipt.AVIF', { type: 'image/avif' }))
     receiptForm.set('expectedVersion', String(savedExpense.version))
     const receiptPath = `${origin}/api/rounds/${expenseRoundId}/expenses/${savedExpense.id}/receipts`
     const receiptMessages = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))

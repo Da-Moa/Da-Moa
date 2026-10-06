@@ -23,7 +23,7 @@ runtimeUrl.searchParams.set('application_name', applicationName)
 process.env.DATABASE_URL = runtimeUrl.toString()
 process.env.AUTH_JWT_SECRET ||= 'integration-only-not-a-production-secret-0123456789'
 const key = () => randomUUID()
-const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#fff' } }).png().toBuffer()
+const avif = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#fff' } }).avif().toBuffer()
 
 async function member(): Promise<AccessToken> {
   const limited = await signInKakao(`concurrency-test:${key()}`, { displayName: '경합 검증 사용자', email: null, profileImageUrl: null })
@@ -516,7 +516,7 @@ test('receipt storage rejects a concurrent round lock after its conditional UPDA
     await gate.query('BEGIN')
     gateHeld = true
     await gate.query('SELECT id FROM rounds WHERE id=$1 FOR UPDATE', [fixture.roundId])
-    upload = addReceipt(fixture.participant, requestKey, fixture.roundId, fixture.expenseId, fixture.version, png, 'image/png')
+    upload = addReceipt(fixture.participant, requestKey, fixture.roundId, fixture.expenseId, fixture.version, avif, 'image/avif')
       .then(result => ({ result }), error => ({ error }))
 
     // Observe the actual pending PostgreSQL lock, proving parsing completed before the state change.

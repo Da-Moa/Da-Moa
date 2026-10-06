@@ -376,12 +376,12 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       await t.test('expense DELETE checks permissions before locking and commits one atomic deletion before receipt cleanup', async () => {
         const storage = new S3Client({ endpoint: process.env.MINIO_ENDPOINT, region: 'us-east-1', forcePathStyle: true,
           credentials: { accessKeyId: process.env.MINIO_ACCESS_KEY!, secretAccessKey: process.env.MINIO_SECRET_KEY! } })
-        const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#fff' } }).png().toBuffer()
+        const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#fff' } }).avif().toBuffer()
         try {
           for (const actor of [b, a]) {
             const deletionRound = await createRound(a, uuidV7(), group.id, body)
             const original = await saveExpense(b, key(), deletionRound.id, { ...expenseBody, amount: '300', expectedVersion: 1 })
-            const receipt = await addReceipt(b, key(), deletionRound.id, original.id, original.version!, bytes, 'image/png')
+            const receipt = await addReceipt(b, key(), deletionRound.id, original.id, original.version!, bytes, 'image/avif')
             const request = { expectedVersion: receipt.version! }, requestKey = key()
             const objectKey = (await db.query('SELECT object_key FROM expense_receipts WHERE id=$1', [receipt.id])).rows[0].object_key
             const head = { Bucket: process.env.MINIO_BUCKET!, Key: objectKey }
@@ -460,10 +460,10 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       const deleted = await trace(6, 'delete', () => deleteExpense(b, key(), round.id, participantExpense.id, { expectedVersion: version }))
       version = deleted.version!
       const receiptKey = key(), receiptVersion = version
-      const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#ffffff' } }).png().toBuffer()
-      const receipt = await trace(2, 'receipt', () => addReceipt(a, receiptKey, round.id, expense.id, receiptVersion, bytes, 'image/png'))
+      const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#ffffff' } }).avif().toBuffer()
+      const receipt = await trace(2, 'receipt', () => addReceipt(a, receiptKey, round.id, expense.id, receiptVersion, bytes, 'image/avif'))
       version = receipt.version!
-      await trace(2, 'receipt', () => addReceipt(a, receiptKey, round.id, expense.id, receiptVersion, bytes, 'image/png'))
+      await trace(2, 'receipt', () => addReceipt(a, receiptKey, round.id, expense.id, receiptVersion, bytes, 'image/avif'))
       const stored = await trace(2, 'receipt-read', () => getReceipt(b, receipt.id))
       assert.equal(stored.mimeType, 'image/avif')
       const removed = await trace(3, 'receipt-delete', () => removeReceipt(a, key(), round.id, expense.id, receipt.id, { expectedVersion: version }))

@@ -84,7 +84,7 @@ KAKAO_REDIRECT_URI=http://localhost:3000/auth/v1/kakao,http://192.168.219.102:30
 
 통화의 주 단위를 기준으로 지출 한 건은 100,000,000 이하, 한 회차의 통화별 전체 지출은 1,000,000,000 이하로 제한합니다. 수정할 때는 기존 금액을 기존 통화 합계에서 제외한 뒤 새 통화 합계와 통화 종류 수를 다시 검사합니다. 서로 다른 통화의 합계·잔액·송금은 상계하지 않습니다. API·스키마 이행·검증 기록은 [지출별 복수 통화 변경](docs/expense-currencies.md)을 참고하세요.
 
-영수증은 지출 저장 후 별도로 업로드하는 **증빙 이미지**입니다. JPEG·PNG·WebP를 받으며 AVIF로 변환해 비공개 MinIO 버킷에 저장합니다. PostgreSQL에는 객체 키·형식·크기·해시만 남기고 인증된 API를 통해 AVIF로 응답합니다. 앱 자체 파일 크기 제한은 없으며 Nginx가 영수증 multipart 요청 본문 전체를 `10m`(10 MiB)로 제한하고 초과 요청은 앱에 전달하기 전에 413으로 거절합니다. JPEG/JPG·PNG·WebP 확장자와 실제 이미지 포맷을 확인하며 변환기의 픽셀 수 안전장치는 유지합니다. OCR·자동 금액 입력, 환불 기록, 복수 결제자, 환전, 실제 송금·입금 추적, 카카오 메시지 발송은 제공하지 않습니다.
+영수증은 지출 저장 후 별도로 업로드하는 **증빙 이미지**입니다. 브라우저가 JPEG·PNG·WebP를 Web Worker의 WASM AVIF 인코더로 변환합니다. 방향을 보정하고 긴 변을 최대 2048px로 줄이며, 작은 이미지는 확대하지 않습니다. AVIF 설정은 quality 80, speed 8, 4:4:4입니다. 서버는 `.avif` 확장자·MIME·실제 AV1 코덱을 확인하고 **10 MiB(10,485,760바이트) 이하**의 단일 이미지만 받습니다. 재인코딩 없이 받은 바이트를 비공개 MinIO 버킷에 저장하고 PostgreSQL에는 객체 키·형식·크기·해시를 남깁니다. multipart 본문은 앱에서 10 MiB + 64 KiB로 제한하고 Nginx는 폼 부가 데이터를 고려해 `11m`, Next Proxy의 본문 버퍼는 11 MiB로 설정합니다. 기존 JPEG·PNG·WebP 자료는 저장된 형식으로 계속 조회합니다. OCR·자동 금액 입력, 환불 기록, 복수 결제자, 환전, 실제 송금·입금 추적, 카카오 메시지 발송은 제공하지 않습니다.
 
 ## 이탈·탈퇴와 개인정보
 
@@ -192,7 +192,7 @@ location = /api/health/minio/ { return 404; }
 location = /api/health/dependencies { return 404; }
 location = /api/health/dependencies/ { return 404; }
 location ~ ^/api/rounds/[^/]+/expenses/[^/]+/receipts/?$ {
-    client_max_body_size 10m;
+    client_max_body_size 11m;
     proxy_request_buffering on;
     proxy_pass http://127.0.0.1:3000;
     proxy_set_header Host $http_host;

@@ -232,7 +232,7 @@ server {
     location = /api/health/dependencies { return 404; }
     location = /api/health/dependencies/ { return 404; }
     location ~ ^/api/rounds/[^/]+/expenses/[^/]+/receipts/?$ {
-        client_max_body_size 10m;
+        client_max_body_size 11m;
         proxy_request_buffering on;
         proxy_pass http://127.0.0.1:3000;
         proxy_set_header Host $http_host;
@@ -267,7 +267,7 @@ sudo certbot renew --dry-run --run-deploy-hooks
 systemctl list-timers | grep -i certbot
 ```
 
-갱신 타이머와 deploy hook이 실제로 작동하는지 확인합니다. 80 포트의 인증 경로는 갱신에도 필요합니다. 첫 배포 전 프록시가 502를 반환해도 인증서 발급용 HTTP 경로가 열려 있으면 됩니다. 영수증 업로드 location의 `client_max_body_size 10m`은 파일과 폼 필드를 포함한 multipart 요청 본문 전체를 제한합니다. `proxy_request_buffering on`으로 본문을 모두 받은 뒤 앱으로 전달하며, 10 MiB를 초과하면 Nginx가 413으로 거절합니다. 아래 설정을 기존 운영 서버에도 반영하고 `nginx -t` 성공 후 reload합니다.
+갱신 타이머와 deploy hook이 실제로 작동하는지 확인합니다. 80 포트의 인증 경로는 갱신에도 필요합니다. 첫 배포 전 프록시가 502를 반환해도 인증서 발급용 HTTP 경로가 열려 있으면 됩니다. 영수증 업로드 location의 `client_max_body_size 11m`은 파일과 폼 필드를 포함한 multipart 요청 본문 전체를 제한합니다. `proxy_request_buffering on`으로 본문을 모두 받은 뒤 앱으로 전달하며, 11 MiB를 초과하면 Nginx가 413으로 거절합니다. 앱은 multipart 본문을 10 MiB + 64 KiB, AVIF 파일을 10 MiB 이하로 제한합니다. 아래 설정을 기존 운영 서버에도 반영하고 `nginx -t` 성공 후 reload합니다.
 
 `renew --dry-run`이 실패하면 마지막 요약 위에 있는 최초 오류를 확인합니다. `systemctl list-timers`는 다음 실행 일정만 보여 주며 갱신 성공을 보장하지 않습니다. 서버에서 `sudo nginx -t`, `sudo certbot certificates`, `sudo tail -n 120 /var/log/letsencrypt/letsencrypt.log`를 실행해 원인을 확인한 뒤 다시 모의 갱신합니다.
 

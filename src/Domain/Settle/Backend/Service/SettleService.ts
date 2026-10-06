@@ -1,9 +1,10 @@
 import 'server-only'
-import { createHash, randomInt, randomUUID } from 'node:crypto'
+import { randomInt, randomUUID } from 'node:crypto'
 import { requireAccount } from '../../../../Global/Auth/Backend'
 import { MAX_GROUP_MEMBERS } from '../../../Group/Shared'
 import { bankDisplayName } from '../../../User/Shared'
-import { AppError, badInput, withDatabaseConnection, withWriteLock, withWriteTransaction, mutationDigest, mutationResult, deleteReceiptObject, putReceipt, readReceipt, convertReceipt, type Database, domainMutation, idsInput, nowSeconds, onlyKeys, pageOf, pagination, textInput, type Identity } from '../../../../Global/Util/Backend'
+import { AppError, badInput, withDatabaseConnection, withWriteLock, withWriteTransaction, mutationDigest, mutationResult, deleteReceiptObject, putReceipt, readReceipt, type Database, domainMutation, idsInput, nowSeconds, onlyKeys, pageOf, pagination, textInput, type Identity } from '../../../../Global/Util/Backend'
+import { validateReceipt } from './ReceiptFile'
 import { MAX_ROUND_CURRENCIES, formatMoney, MAX_EXPENSE_MAJOR, MAX_ROUND_TOTAL_MAJOR, minorLimit, parseAmount, requireCurrency, type Currency, type CreateRoundRequestDTO, type ExpenseRequestDTO, type VersionRequestDTO, type SettlementCheckRequestDTO } from '../../Shared'
 import { calculateBase, finalizeCurrencySettlement, previewCurrencySettlement, validateCustomShares } from '../../Shared'
 import type { ExclusionCheck, Expense, MutationResult, RoundDetail, RoundMember, RoundStatus, RoundSummary, SettlementDTO, SettlementTransfer } from '../../Shared'
@@ -644,9 +645,9 @@ export async function addReceipt(access: Identity, key: string, roundId: string,
   const captureAudience = typeof input[0] === 'function' ? input[1] as ReceiptAudience | undefined : input[3]
   const { expectedVersion, bytes, type } = upload
   if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) badInput('invalid_version', '회차 버전이 필요합니다')
-  const sourceSha256 = createHash('sha256').update(bytes).digest('hex')
+  const file = await validateReceipt(bytes, type, upload.name)
+  const sourceSha256 = file.sha256
   const digest = mutationDigest(key, { roundId, expenseId, expectedVersion, sourceSha256, type })
-  const file = await convertReceipt(bytes, type, upload.name)
   const id = randomUUID()
   // Each attempt owns its object so a rejected retry cannot overwrite or delete a saved receipt.
   const objectKey = await putReceipt(`receipts/${account.id}/${id}.avif`, file.content, file.mimeType)

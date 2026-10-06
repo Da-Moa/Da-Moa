@@ -39,7 +39,7 @@ OCR, 계좌 검증 API, 금융기관을 통한 실제 송금·입금 자동 검�
 | 일반 참여자 나가기 | 본인이 제외되지 않은 미종료 회차에 참여 중이면 차단. 그 외에는 현재 모임 멤버십의 `left_at`만 설정 |
 | 모임 생성자 모임 닫기 | 일반 나가기는 제공하지 않음. 모임 전체에 미종료 회차가 있으면 차단하고, 회차가 없거나 모두 완료됐으면 모임·회차를 보존한 채 모든 활성 멤버십과 초대를 종료 |
 | 탈퇴 차단 관련성 | 제외 여부와 무관하게 참여 이력이 있는 모든 미종료 회차. 수취인으로 남은 제외자도 포함 |
-| 영수증 저장 | 기존 PostgreSQL의 `BYTEA`. JPEG·PNG·WebP 입력을 AVIF로 변환해 저장하며 앱 자체 파일 바이트 제한은 없음. 기존 세 형식 자료 조회 호환, 여러 파일은 각각 업로드 |
+| 영수증 저장 | 비공개 MinIO. 브라우저 WASM Worker가 JPEG·PNG·WebP를 AVIF로 변환하며 서버는 AV1 코덱·10 MiB 이하를 검사해 받은 바이트 그대로 저장. 기존 세 형식 자료 조회 호환, 여러 파일은 각각 업로드 |
 | 초대 | 모임 생성자 발급·폐기, 발급 후 7일 유효한 다회 수락 링크. 원문 토큰은 저장하지 않음 |
 | 동시 쓰기 | 초기에는 공통 DB 트랜잭션 잠금 하나로 직렬화. 읽기는 직렬화하지 않음 |
 | 실시간 반영 | Ably WebSocket의 인증된 사용자별 채널로 재조회 키만 발행. DB와 기존 REST API가 원본 |
@@ -168,7 +168,7 @@ stateDiagram-v2
 | `round_members` | `(round_id, user_id)` PK, `display_name_snapshot`, `joined_at`, `excluded_at`. 제외해도 행 삭제 금지. `excluded_at` 변경은 `group_members.left_at`에 전파하지 않음 |
 | `expenses` | `id`, `round_id`, `author_id`, `payer_id`, `description`, `currency`(지원 통화 CHECK), `amount_minor`, `split_mode`(`ALL/SELECTED/CUSTOM`), `base_share_minor` nullable, `remainder_units` nullable, `created_at`, `updated_at`, `updated_by` |
 | `expense_shares` | `(expense_id, user_id)` PK, `round_id`, `assigned_amount_minor` nullable, `final_amount_minor` nullable, `received_remainder` nullable. 행 자체가 실제 부담자 목록이며 CUSTOM의 양의 원본 부담금은 assigned_amount_minor에 보존 |
-| `expense_receipts` | `id`, `expense_id`, `uploaded_by`, `mime_type`, `byte_size`, `sha256`, `content BYTEA`, `created_at`. 신규 AVIF와 기존 JPEG·PNG·WebP 조회 호환 MIME, 양의 바이트 크기 CHECK |
+| `expense_receipts` | `id`, `expense_id`, `uploaded_by`, `mime_type`, `byte_size`, `sha256`, `object_key`, `created_at`. 기존 BYTEA 자료는 조회 호환. 신규 AVIF와 기존 JPEG·PNG·WebP 조회 호환 MIME, 양의 바이트 크기 CHECK |
 | `settlement_balances` | `(round_id, user_id, currency)` PK, `paid_minor`, `burden_minor`, `balance_minor`. `balance_minor = burden_minor - paid_minor` CHECK |
 | `settlement_transfers` | `(round_id, sender_id, receiver_id, currency)` PK, `amount_minor > 0`, `received_at` nullable. `sender_id <> receiver_id` CHECK. 수취인만 자신의 송금 행 확인 여부를 변경 |
 | `mutation_requests` | `(actor_id, operation, request_key)` PK, `request_digest`, `resource_id`, `response_metadata JSONB`, `created_at`. 성공한 명령의 최소 결과만 저장 |
@@ -532,13 +532,11 @@ USD·JPY 응답은 `account` 필드를 포함하지 않는다. 계좌 일부가 
 
 증빙은 지출 저장 후 별도 업로드한다. 업로드 실패가 정상 저장된 지출을 지우지 않는다. 파일 선택만으로 업로드 완료라고 표시하지 않으며, 서버에 저장한 증빙 ID가 있어야 완료다.
 
-JPEG·PNG·WebP만 받고 파일명·클라이언트 MIME 외 실제 디코딩 결과의 포맷도 검사한다. SVG·HTML·임의 실행 파일을 받지 않는다. 유효한 신규 입력은 방향을 보정한 뒤 AVIF로 변환하며 메타데이터를 제거하고, 저장 바이트·MIME·해시는 변환 결과를 기준으로 한다. 변환 실패는 `unsupported_receipt_type`으로 처리하고 지출 원본을 유지한다.
+브라우저는 JPEG·PNG·WebP를 WASM AVIF 인코더의 Web Worker에서 처리한다. 방향을 보정하고 긴 변을 최대 2048px로 줄이며 확대하지 않는다. quality 80·speed 8·4:4:4로 인코딩하고 메타데이터를 전달하지 않는다. 변환 실패는 업로드 전에 표시하며 지출 원본을 유지한다.
 
-앱 자체의 파일 바이트 제한과 `receipt_too_large` 오류는 두지 않는다. Sharp의 입력 픽셀 수 안전장치는 압축 해제 시 메모리 고갈을 막는 별도 보안 경계이므로 해제하지 않는다. Vercel Function의 요청·응답별 4.5 MB 페이로드 상한은 애플리케이션 제한이 아닌 배포 인프라 제약이며, 현재 PostgreSQL `BYTEA` 업로드·조회 경로로는 그 범위를 넘는 파일을 전달할 수 없다. multipart 부가 데이터 때문에 업로드 가능한 원본 파일 크기는 4.5 MB보다 작다.
+서버는 `.avif` 확장자·image/avif MIME·실제 HEIF/AV1 코덱·단일 이미지를 확인한다. 파일은 10 MiB(10,485,760바이트) 이하이며 초과하면 413 `receipt_too_large`다. AUTH 뒤 multipart 본문을 10 MiB + 64 KiB로 제한한다. Sharp는 메타데이터 검사에만 사용하고 입력 픽셀 수 안전장치를 유지한다. 서버는 픽셀 변환·재인코딩 없이 받은 바이트 그대로 저장하고 그 바이트로 SHA-256을 계산한다. 다른 포맷·위장 파일은 415 `unsupported_receipt_type`이다. Nginx와 Next Proxy의 본문 버퍼 상한은 multipart 부가 데이터를 고려해 11 MiB로 설정한다.
 
-증빙은 `public/`, 로컬 임시 파일, 브라우저 상태를 영구 저장소로 사용하지 않는다. `BYTEA`와 지출 FK를 같은 DB에 저장하므로 지출 삭제·회차 취소 시 증빙 바이트도 원자적으로 삭제된다. 여러 지출이 같은 파일 행을 공유하는 기능은 두지 않는다. 목록 쿼리에는 바이트 본문을 포함하지 않는다.
-
-`ponytail: 초기에는 Vercel Function이 전달할 수 있는 증빙을 기존 PostgreSQL에 저장한다. 인프라 한계를 넘는 업로드가 필요하거나 이미지 저장량·전송 비용·DB 읽기 지연이 문제가 되면 비공개 객체 저장소의 직접 업로드·조회로 옮기고 변환 완료·파일 정리 재시도를 설계한다.`
+증빙은 비공개 MinIO에 저장하고 PostgreSQL에는 객체 키·MIME·크기·해시와 지출 FK만 남긴다. 목록에는 바이트 본문을 포함하지 않는다. 지출 삭제·회차 취소의 DB 삭제 후 객체를 정리하며, 저장 거절·성공 재생에는 이번 시도의 객체만 정리한다. 기존 BYTEA와 JPEG·PNG·WebP 자료 조회를 유지한다.
 
 계좌·정산·증빙 API는 `Cache-Control: private, no-store`를 사용한다. 이미지에는 검증된 Content-Type과 `X-Content-Type-Options: nosniff`를 지정한다. 계좌 조회에 공유 서버 캐시를 쓰지 않으며, 안내 화면 진입·새로고침 시 서버에서 현재값을 읽는다. 클라이언트 라우터의 사전 로드된 화면만으로 최신 계좌를 확정하지 않는다.
 
@@ -577,7 +575,7 @@ Server Component도 같은 인증·권한 함수를 거쳐 최소 데이터만 �
 3. 기존 회원에게 계좌가 없으므로 `onboarding_completed_at`을 임의로 채우지 않는다. 이행 시 기존 세션을 한 번 폐기하고 다음 로그인에서 계좌 등록을 요구한다. 배포 영향은 **기존 회원 1회 재로그인·계좌 등록**이다.
 4. 실행 순서는 **인증 확장 컬럼 추가 → soft-delete·활성 세션 검사·가입 호환 코드 배포 및 세션 이행 → 도메인 스키마·기능 배포**다. 새 컬럼을 읽는 코드를 컬럼보다 먼저 배포하지 않는다. 구버전의 물리 삭제·가입 미완료 승인 경로가 도메인 자료와 동시에 동작하지 않도록 한다. 스키마 롤백으로 과거 자료를 삭제하지 않는다.
 5. 로컬·CI·Vercel의 Node 실행 기준을 일치시키고 Ably SDK의 WebSocket 연결과 토큰 갱신을 확인한다. Node 20을 그대로 지원하는 것처럼 `engines`를 남기지 않는다.
-6. 개발·프리뷰·운영 DB와 Ably 앱/키를 분리하고 Vercel Function의 요청·응답별 4.5 MB 페이로드 상한과 실행 시간 안에서 AVIF 변환·증빙 업로드·조회 및 Neon 트랜잭션을 검증한다. 애플리케이션의 파일 바이트 제한으로 표현하지 않으며 운영 데이터로 경합·삭제 테스트를 하지 않는다.
+6. 개발·테스트·운영 DB와 MinIO 버킷을 분리하고 브라우저 WASM 변환, AVIF 10 MiB 상한, 증빙 업로드·조회 및 PostgreSQL 트랜잭션을 검증한다. 운영 데이터로 경합·삭제 테스트를 하지 않는다.
 7. 문서·OpenAPI·README의 ‘물리 탈퇴’, 고정 원화 계산기, OCR 동작처럼 읽히는 문구를 실제 구현에 맞게 고친다.
 8. 지출별 복수 통화로 전환할 때 기존 마이그레이션 파일을 수정하지 않고 `016-expense-currencies.sql`을 마지막에 추가한다. 기존 `rounds.currency`를 지출·잔액·송금에 백필한 뒤 해당 컬럼을 제거하며, 기존 회차의 금액·상태·정산 결과·수취 확인 시각은 변경하지 않는다. 이미 적용된 인증 이행과 세션 폐기는 반복하지 않는다.
 9. 회차 생성자 분리는 기존 `001~004`를 수정하지 않고 `005-round-creator.sql`로 추가한다. `rounds.creator_id`를 먼저 nullable로 추가하고 기존 모든 회차는 이전 코드에서 모임 생성자만 만들 수 있었으므로 `groups.creator_id`로 백필한다. 누락과 해당 `round_members` 관계를 검증한 뒤 `NOT NULL`과 `(id, creator_id) → round_members(round_id, user_id)` 지연 복합 FK를 적용한다. 금액·상태·통화·정산 결과와 세션은 변경하지 않으며 `scripts/migrations.mjs` 목록에 `005`를 추가한다. 새 컬럼을 읽고 쓰는 코드는 이 마이그레이션 이후 배포한다.
@@ -634,7 +632,7 @@ Server Component도 같은 인증·권한 함수를 거쳐 최소 데이터만 �
 - 모임 상세에 본인 참여 회차가 0~3개면 ‘더보기’를 표시하지 않는다. 4개면 본문에 최신 3개만 표시하고 ‘더보기’를 누르면 별도 모달에 4개 모두 최신순으로 표시한다.
 - 정산 기록과 모임 상세의 회차 더보기 모달은 돋보기가 포함된 검색창과 그 아래의 전체·진행 중·정산 종료 상태 버튼을 같은 형태로 표시한다. 회차명의 일부와 모임명의 일부가 각각 일치하는 회차만 조회되며 상태 필터·커서 페이지네이션도 검색 결과를 기준으로 동작한다. 모임 상세 본문의 최신 3개는 모달의 검색·상태 변경에도 그대로 유지한다.
 - 회차 취소는 지출이 있으면 거절하고 빈 회차와 참여 이력만 삭제하며 회원·다른 회차를 보존한다. 취소한 회차의 같은 요청 재시도는 중복 처리하지 않는다.
-- JPEG·PNG·WebP 신규 증빙은 실제 포맷을 검증하고 AVIF로 변환해 저장·응답한다. 앱의 2 MiB 제한과 `receipt_too_large` 응답은 없으며 기존 세 MIME의 저장 자료는 원래 Content-Type으로 계속 조회한다. 픽셀 수 안전장치를 넘거나 디코딩할 수 없는 입력은 저장하지 않는다.
+- JPEG·PNG·WebP 신규 증빙은 브라우저 WASM Worker에서 AVIF로 변환한다. 서버는 실제 AV1 코덱·단일 이미지·10 MiB 이하를 검사하고 재인코딩 없이 저장한다. 초과는 413 `receipt_too_large`, 위장 포맷은 415다. 기존 세 MIME의 저장 자료는 원래 Content-Type으로 계속 조회한다.
 
 ### 13.3 실제 DB 원자성·경합
 

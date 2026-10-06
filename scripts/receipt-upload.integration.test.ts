@@ -39,7 +39,7 @@ test('receipt upload authenticates before reading, saves in two SQL calls and cl
     for (const actor of [author, other]) await acceptInvite(actor, key(), invite.sharePath!.split('/').at(-1)!)
     const round = await createRound(owner, uuidV7(), group.id, { name: '영수증 검증 회차', participantIds: [owner.userId, author.userId, other.userId] })
     const expense = await saveExpense(author, key(), round.id, { currency: 'KRW', description: '영수증 검증 지출', amount: '10', payerId: author.userId, splitMode: 'ALL', expectedVersion: round.version })
-    const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#fff' } }).png().toBuffer()
+    const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#fff' } }).avif().toBuffer()
     let version = expense.version!
     process.env.DB_QUERY_LOG = 'true'
     t.mock.method(console, 'info', (message: string) => { events.push(/FROM users u WHERE/.test(message.replace(/\s+/g, ' ')) ? 'AUTH' : 'SQL') })
@@ -49,13 +49,14 @@ test('receipt upload authenticates before reading, saves in two SQL calls and cl
         if (failPut) throw new Error('test upload failure')
         assert.equal(command.input.ContentType, 'image/avif')
         assert.equal((await sharp(command.input.Body as Buffer).metadata()).format, 'heif')
+        assert.deepEqual(command.input.Body, bytes, 'save the client AVIF without re-encoding')
         objects.push(command.input.Key!)
       }
       if (command instanceof DeleteObjectCommand) { events.push('DELETE'); deleted.push(command.input.Key!) }
       return Reflect.apply(originalSend, this, [command])
     })
     const reset = () => { events = []; objects = []; deleted = [] }
-    const upload = (expectedVersion = version, name = 'receipt.PNG', type = 'image/png') => async () => {
+    const upload = (expectedVersion = version, name = 'receipt.AVIF', type = 'image/avif') => async () => {
       events.push('READ')
       return { expectedVersion, bytes, type, name }
     }
@@ -65,7 +66,7 @@ test('receipt upload authenticates before reading, saves in two SQL calls and cl
     assert.deepEqual(events, [])
     await assert.rejects(addReceipt({ ...owner, userId: key() }, '', round.id, expense.id, upload()), code('unauthorized'))
     assert.deepEqual(events, ['AUTH'])
-    for (const [name, type] of [['receipt.gif', 'image/png'], ['receipt.jpg', 'image/png'], ['receipt', ''], ['receipt.webp', '']]) {
+    for (const [name, type] of [['receipt.gif', 'image/avif'], ['receipt.jpg', 'image/avif'], ['receipt', ''], ['receipt.webp', ''], ['receipt.avif', 'image/png']]) {
       reset()
       await assert.rejects(addReceipt(author, key(), round.id, expense.id, upload(version, name, type)), code('unsupported_receipt_type'))
       assert.deepEqual(events, ['AUTH', 'READ'])
@@ -117,7 +118,7 @@ test('receipt upload authenticates before reading, saves in two SQL calls and cl
       reset()
       const ticket = key(), requestVersion = version
       let published = 0
-      const outcomes = await Promise.allSettled([1, 2].map(() => addReceipt(author, ticket, round.id, expense.id, requestVersion, bytes, 'image/png', () => { published++ })))
+      const outcomes = await Promise.allSettled([1, 2].map(() => addReceipt(author, ticket, round.id, expense.id, requestVersion, bytes, 'image/avif', () => { published++ })))
       const successes = outcomes.filter(outcome => outcome.status === 'fulfilled')
       assert.ok(successes.length >= 1)
       const saved = (successes[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof addReceipt>>>).value
@@ -132,7 +133,7 @@ test('receipt upload authenticates before reading, saves in two SQL calls and cl
       assert.equal(rows.length, 1)
       assert.ok(objects.includes(rows[0].object_key))
       assert.ok(!deleted.includes(rows[0].object_key))
-      assert.deepEqual(await addReceipt(author, ticket, round.id, expense.id, requestVersion, bytes, 'image/png'), saved)
+      assert.deepEqual(await addReceipt(author, ticket, round.id, expense.id, requestVersion, bytes, 'image/avif'), saved)
       version = saved.version!
     })
     await t.test('same key on different rounds rolls back the losing upload and version', async () => {
@@ -141,7 +142,7 @@ test('receipt upload authenticates before reading, saves in two SQL calls and cl
       reset()
       const ticket = key()
       const candidates = [[round.id, expense.id, version], [second.id, secondExpense.id, secondExpense.version!]] as const
-      const outcomes = await Promise.allSettled(candidates.map(([roundId, expenseId, expectedVersion]) => addReceipt(author, ticket, roundId, expenseId, expectedVersion, bytes, 'image/png')))
+      const outcomes = await Promise.allSettled(candidates.map(([roundId, expenseId, expectedVersion]) => addReceipt(author, ticket, roundId, expenseId, expectedVersion, bytes, 'image/avif')))
       assert.equal(outcomes.filter(outcome => outcome.status === 'fulfilled').length, 1)
       assert.equal(objects.length, 2)
       assert.equal(deleted.length, 1)

@@ -90,7 +90,7 @@ test('legacy receipt migration preserves images and restores expense deletion an
     assert.equal((await client.query('SELECT id FROM expense_receipts WHERE id=$1', [cascadeId])).rowCount, 0)
 
     const uploadedExpense = await expense()
-    const uploaded = await addReceipt(a, key(), round.id, uploadedExpense.id!, (await version()).expectedVersion, bytes, 'image/png')
+    const uploaded = await addReceipt(a, key(), round.id, uploadedExpense.id!, (await version()).expectedVersion, await sharp(bytes).avif().toBuffer(), 'image/avif')
     const stored = (await client.query('SELECT content,object_key FROM expense_receipts WHERE id=$1', [uploaded.id])).rows[0]
     assert.equal(stored.content, null)
     assert.ok(stored.object_key)
