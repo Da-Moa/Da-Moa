@@ -2,6 +2,7 @@
   "name": "da-moa",
   "private": true,
   "version": "0.6.0",
+  "license": "AGPL-3.0-only",
   "engines": {
     "node": ">=22.18.0"
   },
@@ -15,7 +16,6 @@
     "build": "next build",
     "start": "NODE_ENV=production node server.mjs",
     "test": "node --import ./scripts/test-server-only.mjs --import tsx --test src/lib/*.test.ts src/lib/*.test.mjs",
-    "test:nginx": "node scripts/rate-limit-nginx.test.mjs",
     "test:integration": "node --import ./scripts/test-server-only.mjs --import tsx --test --test-concurrency=1 scripts/*.integration.test.ts scripts/*.integration.test.mjs"
   },
   "dependencies": {

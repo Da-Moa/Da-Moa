@@ -5,13 +5,26 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      publish_image:
+        description: Publish the SHA image for verification (only main updates latest and deploys)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   test-and-build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.publish.outputs.image }}
+    concurrency:
+      group: da-moa-image-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -20,50 +33,63 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-      - run: bash scripts/deploy-oci.test.sh
-      - run: |
-          test ! -e .env.production && test ! -e .minio.env
-          trap 'rm -f .env.production .minio.env' EXIT
-          touch .env.production .minio.env
-          POSTGRES_PASSWORD=test docker compose -f compose.production.yaml config --no-env-resolution --quiet
-      - run: npm run build
+      - uses: docker/setup-buildx-action@v4
+      - name: Build ARM64 image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/arm64
+          load: true
+          tags: ghcr.io/da-moa/da-moa:${{ github.sha }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Verify production image
+        env:
+          APP_IMAGE: ghcr.io/da-moa/da-moa:${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(docker image inspect "$APP_IMAGE" --format '{{.Architecture}}')" = arm64
+          container="da-moa-ci-$GITHUB_RUN_ID"
+          trap 'docker logs "$container"; docker rm -f "$container" >/dev/null' EXIT
+          docker run -d --name "$container" -e HOST=0.0.0.0 -e RECEIPT_WORKER_ENABLED=false -p 127.0.0.1::3000 "$APP_IMAGE"
+          port=$(docker port "$container" 3000/tcp | cut -d: -f2)
+          curl --fail --silent --show-error --retry 20 --retry-delay 1 --retry-all-errors --retry-max-time 60 --max-time 5 "http://127.0.0.1:$port/api/health/live"
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || inputs.publish_image)
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish image
+        id: publish
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || inputs.publish_image)
+        run: |
+          set -euo pipefail
+          image=ghcr.io/da-moa/da-moa
+          docker push "$image:$GITHUB_SHA"
+          if [ "$GITHUB_REF" = refs/heads/main ]; then
+            docker tag "$image:$GITHUB_SHA" "$image:latest"
+            docker push "$image:latest"
+          fi
+          reference=$(docker image inspect "$image:$GITHUB_SHA" --format '{{index .RepoDigests 0}}')
+          [[ "$reference" =~ ^ghcr\.io/da-moa/da-moa@sha256:[0-9a-f]{64}$ ]]
+          echo "image=$reference" >> "$GITHUB_OUTPUT"
 
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: test-and-build
     runs-on: ubuntu-latest
-    environment: production
-    concurrency:
-      group: da-moa-production
-      cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
-      - name: Configure SSH
+      - name: Notify Deploy
         env:
-          SSH_KEY: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
-          KNOWN_HOSTS: ${{ secrets.OCI_SSH_KNOWN_HOSTS }}
-        run: |
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
-          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
-      - name: Upload and deploy
-        env:
-          DEPLOY_HOST: ${{ vars.OCI_HOST }}
-          DEPLOY_USER: ${{ vars.OCI_USER }}
-          PRODUCTION_ENV: ${{ secrets.OCI_PRODUCTION_ENV }}
-          MINIO_ENV: ${{ secrets.OCI_MINIO_ENV }}
+          GH_TOKEN: ${{ secrets.DEPLOY_DISPATCH_TOKEN }}
+          APP_SHA: ${{ github.sha }}
+          IMAGE_REF: ${{ needs.test-and-build.outputs.image }}
         run: |
           set -euo pipefail
-          test -n "$DEPLOY_HOST" && test -n "$DEPLOY_USER"
-          : "${PRODUCTION_ENV:?Set production Environment secret OCI_PRODUCTION_ENV}"
-          : "${MINIO_ENV:?Set production Environment secret OCI_MINIO_ENV}"
-          umask 077
-          trap 'rm -f release.tar.gz production.env minio.env' EXIT
-          git archive --format=tar HEAD | gzip > release.tar.gz
-          printf '%s' "$PRODUCTION_ENV" > production.env
-          printf '%s' "$MINIO_ENV" > minio.env
-          scp -o StrictHostKeyChecking=yes release.tar.gz "$DEPLOY_USER@$DEPLOY_HOST:da-moa-${GITHUB_SHA}.tar.gz"
-          scp -p -o StrictHostKeyChecking=yes production.env "$DEPLOY_USER@$DEPLOY_HOST:da-moa-${GITHUB_SHA}.env.production"
-          scp -p -o StrictHostKeyChecking=yes minio.env "$DEPLOY_USER@$DEPLOY_HOST:da-moa-${GITHUB_SHA}.minio.env"
-          ssh -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- "$GITHUB_SHA" < scripts/deploy-oci.sh
+          : "${GH_TOKEN:?Set repository secret DEPLOY_DISPATCH_TOKEN with Contents write access to Da-Moa/Deploy}"
+          jq -n --arg sha "$APP_SHA" --arg image "$IMAGE_REF" \
+            '{event_type:"image-published",client_payload:{app_sha:$sha,image:$image}}' \
+            | gh api --method POST repos/Da-Moa/Deploy/dispatches --input -
