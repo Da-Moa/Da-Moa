@@ -19,7 +19,7 @@ dist-ssr
 !.env.example
 
 # 성능 측정 결과
-perf/*
+perf
 
 # Editor directories and files
 .vscode/*
