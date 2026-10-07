@@ -4,13 +4,13 @@ import { dirname, resolve } from 'node:path'
 import test from 'node:test'
 import ts from 'typescript'
 
-for (const [namespace, domain] of [['Domain', 'Health'], ['Domain', 'Group'], ['Domain', 'User'], ['Domain', 'Settle'], ['Global', 'Auth'], ['Global', 'Util'], ['Global', 'Websocket']]) test(`${namespace}/${domain} encapsulation blocks client imports and access to internal backend modules`, () => {
+for (const [namespace, domain] of [['Domain', 'Health'], ['Domain', 'Group'], ['Domain', 'User'], ['Domain', 'Settle'], ['Global', 'Auth'], ['Global', 'Util'], ['Global', 'Websocket'], ['Global', 'RateLimit']]) test(`${namespace}/${domain} encapsulation blocks client imports and access to internal backend modules`, () => {
   const root = resolve('src')
   const backend = resolve(root, `${namespace}/${domain}/Backend`) + '/'
   const shared = resolve(root, `${namespace}/${domain}/Shared`) + '/'
   const entry = backend + 'index.ts'
   const nativeEntry = backend + 'native.ts'
-  const nativeModules = new Set(['Global/Auth/Backend/native.ts', 'Global/Auth/Backend/auth-util.ts', 'Domain/User/Backend/native.ts', 'Domain/User/Backend/Repository/RealtimeUserRepository.ts'].map(path => resolve(root, path)))
+  const nativeModules = new Set(['Global/Auth/Backend/native.ts', 'Global/Auth/Backend/auth-util.ts', 'Global/Auth/Backend/api-jwt-util.ts', 'Domain/User/Backend/native.ts', 'Domain/User/Backend/Repository/RealtimeUserRepository.ts', 'Global/RateLimit/Backend/native.ts', 'Global/RateLimit/Backend/token-bucket.ts', 'Global/RateLimit/Backend/rate-limit-policy.ts', 'Global/RateLimit/Backend/rate-limit-response.ts'].map(path => resolve(root, path)))
   const files = readdirSync(root, { recursive: true }).map(file => resolve(root, String(file)))
     .filter(file => /\.(?:ts|tsx|mjs)$/.test(file) && !file.includes('.test.') && !file.endsWith('.d.ts'))
   const sources = new Map(files.map(file => [file, ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true)]))

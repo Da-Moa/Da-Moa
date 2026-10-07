@@ -2,13 +2,23 @@
 
 import { clearAccessToken, getAccessToken, setAccessToken } from '../Global/Auth/Frontend'
 import { uuidV4 } from './uuid'
+import { retryAfterSeconds, waitForRateLimit } from '../Global/Util/Frontend/rate-limit-util'
 
 export class ApiError extends Error {
   recover?: () => Promise<unknown>
+  retryAfterSeconds?: number
   constructor(public status: number, public code: string, message: string, public details?: unknown) {
     super(message)
     this.name = 'ApiError'
   }
+}
+
+function responseError(response: Response, result: { error?: string; message?: string; details?: unknown } | null) {
+  const seconds = response.status === 429 ? retryAfterSeconds(response) : undefined
+  const error = new ApiError(response.status, result?.error ?? (response.status === 429 ? 'rate_limited' : 'request_failed'),
+    seconds ? `요청이 많아요. ${seconds}초 후 다시 시도해 주세요.` : result?.message ?? '요청을 처리하지 못했어요. 다시 시도해 주세요.', result?.details)
+  error.retryAfterSeconds = seconds
+  return error
 }
 
 let refreshRequest: Promise<Response> | undefined
@@ -85,7 +95,7 @@ export function apiRequest<T>(path: string, options: RequestOptions = {}): Promi
   return pending as Promise<T>
 }
 
-async function request<T>(path: string, options: RequestOptions): Promise<T> {
+async function request<T>(path: string, options: RequestOptions, retryRead = true): Promise<T> {
   const method = options.method ?? 'GET'
   const mutation = method !== 'GET'
   const operation = `${method} ${path}`
@@ -138,6 +148,7 @@ async function request<T>(path: string, options: RequestOptions): Promise<T> {
         response = await fetch(path, init)
       }
       else if (refresh.status === 401) response = refresh
+      else if (refresh.status === 429) throw responseError(refresh, await refresh.clone().json().catch(() => null))
       else throw new ApiError(refresh.status, 'storage_unavailable', '로그인 상태를 확인하지 못했어요. 입력을 유지했으니 다시 시도해 주세요.')
     }
   } catch (error) {
@@ -157,8 +168,13 @@ async function request<T>(path: string, options: RequestOptions): Promise<T> {
     window.location.assign(`/onboarding?returnTo=${encodeURIComponent(destination())}`)
   }
   if (!response.ok) {
-    if (response.status < 500) forget()
-    throw new ApiError(response.status, result?.error ?? 'request_failed', result?.message ?? '요청을 처리하지 못했어요. 다시 시도해 주세요.', result?.details)
+    const error = responseError(response, result)
+    if (response.status === 429 && method === 'GET' && retryRead && error.retryAfterSeconds) {
+      await waitForRateLimit(error.retryAfterSeconds, options.signal)
+      return request<T>(path, options, false)
+    }
+    if (response.status < 500 && response.status !== 429) forget()
+    throw error
   }
   if (!result) throw new ApiError(503, 'response_unavailable', '처리 결과를 확인하지 못했어요. 같은 작업으로 다시 확인해 주세요.')
   const issuedToken = (result.data as { accessToken?: unknown } | undefined)?.accessToken

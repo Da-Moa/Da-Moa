@@ -46,6 +46,11 @@ const mutationParameters = [
   { name: 'Idempotency-Key', in: 'header', required: true, schema: id, description: '한 제출당 한 UUID. 네트워크·토큰 갱신 후 재시도에도 같은 키와 본문을 사용합니다.' },
 ]
 const domainResponses = {
+  RateLimited: {
+    description: '전체 또는 사용자별 요청량 제한. Retry-After 초 뒤 재시도하며 저장 요청의 기존 Idempotency-Key와 본문을 유지합니다.',
+    headers: { 'Retry-After': { description: '다음 요청까지 대기할 초', schema: { type: 'integer', minimum: 1 } } },
+    content: { 'application/json': { schema: ref('ApiError'), example: { error: 'rate_limited', message: '요청이 많아요. 2초 후 다시 시도해 주세요.', details: { retryAfterSeconds: 2 } } } },
+  },
   DomainFailure: {
     description: '요청 오류. 409는 상태·버전·제외·인원 제한·미종료 회차·멱등 키 충돌, 503은 같은 키로 재시도할 저장소·외부 서비스 오류입니다.',
     content: { 'application/json': { schema: ref('ApiError') } },
@@ -64,7 +69,7 @@ const domainSchemas = {
   RoundStatus: status,
   MinorAmount: minor,
   ApiError: object({
-    error: { type: 'string', example: 'stale_round', description: 'invalid_input, invalid_amount, custom_share_total_mismatch, expense_amount_limit_exceeded, round_total_limit_exceeded, round_currency_limit_exceeded, invalid_participants, unsupported_currency, unauthorized, forbidden, onboarding_required, not_found, stale_round, invalid_round_state, idempotency_conflict, empty_expenses, pending_settlement_checks, member_exclusion_blocked, minimum_participants, group_member_limit_exceeded, unfinished_rounds, unfinished_group_rounds, unsupported_receipt_type, receipt_too_large, receipt_pending, storage_unavailable 등' },
+    error: { type: 'string', example: 'stale_round', description: 'invalid_input, invalid_amount, custom_share_total_mismatch, expense_amount_limit_exceeded, round_total_limit_exceeded, round_currency_limit_exceeded, invalid_participants, unsupported_currency, unauthorized, forbidden, onboarding_required, not_found, stale_round, invalid_round_state, idempotency_conflict, empty_expenses, pending_settlement_checks, member_exclusion_blocked, minimum_participants, group_member_limit_exceeded, unfinished_rounds, unfinished_group_rounds, unsupported_receipt_type, receipt_too_large, receipt_pending, rate_limited, storage_unavailable 등' },
     message: string,
     details: { type: 'object', additionalProperties: true, description: '현재 버전, 제외 차단 관련 지출 또는 탈퇴를 막는 회차 등. 계좌·인증 토큰은 포함하지 않음.' },
   }, ['error', 'message']),
@@ -108,7 +113,7 @@ function operation(tag: string, summary: string, options: OperationOptions = {})
     ...(options.request ? { requestBody: { required: true, content: { [options.multipart ? 'multipart/form-data' : 'application/json']: { schema: options.request } } } } : {}),
     responses: {
       [options.multipart ? '202' : '200']: { description: options.multipart ? '영속 큐 접수 완료. 파일 저장 완료는 storageStatus=READY로 확인합니다.' : '요청 성공', content: { 'application/json': { schema: object({ data: options.response ?? ref('MutationResult') }, ['data']) } } },
-      ...Object.fromEntries(['400', '401', '403', '404', '409', '422', '424', '429', '503', ...(options.multipart ? ['413', '415'] : [])].map(code => [code, { $ref: '#/components/responses/DomainFailure' }])),
+      ...Object.fromEntries(['400', '401', '403', '404', '409', '422', '424', '429', '503', ...(options.multipart ? ['413', '415'] : [])].map(code => [code, { $ref: `#/components/responses/${code === '429' ? 'RateLimited' : 'DomainFailure'}` }])),
     },
   }
 }
@@ -152,7 +157,7 @@ const domainPaths = {
   },
   '/api/rounds/{roundId}/expenses/{expenseId}/receipts': { post: operation('지출', '영수증 증빙 이미지 업로드', { mutation: true, multipart: true, request: object({ file: { type: 'string', format: 'binary', description: '브라우저 WASM Worker에서 변환한 .avif 파일. 실제 AV1 코덱의 단일 AVIF 이미지와 image/avif MIME만 허용하며 최대 10 MiB(10,485,760바이트)입니다. 앱의 multipart 본문 상한은 10 MiB + 64 KiB이며 초과 시 413 receipt_too_large입니다. OCR을 수행하지 않습니다.' }, expectedVersion: integer }, ['file', 'expectedVersion']), description: '기록 단계에서 제외되지 않은 지출 원작성자 또는 해당 회차 생성자가 이미 저장된 지출에 파일 하나를 별도로 업로드합니다. AUTH 회원 조회 후 파일 크기·확장자·MIME·실제 AV1 코덱을 검증합니다. 단일 SQL에서 권한·상태·버전을 검사하여 PENDING 영수증·회차 버전·멱등 결과와 DB 영속 큐를 함께 저장하고 202로 응답합니다. 워커는 MinIO PUT 뒤 단일 SQL로 객체 키와 READY 상태를 기록합니다. 요청의 업무 SQL은 2회, 워커의 저장 SQL은 1회이며 큐 제어 SQL은 별도입니다. 업로드 실패는 지출 원본을 삭제하지 않으며 목록 응답에는 바이트 본문이 없습니다.' }) },
   '/api/rounds/{roundId}/expenses/{expenseId}/receipts/{receiptId}': { delete: operation('지출', '영수증 증빙 삭제', { mutation: true, request: versionBody, description: '기록 단계에서 제외되지 않은 지출 원작성자 또는 해당 회차 생성자만 증빙을 삭제합니다. AUTH 회원 조회 → 권한·상태·버전·재시도 통합 조회 → 영수증 삭제·회차 버전·성공 기록 단일 SQL의 총 3회이며 명시적 트랜잭션·advisory lock은 없습니다. 저장 SQL에서 현재 조건을 다시 검사하며 DB 자동 커밋 후 MinIO 객체를 삭제합니다. 같은 키·본문의 성공 재생은 SQL 2회로 기존 결과를 반환하고 객체 삭제·알림을 반복하지 않습니다.' }) },
-  '/api/receipts/{receiptId}': { get: { ...operation('지출', '참여 이력 검증 후 영수증 이미지 조회'), responses: { '200': { description: '신규 업로드는 AVIF, 기존 자료는 저장된 JPEG·PNG·WebP로 응답합니다. private, no-store 및 nosniff 헤더를 적용합니다.', content: Object.fromEntries(['image/avif', 'image/jpeg', 'image/png', 'image/webp'].map(mime => [mime, { schema: { type: 'string', format: 'binary' } }])) }, '401': { $ref: '#/components/responses/DomainFailure' }, '404': { $ref: '#/components/responses/DomainFailure' }, '409': { $ref: '#/components/responses/DomainFailure' }, '503': { $ref: '#/components/responses/DomainFailure' } } } },
+  '/api/receipts/{receiptId}': { get: { ...operation('지출', '참여 이력 검증 후 영수증 이미지 조회'), responses: { '200': { description: '신규 업로드는 AVIF, 기존 자료는 저장된 JPEG·PNG·WebP로 응답합니다. private, no-store 및 nosniff 헤더를 적용합니다.', content: Object.fromEntries(['image/avif', 'image/jpeg', 'image/png', 'image/webp'].map(mime => [mime, { schema: { type: 'string', format: 'binary' } }])) }, '401': { $ref: '#/components/responses/DomainFailure' }, '404': { $ref: '#/components/responses/DomainFailure' }, '429': { $ref: '#/components/responses/RateLimited' }, '409': { $ref: '#/components/responses/DomainFailure' }, '503': { $ref: '#/components/responses/DomainFailure' } } } },
   '/api/rounds/{roundId}/members/{userId}/exclusion-check': { get: operation('정산', '회차 사용자 제외 가능 여부와 관련 지출 확인', { response: ref('ExclusionCheck'), description: '회차 생성자만 조회합니다. 본인은 제외할 수 없고 모임 생성자는 다른 참여자와 같은 조건으로 검사합니다. 결제자 겸 부담자·SELECTED 또는 CUSTOM 부담자·최소 인원 위반을 확인하고 관련 지출 전체를 반환합니다. 이 검사는 데이터를 변경하지 않습니다.' }) },
   '/api/rounds/{roundId}/members/{userId}/exclude': { post: roundCommand('회차 사용자 제외와 ALL 재분배', 'AUTH → 회차·대상 통합 조회 → 조건부 단일 제외 저장의 SQL 3회이며 명시적 트랜잭션·락은 없습니다. 같은 키/새 키 재요청에서 이미 제외됐거나 대상 참여 이력이 없으면 404입니다. 회차 생성자만 기록 단계에서 제외 조건을 다시 검사합니다. 본인은 제외할 수 없고 모임 생성자는 다른 참여자와 같은 조건으로 제외할 수 있습니다. 차단 시 해당 사용자와 연관된 정산이 있습니다. 메시지와 관련 내역을 반환하며 아무것도 변경하지 않습니다. 성공 시 round_members.excluded_at과 해당 회차의 ALL 분배만 수정합니다. group_members.left_at, 다른 회차, 다음 회차 후보와 비부담 결제자 수취 관계는 보존합니다.') },
   '/api/rounds/{roundId}/confirm': { post: roundCommand('정산 확정', '회차 생성자가 RECORDING 회차의 모든 지출을 재검증하고 기본 몫·나머지를 저장합니다. CUSTOM은 원본 부담금 합계를 검증하고 나머지를 만들지 않습니다. 지출 0건이면 409 empty_expenses와 지출 내역이 없습니다 메시지를 반환합니다. 이 단계에서는 추첨하지 않습니다.') },
@@ -196,6 +201,7 @@ export const openApiDocument = {
         parameters: [{ name: 'returnTo', in: 'query', schema: { type: 'string' }, description: '허용된 /home, /invites, /settlements 내부 경로. 외부·인증 루프 경로는 /home으로 대체합니다.' }],
         responses: {
           '307': { description: '카카오 인증 화면 또는 로그인 오류 화면으로 이동' },
+          '429': { $ref: '#/components/responses/RateLimited' },
         },
       },
     },
@@ -237,7 +243,7 @@ export const openApiDocument = {
       tags: ['인증'], summary: '로그인 완료 후 Access JWT 전달',
       description: 'Refresh JWT의 서명·만료를 확인해 app/onboarding 목적을 보존한 Access JWT를 JSON으로 전달합니다. 브라우저가 localStorage에 저장하며 URL·Access 쿠키에 토큰을 넣지 않습니다.',
       security: [{ refreshCookie: [] }], parameters: [mutationParameters[0]],
-      responses: { '200': { description: 'data.accessToken과 data.purpose 반환' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '503': { $ref: '#/components/responses/DomainFailure' } },
+      responses: { '200': { description: 'data.accessToken과 data.purpose 반환' }, '401': { $ref: '#/components/responses/Unauthorized' }, '429': { $ref: '#/components/responses/RateLimited' }, '403': { $ref: '#/components/responses/Forbidden' }, '503': { $ref: '#/components/responses/DomainFailure' } },
     } },
     '/api/auth/refresh': {
       post: {
@@ -257,6 +263,7 @@ export const openApiDocument = {
         responses: {
           '200': { description: 'data.accessToken을 반환하고 Refresh 쿠키 갱신' },
           '401': { $ref: '#/components/responses/Unauthorized' },
+          '429': { $ref: '#/components/responses/RateLimited' },
           '403': { $ref: '#/components/responses/Forbidden' },
           '503': { $ref: '#/components/responses/RefreshUnavailable' },
         },
@@ -280,6 +287,7 @@ export const openApiDocument = {
         responses: {
           '200': { $ref: '#/components/responses/Ok' },
           '401': { $ref: '#/components/responses/Unauthorized' },
+          '429': { $ref: '#/components/responses/RateLimited' },
           '403': { $ref: '#/components/responses/Forbidden' },
         },
       },
@@ -302,6 +310,7 @@ export const openApiDocument = {
         responses: {
           '200': { description: '탈퇴 완료', content: { 'application/json': { schema: object({ ok: { type: 'boolean' } }, ['ok']) } } },
           '401': { $ref: '#/components/responses/Unauthorized' },
+          '429': { $ref: '#/components/responses/RateLimited' },
           '403': { $ref: '#/components/responses/Forbidden' },
           '409': { $ref: '#/components/responses/DomainFailure' },
           '503': { $ref: '#/components/responses/DomainFailure' },

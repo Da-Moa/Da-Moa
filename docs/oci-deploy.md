@@ -222,6 +222,8 @@ server {
     ssl_certificate /etc/letsencrypt/live/161.33.3.222/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/161.33.3.222/privkey.pem;
 
+    include /etc/nginx/snippets/da-moa-rate-limit-server.conf;
+
     location = /internal/realtime { return 404; }
     location = /api/health { return 404; }
     location = /api/health/ { return 404; }
@@ -259,7 +261,27 @@ server {
 }
 ```
 
-기존 운영 서버에도 위의 헬스 경로 차단 설정을 직접 반영합니다. GitHub Actions 배포는 Nginx 설정을 변경하지 않습니다.
+기존 운영 서버에도 위의 헬스 경로 차단 설정과 아래 Rate Limit 파일을 직접 반영합니다. GitHub Actions 배포는 Nginx 설정을 변경하지 않습니다. 아래 파일을 설치한 뒤 `nginx -t`를 실행합니다.
+
+### 요청량 제한
+
+앱 저장소의 [rate-limit-zones.conf](../deploy/nginx/rate-limit-zones.conf)는 `http` 범위의 공유 zone·URI별 키를 정의하고, [rate-limit-server.conf](../deploy/nginx/rate-limit-server.conf)는 HTTPS `server`의 제한과 429 JSON 응답을 정의합니다. 서버에서 체크아웃한 앱 저장소 루트에서 실행합니다.
+
+```bash
+sudo install -d -m 755 /etc/nginx/snippets
+sudo install -m 644 deploy/nginx/rate-limit-zones.conf /etc/nginx/conf.d/da-moa-rate-limit.conf
+sudo install -m 644 deploy/nginx/rate-limit-server.conf /etc/nginx/snippets/da-moa-rate-limit-server.conf
+```
+
+HTTPS `server` 안에 위 예제의 `include`를 한 번 추가합니다. 기본 Ubuntu Nginx의 `/etc/nginx/conf.d/*.conf`는 `http` 블록에서 로드됩니다. 다른 설정을 사용하면 zones 파일을 `http`에서 직접 include하고 중복 로드하지 않습니다.
+
+- 전체 API·`/realtime` 핸드셰이크·카카오 콜백은 같은 키로 **297 RPS**, `burst=50 nodelay`를 공유합니다. 이는 지속 속도이며 순간 처리량의 절대 상한은 아닙니다.
+- 로그인 시작은 실제 연결 IP별 **10회/분**, `burst=5 nodelay`도 함께 적용합니다. 클라이언트가 보낸 사용자 ID·JWT 문자열·X-Forwarded-For를 키로 사용하지 않습니다.
+- 기존 영수증 전용 regex location과 WebSocket location은 server의 두 `limit_req`를 상속합니다. location에 다른 `limit_req`를 추가하면 상속이 사라지므로 두 규칙도 명시해야 합니다.
+- 페이지·정적 파일·ACME 경로는 빈 키로 집계하지 않습니다. 사설 모니터링 server에는 이 server snippet을 include하지 않습니다.
+- 초과 응답은 `429 rate_limited`, `Cache-Control: no-store`, `Retry-After`(일반 1초, 로그인 6초)입니다. 앱의 429를 전달하기 위해 기존 `proxy_intercept_errors` 기본값 `off`를 유지합니다.
+
+상세 정책·앱의 사용자별 Token Bucket·검증 기록은 [Rate Limit 작업 기록](rate-limit.md)을 참고하세요.
 
 ```bash
 sudo nginx -t

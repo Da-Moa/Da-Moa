@@ -2,6 +2,7 @@ import { createServer } from 'node:http'
 import { networkInterfaces } from 'node:os'
 import next from 'next'
 import { createWsController } from './src/Global/Websocket/Backend/Controller/ws-controller.mjs'
+import { createRateLimitController } from './src/Global/RateLimit/Backend/native.ts'
 import { collectDatabaseMetrics, httpMetrics, trackHttpResponse } from './src/lib/http-metrics.mjs'
 
 const portArg = process.argv.findIndex(value => value === '--port' || value === '-p')
@@ -9,16 +10,19 @@ const port = Number(portArg < 0 ? process.env.PORT || 3000 : process.argv[portAr
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid PORT')
 const metricsPort = process.env.METRICS_PORT ? Number(process.env.METRICS_PORT) : null
 if (metricsPort !== null && (!Number.isInteger(metricsPort) || metricsPort < 1 || metricsPort > 65535 || metricsPort === port)) throw new Error('Invalid METRICS_PORT')
-const websocket = createWsController(port)
+const rateLimit = createRateLimitController()
+const websocket = createWsController(port, rateLimit)
 const server = createServer((request, response) => {
   if (websocket.handleRequest(request, response)) return
   if (metricsPort !== null) trackHttpResponse(request, response)
+  if (rateLimit.handleRequest(request, response)) return
   void handle(request, response)
 })
 const app = next({ dev: process.env.NODE_ENV !== 'production', httpServer: server, port })
 const handle = app.getRequestHandler()
 server.on('upgrade', websocket.handleUpgrade)
 server.on('close', websocket.close)
+server.on('close', rateLimit.close)
 
 await app.prepare()
 if (metricsPort !== null) {

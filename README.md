@@ -112,6 +112,24 @@ DB 연결은 `pg` 드라이버의 공용 커넥션 풀을 사용합니다. 같�
 
 공통 UI/요청 훅은`Global/Util/Frontend`에 구현하며 앱 구성은 `app/home/AppShell.tsx`, 정산 상태/금액 표현은 Settle, 계좌 충돌 안내는 User가 소유합니다. 생성 요청의 UUIDv7 정책도 Group/Settle Requests에서 전달합니다. Auth Route는 공개 Auth Controller로 위임하고 쿠키 처리를 공통화합니다. 알림 대상과 키는 도메인이 결정하고 Global Websocket은 전달만 담당합니다. 전송은 같은 트랜잭션의 멤버·지출을 재사용하여 나머지 없는 2명·지출 1건 기준 18 SQL이며 알림 추가 SQL은 없습니다. 상세 흐름과 재조회 회귀 검증은 [도메인 책임과 자동 재조회 정리](docs/refactored-api-flows-and-sql.md#9-도메인-책임과-자동-재조회-정리-2026-10-04)를 참고하세요.
 
+## 요청량 제한
+
+운영 Nginx는 API·WebSocket 핸드셰이크·카카오 콜백을 합쳐 **297 RPS**(실제 혼합 시나리오 330 RPS의 90%)로 제한하고 순간 초과 50회를 지연 없이 허용합니다. 로그인 시작은 IP별 10회/분·순간 초과 5회로 별도 제한합니다. 페이지·정적 파일은 제외합니다. [Nginx 설정 파일과 설치 순서](docs/oci-deploy.md#요청량-제한)를 기존 운영 서버에 반영해야 하며 GitHub Actions는 Nginx를 자동 변경하지 않습니다.
+
+앱은 기존 `server.mjs`에서 공용 JWT 규칙으로 인증된 사용자 ID를 얻은 뒤, Controller·본문 검사·DB 접근 전에 사용자별 Token Bucket을 적용합니다. 기존 Proxy JWT guard와 도메인의 회원 상태·권한 검사는 유지합니다. 버킷은 사용자 ID와 종류를 키로 공유하며 기기·탭·JWT 갱신·URL 변경으로 초기화되지 않습니다.
+
+| 종류 | 최대 토큰 | 초당 충전량 |
+|---|---:|---:|
+| GET·HEAD 조회 | 30 | 3 |
+| POST·PUT·PATCH·DELETE 및 기타 인증 API 요청 | 10 | 0.5 |
+| 영수증 POST 업로드(쓰기 버킷도 함께 적용) | 3 | 1/6 |
+| POST Access 발급·갱신(쓰기와 별도) | 5 | 1/3 |
+| WebSocket 연결 시도(기존 연결의 메시지·재인증 제외) | 3 | 1/6 |
+
+토큰이 없으면 `429 rate_limited`와 `Retry-After` 초를 반환합니다. 영수증은 두 버킷 모두 허용할 때만 차감합니다. GET은 대기 후 한 번만 자동 재시도하고, 저장 요청은 입력·본문·Idempotency-Key를 유지하여 수동 재시도합니다. JWT 없는 헬스 GET/HEAD와 개발 테스트 로그인은 사용자 버킷 대상이 아닙니다. 무효 JWT는 기존 guard가 401로 거절합니다. Nginx에서 거절된 요청은 앱에 도달하지 않습니다.
+
+버킷은 단일 Node 서버 메모리에 처음 요청할 때 생성하며 DB·Redis 호출은 없습니다. 완전히 충전될 시간이 지난 버킷만 1분마다 정리합니다. 서버 재시작 시 초기화되고 여러 프로세스/인스턴스에서 공유되지 않으므로 확장 전 원자적인 공유 저장소가 필요합니다. `next start` 대신 기존 `npm run start`를 사용해야 제한이 적용됩니다. 책임 분리·검증 기록은 [Rate Limit 작업 기록](docs/rate-limit.md)을 참고하세요.
+
 ## 검증
 
 ### 계좌 등록
@@ -123,6 +141,8 @@ DB 연결은 `pg` 드라이버의 공용 커넥션 풀을 사용합니다. 같�
 ```bash
 npm test
 npm run build
+# Docker가 실행 중일 때 Nginx 요청량 제한의 문법·실제 429 응답 검증
+npm run test:nginx
 ```
 
 `npm test`는 `node --import tsx --test`로 금액·분배·인증·권한·API 계약을 검증합니다. DB 트랜잭션·롤백·동시 요청과 Route Handler 검증에는 **로컬 호스트에서 이름에 `test`가 포함된 별도 DB**를 먼저 만들고 `TEST_DATABASE_URL`로 지정합니다. 영수증 통합 테스트에는 개발·운영과 분리된 MinIO 버킷과 `MINIO_*` 환경 변수도 필요합니다. 테스트가 마이그레이션과 검증용 회원·모임·지출·영수증을 실제로 저장하므로 개발·운영 저장소를 사용하지 않습니다. 테스트 명령은 `.env.local`을 자동으로 읽지 않습니다.
@@ -184,6 +204,8 @@ Ubuntu arm64 오라클 인스턴스의 IP HTTPS, Docker Compose 앱·PostgreSQL�
 TLS가 적용된 Nginx `server` 블록 안에서 앱과 WebSocket을 같은 포트로 프록시합니다. Compose 앱의 3000번 포트는 호스트의 `127.0.0.1:3000`에만 게시합니다. 아래 위치 설정은 [OCI 배포 가이드](docs/oci-deploy.md)의 IP 인증서 설정에 추가합니다.
 
 ```nginx
+include /etc/nginx/snippets/da-moa-rate-limit-server.conf;
+
 location = /internal/realtime { return 404; }
 location = /api/health { return 404; }
 location = /api/health/ { return 404; }

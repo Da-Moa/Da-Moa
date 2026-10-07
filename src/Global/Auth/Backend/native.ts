@@ -2,6 +2,7 @@
 import { readAccessToken } from './auth-util.ts'
 import { getRealtimeUserState } from '../../../Domain/User/Backend/native.ts'
 export * from './auth-util.ts'
+export { apiJwtPolicy, readApiJwt } from './api-jwt-util.ts'
 
 export async function authenticateWebsocketToken(token: string | null) {
   const access = readAccessToken(token ?? undefined)
