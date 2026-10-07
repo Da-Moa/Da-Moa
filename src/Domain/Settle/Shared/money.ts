@@ -1,4 +1,4 @@
-// Selection coverage and sources: spec/통화지원-spec.md. Decimals follow ISO 4217.
+// Decimals follow ISO 4217.
 export const CURRENCIES = {
   KRW: { name: '대한민국 원', decimals: 0, flag: 'kr', countries: '한국' },
   USD: { name: '미국 달러', decimals: 2, flag: 'us', countries: '미국 괌 사이판 캄보디아 몰디브' },
