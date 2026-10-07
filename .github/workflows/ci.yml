@@ -5,6 +5,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      apply_nginx:
+        description: Apply Nginx rate limits (requires the server include and sudo)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -20,50 +25,14 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-      - run: bash scripts/deploy-oci.test.sh
-      - run: |
-          test ! -e .env.production && test ! -e .minio.env
-          trap 'rm -f .env.production .minio.env' EXIT
-          touch .env.production .minio.env
-          POSTGRES_PASSWORD=test docker compose -f compose.production.yaml config --no-env-resolution --quiet
       - run: npm run build
 
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: test-and-build
-    runs-on: ubuntu-latest
-    environment: production
-    concurrency:
-      group: da-moa-production
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v4
-      - name: Configure SSH
-        env:
-          SSH_KEY: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
-          KNOWN_HOSTS: ${{ secrets.OCI_SSH_KNOWN_HOSTS }}
-        run: |
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
-          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
-      - name: Upload and deploy
-        env:
-          DEPLOY_HOST: ${{ vars.OCI_HOST }}
-          DEPLOY_USER: ${{ vars.OCI_USER }}
-          PRODUCTION_ENV: ${{ secrets.OCI_PRODUCTION_ENV }}
-          MINIO_ENV: ${{ secrets.OCI_MINIO_ENV }}
-        run: |
-          set -euo pipefail
-          test -n "$DEPLOY_HOST" && test -n "$DEPLOY_USER"
-          : "${PRODUCTION_ENV:?Set production Environment secret OCI_PRODUCTION_ENV}"
-          : "${MINIO_ENV:?Set production Environment secret OCI_MINIO_ENV}"
-          umask 077
-          trap 'rm -f release.tar.gz production.env minio.env' EXIT
-          git archive --format=tar HEAD | gzip > release.tar.gz
-          printf '%s' "$PRODUCTION_ENV" > production.env
-          printf '%s' "$MINIO_ENV" > minio.env
-          scp -o StrictHostKeyChecking=yes release.tar.gz "$DEPLOY_USER@$DEPLOY_HOST:da-moa-${GITHUB_SHA}.tar.gz"
-          scp -p -o StrictHostKeyChecking=yes production.env "$DEPLOY_USER@$DEPLOY_HOST:da-moa-${GITHUB_SHA}.env.production"
-          scp -p -o StrictHostKeyChecking=yes minio.env "$DEPLOY_USER@$DEPLOY_HOST:da-moa-${GITHUB_SHA}.minio.env"
-          ssh -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- "$GITHUB_SHA" < scripts/deploy-oci.sh
+    uses: Da-Moa/Deploy/.github/workflows/deploy.yml@9552fc4bc40f28be7462f35b096be74e94847521
+    with:
+      app-sha: ${{ github.sha }}
+      deploy-sha: 9552fc4bc40f28be7462f35b096be74e94847521
+      apply-nginx: ${{ inputs.apply_nginx || false }}
+    secrets: inherit
