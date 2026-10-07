@@ -23,7 +23,7 @@
 | 개발 환경 | npm · Docker · Docker Compose | 의존성 설치와 로컬 PostgreSQL·MinIO 실행 |
 | 배포 | GitHub Actions · OCI · Nginx | 테스트·빌드 자동화, Docker 배포, HTTPS·WebSocket 프록시 |
 
-Next.js·React·TypeScript의 정확한 설치 버전은 lockfile에서 관리합니다. 앱 서버는 [server.mjs](../server.mjs), 로컬 서비스는 [compose.yaml](../compose.yaml), 운영 Compose·Nginx 설정·배포 스크립트는 [Deploy 저장소](https://github.com/Da-Moa/Deploy)에서 관리합니다. 앱 CI가 성공하면 Deploy의 고정된 커밋 SHA에 있는 배포 workflow를 호출합니다.
+Next.js·React·TypeScript의 정확한 설치 버전은 lockfile에서 관리합니다. 앱 서버는 [server.mjs](../server.mjs), 로컬 서비스는 [compose.yaml](../compose.yaml), 운영 Compose·Nginx 설정·배포 스크립트는 [Deploy 저장소](https://github.com/Da-Moa/Deploy)에서 관리합니다. 앱 CI는 테스트 후 ARM64 운영 이미지를 빌드하고 실행을 확인합니다. main에서는 GHCR에 SHA 태그와 latest를 게시한 뒤 repository_dispatch로 이미지 digest를 Deploy에 전달합니다. Deploy Actions가 자체 production 환경을 사용해 A1에 배포하며, A1은 이미지를 내려받아 실행합니다. 앱에는 DEPLOY_DISPATCH_TOKEN을, Deploy에는 OCI 운영 Secret을 등록합니다.
 
 ## 도메인 라이브러리
 

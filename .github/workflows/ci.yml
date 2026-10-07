@@ -6,8 +6,8 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      apply_nginx:
-        description: Apply Nginx rate limits (requires the server include and sudo)
+      publish_image:
+        description: Publish the SHA image for verification (only main updates latest and deploys)
         type: boolean
         default: false
 
@@ -16,7 +16,15 @@ permissions:
 
 jobs:
   test-and-build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.publish.outputs.image }}
+    concurrency:
+      group: da-moa-image-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,14 +33,63 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-      - run: npm run build
+      - uses: docker/setup-buildx-action@v4
+      - name: Build ARM64 image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/arm64
+          load: true
+          tags: ghcr.io/da-moa/da-moa:${{ github.sha }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Verify production image
+        env:
+          APP_IMAGE: ghcr.io/da-moa/da-moa:${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(docker image inspect "$APP_IMAGE" --format '{{.Architecture}}')" = arm64
+          container="da-moa-ci-$GITHUB_RUN_ID"
+          trap 'docker logs "$container"; docker rm -f "$container" >/dev/null' EXIT
+          docker run -d --name "$container" -e HOST=0.0.0.0 -e RECEIPT_WORKER_ENABLED=false -p 127.0.0.1::3000 "$APP_IMAGE"
+          port=$(docker port "$container" 3000/tcp | cut -d: -f2)
+          curl --fail --silent --show-error --retry 20 --retry-delay 1 --retry-connrefused --max-time 5 "http://127.0.0.1:$port/api/health/live"
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || inputs.publish_image)
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish image
+        id: publish
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || inputs.publish_image)
+        run: |
+          set -euo pipefail
+          image=ghcr.io/da-moa/da-moa
+          docker push "$image:$GITHUB_SHA"
+          if [ "$GITHUB_REF" = refs/heads/main ]; then
+            docker tag "$image:$GITHUB_SHA" "$image:latest"
+            docker push "$image:latest"
+          fi
+          reference=$(docker image inspect "$image:$GITHUB_SHA" --format '{{index .RepoDigests 0}}')
+          [[ "$reference" =~ ^ghcr\.io/da-moa/da-moa@sha256:[0-9a-f]{64}$ ]]
+          echo "image=$reference" >> "$GITHUB_OUTPUT"
 
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: test-and-build
-    uses: Da-Moa/Deploy/.github/workflows/deploy.yml@9552fc4bc40f28be7462f35b096be74e94847521
-    with:
-      app-sha: ${{ github.sha }}
-      deploy-sha: 9552fc4bc40f28be7462f35b096be74e94847521
-      apply-nginx: ${{ inputs.apply_nginx || false }}
-    secrets: inherit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Deploy
+        env:
+          GH_TOKEN: ${{ secrets.DEPLOY_DISPATCH_TOKEN }}
+          APP_SHA: ${{ github.sha }}
+          IMAGE_REF: ${{ needs.test-and-build.outputs.image }}
+        run: |
+          set -euo pipefail
+          : "${GH_TOKEN:?Set repository secret DEPLOY_DISPATCH_TOKEN with Contents write access to Da-Moa/Deploy}"
+          jq -n --arg sha "$APP_SHA" --arg image "$IMAGE_REF" \
+            '{event_type:"image-published",client_payload:{app_sha:$sha,image:$image}}' \
+            | gh api --method POST repos/Da-Moa/Deploy/dispatches --input -
