@@ -16,6 +16,77 @@ afterEach(() => {
   Object.defineProperty(globalThis, 'crypto', originalCrypto)
 })
 
+test('429 preserves the original mutation key/body across a lost response and a manual retry', async () => {
+  fakeWindow()
+  const requests: { key: string | null; body: BodyInit | null | undefined }[] = []
+  globalThis.fetch = async (_input, init) => {
+    requests.push({ key: new Headers(init?.headers).get('Idempotency-Key'), body: init?.body })
+    if (requests.length === 1) return Response.json({ error: 'transaction_retry' }, { status: 503 })
+    if (requests.length === 2) return Response.json({ error: 'rate_limited' }, { status: 429, headers: { 'Retry-After': '2' } })
+    return Response.json({ data: { id: 'saved' } })
+  }
+  const path = '/api/rounds/rate-limited/expenses'
+  await assert.rejects(() => apiRequest(path, { method: 'POST', body: { amount: '100', expectedVersion: 1 } }))
+  await assert.rejects(() => apiRequest(path, { method: 'POST', body: { amount: '100', expectedVersion: 2 } }), error => error instanceof ApiError && error.status === 429 && error.retryAfterSeconds === 2)
+  assert.equal(requests.length, 2, 'writes are never retried automatically')
+  await apiRequest(path, { method: 'POST', body: { amount: '100', expectedVersion: 3 } })
+  assert.deepEqual(requests[1], requests[0])
+  assert.deepEqual(requests[2], requests[0])
+})
+
+test('rate-limited GET waits for Retry-After and retries once, sharing the pending read', async t => {
+  fakeWindow()
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let calls = 0
+  globalThis.fetch = async () => ++calls === 1
+    ? Response.json({ error: 'rate_limited' }, { status: 429, headers: { 'Retry-After': '2' } })
+    : Response.json({ data: { version: 2 } })
+  const pending = apiRequest('/api/rounds/rate-limited-read')
+  assert.equal(apiRequest('/api/rounds/rate-limited-read'), pending)
+  await new Promise(resolve => setImmediate(resolve))
+  t.mock.timers.tick(1999)
+  assert.equal(calls, 1)
+  t.mock.timers.tick(1)
+  assert.deepEqual(await pending, { version: 2 })
+  assert.equal(calls, 2)
+})
+
+test('refresh throttling keeps authentication and mutation key, with actionable 429 metadata', async () => {
+  const redirects = fakeWindow()
+  const keys: (string | null)[] = []
+  globalThis.fetch = async (input, init) => {
+    if (String(input) === '/api/auth/refresh') return Response.json({ error: 'rate_limited' }, { status: 429, headers: { 'Retry-After': '3' } })
+    keys.push(new Headers(init?.headers).get('Idempotency-Key'))
+    return keys.length === 1 ? Response.json({ error: 'unauthorized' }, { status: 401 }) : Response.json({ data: { ok: true } })
+  }
+  const options = { method: 'POST', body: { expectedVersion: 1 } }
+  await assert.rejects(() => apiRequest('/api/rounds/throttled-refresh/confirm', options), error => error instanceof ApiError && error.status === 429 && error.code === 'rate_limited' && error.retryAfterSeconds === 3)
+  assert.deepEqual(redirects, [])
+  assert.equal(window.localStorage.getItem('da_moa_access'), 'test-access-token')
+  await apiRequest('/api/rounds/throttled-refresh/confirm', options)
+  assert.equal(keys[0], keys[1])
+})
+
+test('GET retries stop after one 429 retry and an aborted wait makes no second request', async t => {
+  fakeWindow()
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let calls = 0
+  globalThis.fetch = async () => { calls++; return Response.json({ error: 'rate_limited' }, { status: 429, headers: { 'Retry-After': '1' } }) }
+  const pending = apiRequest('/api/rounds/bounded-rate-retry')
+  await new Promise(resolve => setImmediate(resolve))
+  t.mock.timers.tick(1000)
+  await assert.rejects(() => pending, error => error instanceof ApiError && error.status === 429)
+  assert.equal(calls, 2)
+  const controller = new AbortController()
+  const aborted = apiRequest('/api/rounds/aborted-rate-retry', { signal: controller.signal })
+  const rejected = assert.rejects(() => aborted, error => error instanceof DOMException && error.name === 'AbortError')
+  await new Promise(resolve => setImmediate(resolve))
+  controller.abort()
+  await rejected
+  t.mock.timers.tick(60000)
+  assert.equal(calls, 3)
+})
+
 test('HTTP LAN mutations and receipt retries work without randomUUID or subtle, while changed file bytes stay blocked', async () => {
   fakeWindow()
   const requests: { key: string; body: FormData | undefined }[] = []

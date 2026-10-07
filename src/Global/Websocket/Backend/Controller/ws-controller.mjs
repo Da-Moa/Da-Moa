@@ -2,7 +2,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { authenticateWebsocketToken, getKakaoRedirectUris } from '../../../Auth/Backend/native.ts'
 import { createWebsocketUtil } from '../websocket-util.mjs'
 
-export function createWsController(port) {
+export function createWsController(port, rateLimit) {
   process.env.REALTIME_INTERNAL_PORT = String(port)
   process.env.REALTIME_INTERNAL_SECRET = randomBytes(32).toString('hex')
   const websocket = createWebsocketUtil()
@@ -47,6 +47,7 @@ export function createWsController(port) {
     if (!allowed) { socket.destroy(); return }
     const protocols = request.headers['sec-websocket-protocol']?.split(',').map(value => value.trim()) ?? []
     const token = protocols.length === 2 && protocols[0] === 'da-moa' ? protocols[1] : null
+    if (rateLimit.limitWebsocket(token, socket)) return
     void authenticateWebsocketToken(token).then(auth => {
       if (!auth.id || socket.destroyed) { socket.destroy(); return }
       const userId = auth.id

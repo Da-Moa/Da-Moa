@@ -15,6 +15,25 @@ import { ACCESS_TOKEN_COOKIE_NAME, REFRESH_TOKEN_COOKIE_NAME, createAccessToken,
 const database = process.env.TEST_DATABASE_URL
 assert.ok(database && ['localhost', '127.0.0.1', '[::1]'].includes(new URL(database).hostname) && new URL(database).pathname.toLowerCase().includes('test'))
 
+// This scenario intentionally runs many writes without human pauses; honor the production limiter.
+async function requestWithRateLimit(input, init) {
+  let response = await globalThis.fetch(input, init)
+  for (let retries = 0; response.status === 429 && retries < 2; retries++) {
+    const seconds = Number(response.headers.get('Retry-After'))
+    assert.ok(Number.isFinite(seconds) && seconds > 0 && seconds <= 6)
+    await response.arrayBuffer()
+    await new Promise(resolve => setTimeout(resolve, seconds * 1000))
+    response = await globalThis.fetch(input, init)
+  }
+  return response
+}
+
+function requestSql(log) {
+  // Periodic WS membership revalidation may run during Retry-After waits; keep HTTP AUTH and all business SQL.
+  return log.split('SQL:').slice(1).map(sql => sql.trim()).filter(sql =>
+    !/^SELECT\s+id,\s*deleted_at,\s*onboarding_completed_at\s+FROM\s+users\s+WHERE\s+id\s*=\s*\$1(?:\s|$)/i.test(sql))
+}
+
 test('authenticated WebSocket receives only its own committed invalidations', async () => {
   const db = createDatabaseClient(database)
   await db.connect()
@@ -48,40 +67,40 @@ test('authenticated WebSocket receives only its own committed invalidations', as
   try {
     await ready
     for (const path of ['/api/groups', '/api/me', '/api/me/onboarding', '/api/me/bank-account', '/api/rounds/id', '/api/invites/token', '/api/auth/withdraw', '/api/docs', '/api/openapi.json', '/api/unknown', '/api/health-extra', '/api/health/live/extra']) {
-      const denied = await fetch(`${origin}${path}`, { method: 'POST', headers: { origin, 'content-type': 'application/json', 'x-middleware-subrequest': 'proxy:proxy:proxy:proxy:proxy' }, body: '{invalid json' })
+      const denied = await requestWithRateLimit(`${origin}${path}`, { method: 'POST', headers: { origin, 'content-type': 'application/json', 'x-middleware-subrequest': 'proxy:proxy:proxy:proxy:proxy' }, body: '{invalid json' })
       assert.equal(denied.status, 401, `${path} must reject before parsing the body`)
       assert.equal((await denied.json()).error, 'unauthorized')
       assert.equal(denied.headers.get('Cache-Control'), 'private, no-store')
     }
     const now = currentTimestamp()
     for (const token of ['invalid', createAccessToken('user', 'session', secret, now - 10, 1), createAccessToken('user', 'session', 'wrong-secret-at-least-32-bytes-0000'), createRefreshToken('user', 'session', secret)]) {
-      const denied = await fetch(`${origin}/api/groups`, { method: 'POST', headers: { origin, authorization: `Bearer ${token}` }, body: '{invalid json' })
+      const denied = await requestWithRateLimit(`${origin}/api/groups`, { method: 'POST', headers: { origin, authorization: `Bearer ${token}` }, body: '{invalid json' })
       assert.equal(denied.status, 401)
     }
     for (const path of ['', '/live', '/database', '/minio', '/dependencies', '/worker', '/worker/readyz']) {
-      const health = await fetch(`${origin}/api/health${path}`)
+      const health = await requestWithRateLimit(`${origin}/api/health${path}`)
       assert.equal(health.status, 200, `Public health ${path}`)
       assert.equal((await health.json()).status, 'ok')
     }
-    assert.equal((await fetch(`${origin}/api/health/live`, { method: 'HEAD' })).status, 200)
+    assert.equal((await requestWithRateLimit(`${origin}/api/health/live`, { method: 'HEAD' })).status, 200)
     for (const path of ['/api/health/worker', '/api/health/worker/readyz']) {
-      const head = await fetch(`${origin}${path}`, { method: 'HEAD' })
+      const head = await requestWithRateLimit(`${origin}${path}`, { method: 'HEAD' })
       assert.equal(head.status, 200)
       assert.equal(head.headers.get('cache-control'), 'no-store')
       assert.equal(await head.text(), '')
-      assert.equal((await fetch(`${origin}${path}`, { method: 'POST' })).status, 401)
-      assert.equal((await fetch(`${origin}${path}/extra`)).status, 401)
+      assert.equal((await requestWithRateLimit(`${origin}${path}`, { method: 'POST' })).status, 401)
+      assert.equal((await requestWithRateLimit(`${origin}${path}/extra`)).status, 401)
     }
-    const invalidRefresh = await fetch(`${origin}/api/auth/refresh`, { method: 'POST', headers: { origin } })
+    const invalidRefresh = await requestWithRateLimit(`${origin}/api/auth/refresh`, { method: 'POST', headers: { origin } })
     assert.equal(invalidRefresh.status, 401)
     assert.equal(invalidRefresh.headers.getSetCookie().length, 2)
-    const home = await fetch(`${origin}/home`)
+    const home = await requestWithRateLimit(`${origin}/home`)
     assert.equal(home.status, 200, 'Home must compile in Turbopack development mode without server-only imports')
     async function connect(key) {
-      const login = await fetch(`${origin}/api/auth/test-login`, { method: 'POST', redirect: 'manual', headers: { origin, 'content-type': 'application/x-www-form-urlencoded' }, body: `key=${key}` })
+      const login = await requestWithRateLimit(`${origin}/api/auth/test-login`, { method: 'POST', redirect: 'manual', headers: { origin, 'content-type': 'application/x-www-form-urlencoded' }, body: `key=${key}` })
       assert.equal(login.status, 303)
       const cookie = login.headers.getSetCookie().map(value => value.split(';')[0]).join('; ')
-      const bootstrap = await fetch(`${origin}/api/auth/access-token`, { method: 'POST', headers: { origin, cookie } })
+      const bootstrap = await requestWithRateLimit(`${origin}/api/auth/access-token`, { method: 'POST', headers: { origin, cookie } })
       assert.equal(bootstrap.status, 200)
       const accessToken = (await bootstrap.json()).data.accessToken
       const socket = new WebSocket(`ws://127.0.0.1:${port}/realtime`, ['da-moa', accessToken], { headers: { Origin: origin } })
@@ -119,9 +138,9 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     }
     const mine = await connect('member-a')
     const other = await connect('member-b')
-    const authenticatedInvalid = await fetch(`${origin}/api/groups`, { method: 'POST', headers: { origin, authorization: `Bearer ${mine.accessToken}` }, body: '{invalid json' })
+    const authenticatedInvalid = await requestWithRateLimit(`${origin}/api/groups`, { method: 'POST', headers: { origin, authorization: `Bearer ${mine.accessToken}` }, body: '{invalid json' })
     assert.equal(authenticatedInvalid.status, 400, 'A valid JWT reaches body validation')
-    assert.equal((await fetch(`${origin}/api/openapi.json`, { headers: { authorization: `Bearer ${mine.accessToken}` } })).status, 200)
+    assert.equal((await requestWithRateLimit(`${origin}/api/openapi.json`, { headers: { authorization: `Bearer ${mine.accessToken}` } })).status, 200)
     const anonymous = new WebSocket(`ws://127.0.0.1:${port}/realtime`, { headers: { Origin: origin } })
     await new Promise((resolve, reject) => {
       anonymous.once('open', () => reject(new Error('Anonymous connection was accepted')))
@@ -143,7 +162,7 @@ test('authenticated WebSocket receives only its own committed invalidations', as
         try { resolve(JSON.parse(bytes.toString())) } catch (error) { reject(error) }
       })
     })
-    const response = await fetch(`${origin}/api/groups`, { method: 'POST', headers: { origin, authorization: `Bearer ${mine.accessToken}`, 'content-type': 'application/json', 'idempotency-key': uuidV7() }, body: JSON.stringify({ name: `WebSocket ${randomUUID()}` }) })
+    const response = await requestWithRateLimit(`${origin}/api/groups`, { method: 'POST', headers: { origin, authorization: `Bearer ${mine.accessToken}`, 'content-type': 'application/json', 'idempotency-key': uuidV7() }, body: JSON.stringify({ name: `WebSocket ${randomUUID()}` }) })
     assert.equal(response.status, 200)
     const groupId = (await response.json()).data.id
     const event = await message
@@ -152,37 +171,37 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     await new Promise(resolve => setTimeout(resolve, 250))
     assert.equal(leaked, false)
     const inviteMessage = once(mine.socket, 'message', { signal: AbortSignal.timeout(10000) })
-    const inviteResponse = await fetch(`${origin}/api/groups/${groupId}/invites`, { method: 'POST', headers: { origin, authorization: `Bearer ${mine.accessToken}`, 'content-type': 'application/json', 'idempotency-key': randomUUID() }, body: '{}' })
+    const inviteResponse = await requestWithRateLimit(`${origin}/api/groups/${groupId}/invites`, { method: 'POST', headers: { origin, authorization: `Bearer ${mine.accessToken}`, 'content-type': 'application/json', 'idempotency-key': randomUUID() }, body: '{}' })
     assert.equal(inviteResponse.status, 200)
     const invite = (await inviteResponse.json()).data
     const [inviteBytes] = await inviteMessage
     assert.deepEqual(JSON.parse(inviteBytes.toString()), { type: 'invalidate', keys: [`group:${groupId}`] })
-    const detailResponse = await fetch(`${origin}/api/groups/${groupId}`, { headers: { authorization: `Bearer ${mine.accessToken}` } })
+    const detailResponse = await requestWithRateLimit(`${origin}/api/groups/${groupId}`, { headers: { authorization: `Bearer ${mine.accessToken}` } })
     assert.equal(detailResponse.status, 200)
     assert.deepEqual((await detailResponse.json()).data.invites.map(item => item.id), [invite.id], 'invite list reload sees the saved invitation after invalidation')
     await new Promise(resolve => setTimeout(resolve, 250))
     assert.equal(leaked, false, 'invite invalidation is sent only to the creator')
     const revokeMessage = once(mine.socket, 'message', { signal: AbortSignal.timeout(10000) })
-    const revokeResponse = await fetch(`${origin}/api/groups/${groupId}/invites/${invite.id}`, { method: 'DELETE', headers: { origin, authorization: `Bearer ${mine.accessToken}`, 'idempotency-key': randomUUID() } })
+    const revokeResponse = await requestWithRateLimit(`${origin}/api/groups/${groupId}/invites/${invite.id}`, { method: 'DELETE', headers: { origin, authorization: `Bearer ${mine.accessToken}`, 'idempotency-key': randomUUID() } })
     assert.equal(revokeResponse.status, 200)
     const [revokeBytes] = await revokeMessage
     assert.deepEqual(JSON.parse(revokeBytes.toString()), { type: 'invalidate', keys: [`group:${groupId}`] })
-    const revokedDetail = await fetch(`${origin}/api/groups/${groupId}`, { headers: { authorization: `Bearer ${mine.accessToken}` } })
+    const revokedDetail = await requestWithRateLimit(`${origin}/api/groups/${groupId}`, { headers: { authorization: `Bearer ${mine.accessToken}` } })
     assert.deepEqual((await revokedDetail.json()).data.invites, [])
     await new Promise(resolve => setTimeout(resolve, 250))
     assert.equal(leaked, false, 'invite revocation invalidation is sent only to the creator')
-    const newInvite = await fetch(`${origin}/api/groups/${groupId}/invites`, { method: 'POST', headers: { origin, authorization: `Bearer ${mine.accessToken}`, 'content-type': 'application/json', 'idempotency-key': randomUUID() }, body: '{}' })
+    const newInvite = await requestWithRateLimit(`${origin}/api/groups/${groupId}/invites`, { method: 'POST', headers: { origin, authorization: `Bearer ${mine.accessToken}`, 'content-type': 'application/json', 'idempotency-key': randomUUID() }, body: '{}' })
     const acceptPath = (await newInvite.json()).data.sharePath
     await new Promise(resolve => setTimeout(resolve, 250))
     const creatorAcceptance = once(mine.socket, 'message', { signal: AbortSignal.timeout(10000) })
     const memberAcceptance = once(other.socket, 'message', { signal: AbortSignal.timeout(10000) })
     const acceptOutput = output.length
-    const acceptResponse = await fetch(`${origin}/api${acceptPath}/accept`, { method: 'POST', headers: { origin, authorization: `Bearer ${other.accessToken}`, 'content-type': 'application/json', 'idempotency-key': randomUUID() }, body: '{}' })
+    const acceptResponse = await requestWithRateLimit(`${origin}/api${acceptPath}/accept`, { method: 'POST', headers: { origin, authorization: `Bearer ${other.accessToken}`, 'content-type': 'application/json', 'idempotency-key': randomUUID() }, body: '{}' })
     assert.equal(acceptResponse.status, 200)
     for (const received of await Promise.all([creatorAcceptance, memberAcceptance])) {
       assert.deepEqual(JSON.parse(received[0].toString()), { type: 'invalidate', keys: ['groups', `group:${groupId}`] })
     }
-    assert.equal((output.slice(acceptOutput).match(/SQL:/g) ?? []).length, 5, 'accept uses five SQL calls, including session lock release and publication')
+    assert.equal(requestSql(output.slice(acceptOutput)).length, 5, 'accept uses five SQL calls, including session lock release and publication')
     assert.doesNotMatch(output.slice(acceptOutput), /BEGIN|COMMIT|ROLLBACK|pg_advisory_xact_lock|FOR UPDATE|FOR SHARE/)
     assert.match(output.slice(acceptOutput), /pg_advisory_lock/)
     assert.match(output.slice(acceptOutput), /pg_advisory_unlock/)
@@ -191,28 +210,28 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     const roundHeaders = { origin, authorization: `Bearer ${mine.accessToken}`, 'content-type': 'application/json', 'idempotency-key': ticket }
     const roundMessages = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
     const roundOutput = output.length
-    const createdRound = await fetch(`${origin}/api/groups/${groupId}/rounds`, { method: 'POST', headers: roundHeaders, body: JSON.stringify(roundBody) })
+    const createdRound = await requestWithRateLimit(`${origin}/api/groups/${groupId}/rounds`, { method: 'POST', headers: roundHeaders, body: JSON.stringify(roundBody) })
     assert.equal(createdRound.status, 200)
     assert.deepEqual((await createdRound.json()).data, { id: ticket, roundId: ticket, status: 'RECORDING', version: 1 })
     for (const [bytes] of await Promise.all(roundMessages)) assert.deepEqual(JSON.parse(bytes.toString()), {
       type: 'invalidate', keys: ['rounds', `group-rounds:${groupId}`, `round:${ticket}`, `settlement:${ticket}`],
     })
-    assert.equal((output.slice(roundOutput).match(/SQL:/g) ?? []).length, 4, 'creation and WebSocket publication use lock + AUTH + INSERT + unlock')
+    assert.equal(requestSql(output.slice(roundOutput)).length, 4, 'creation and WebSocket publication use lock + AUTH + INSERT + unlock')
     assert.doesNotMatch(output.slice(roundOutput), /BEGIN|COMMIT|ROLLBACK|pg_advisory_xact_lock|FOR UPDATE|FOR SHARE|mutation_requests/)
     assert.match(output.slice(roundOutput), /pg_advisory_lock/)
     assert.match(output.slice(roundOutput), /pg_advisory_unlock/)
-    const duplicate = await fetch(`${origin}/api/groups/${groupId}/rounds`, { method: 'POST', headers: roundHeaders, body: JSON.stringify(roundBody) })
+    const duplicate = await requestWithRateLimit(`${origin}/api/groups/${groupId}/rounds`, { method: 'POST', headers: roundHeaders, body: JSON.stringify(roundBody) })
     assert.equal(duplicate.status, 409)
     assert.equal((await duplicate.json()).error, 'round_already_exists')
     const cancelOutput = output.length, cancelKey = randomUUID()
     const cancelHeaders = { ...roundHeaders, 'idempotency-key': cancelKey }, cancelBody = JSON.stringify({ expectedVersion: 1 })
     const cancelled = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
-    assert.equal((await fetch(`${origin}/api/rounds/${ticket}`, { method: 'DELETE', headers: cancelHeaders, body: cancelBody })).status, 200)
+    assert.equal((await requestWithRateLimit(`${origin}/api/rounds/${ticket}`, { method: 'DELETE', headers: cancelHeaders, body: cancelBody })).status, 200)
     for (const [bytes] of await Promise.all(cancelled)) assert.deepEqual(JSON.parse(bytes.toString()), {
       type: 'invalidate', keys: ['rounds', `group-rounds:${groupId}`, `round:${ticket}`, `settlement:${ticket}`],
     })
-    assert.equal((output.slice(cancelOutput).match(/SQL:/g) ?? []).length, 6, 'cancel and WebSocket publication use BEGIN + AUTH + lock + check + delete/save + COMMIT')
-    const cancellationSql = output.slice(cancelOutput).split('SQL:').slice(1).map(sql => sql.trim())
+    assert.equal(requestSql(output.slice(cancelOutput)).length, 6, 'cancel and WebSocket publication use BEGIN + AUTH + lock + check + delete/save + COMMIT')
+    const cancellationSql = requestSql(output.slice(cancelOutput))
     assert.match(cancellationSql[0], /^BEGIN/)
     assert.match(cancellationSql[1], /FROM\s+users/)
     assert.match(cancellationSql[2], /pg_advisory_xact_lock/)
@@ -220,24 +239,24 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     assert.match(cancellationSql[4], /DELETE FROM\s+rounds/)
     assert.match(cancellationSql[5], /^COMMIT/)
     const replayOutput = output.length
-    assert.equal((await fetch(`${origin}/api/rounds/${ticket}`, { method: 'DELETE', headers: cancelHeaders, body: cancelBody })).status, 200)
+    assert.equal((await requestWithRateLimit(`${origin}/api/rounds/${ticket}`, { method: 'DELETE', headers: cancelHeaders, body: cancelBody })).status, 200)
     await new Promise(resolve => setTimeout(resolve, 250))
-    assert.equal((output.slice(replayOutput).match(/SQL:/g) ?? []).length, 5, 'cancel replay uses the saved result without post-delete audience reads')
+    assert.equal(requestSql(output.slice(replayOutput)).length, 5, 'cancel replay uses the saved result without post-delete audience reads')
     const expenseRoundId = uuidV7()
     const expenseRoundMessages = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
-    assert.equal((await fetch(`${origin}/api/groups/${groupId}/rounds`, { method: 'POST', headers: { ...roundHeaders, 'idempotency-key': expenseRoundId }, body: JSON.stringify(roundBody) })).status, 200)
+    assert.equal((await requestWithRateLimit(`${origin}/api/groups/${groupId}/rounds`, { method: 'POST', headers: { ...roundHeaders, 'idempotency-key': expenseRoundId }, body: JSON.stringify(roundBody) })).status, 200)
     await Promise.all(expenseRoundMessages)
     const expenseHeaders = { ...roundHeaders, 'idempotency-key': randomUUID() }
     const expenseBody = JSON.stringify({ currency: 'KRW', description: '지출 SQL 검증', amount: '100', payerId: memberId, splitMode: 'ALL', expectedVersion: 1 })
     const expenseMessages = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
     const expenseOutput = output.length
-    const expenseResponse = await fetch(`${origin}/api/rounds/${expenseRoundId}/expenses`, { method: 'POST', headers: expenseHeaders, body: expenseBody })
+    const expenseResponse = await requestWithRateLimit(`${origin}/api/rounds/${expenseRoundId}/expenses`, { method: 'POST', headers: expenseHeaders, body: expenseBody })
     assert.equal(expenseResponse.status, 200, await expenseResponse.clone().text())
     const savedExpense = (await expenseResponse.json()).data
     for (const [bytes] of await Promise.all(expenseMessages)) assert.deepEqual(JSON.parse(bytes.toString()), {
       type: 'invalidate', keys: ['rounds', `group-rounds:${groupId}`, `round:${expenseRoundId}`, `settlement:${expenseRoundId}`],
     })
-    const expenseSql = output.slice(expenseOutput).split('SQL:').slice(1).map(sql => sql.trim())
+    const expenseSql = requestSql(output.slice(expenseOutput))
     assert.equal(expenseSql.length, 6, 'expense creation and WebSocket publication do not add audience reads')
     assert.match(expenseSql[0], /FROM\s+users/)
     assert.match(expenseSql[1], /^BEGIN/)
@@ -246,10 +265,10 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     assert.match(expenseSql[4], /INSERT INTO\s+expense_shares/)
     assert.match(expenseSql[5], /^COMMIT/)
     const expenseReplayOutput = output.length
-    const expenseReplay = await fetch(`${origin}/api/rounds/${expenseRoundId}/expenses`, { method: 'POST', headers: expenseHeaders, body: expenseBody })
+    const expenseReplay = await requestWithRateLimit(`${origin}/api/rounds/${expenseRoundId}/expenses`, { method: 'POST', headers: expenseHeaders, body: expenseBody })
     assert.deepEqual((await expenseReplay.json()).data, savedExpense)
     await new Promise(resolve => setTimeout(resolve, 250))
-    assert.equal((output.slice(expenseReplayOutput).match(/SQL:/g) ?? []).length, 5)
+    assert.equal(requestSql(output.slice(expenseReplayOutput)).length, 5)
     const receiptTicket = randomUUID()
     const receiptHeaders = { origin, authorization: `Bearer ${mine.accessToken}`, 'idempotency-key': receiptTicket }
     const receiptForm = new FormData()
@@ -263,26 +282,26 @@ test('authenticated WebSocket receives only its own committed invalidations', as
       person.socket.on('message', receive)
     }))
     const receiptOutput = output.length
-    const receiptResponse = await fetch(receiptPath, { method: 'POST', headers: receiptHeaders, body: receiptForm })
+    const receiptResponse = await requestWithRateLimit(receiptPath, { method: 'POST', headers: receiptHeaders, body: receiptForm })
     assert.equal(receiptResponse.status, 202, await receiptResponse.clone().text())
     const savedReceipt = (await receiptResponse.json()).data
     for (const bytes of (await Promise.all(receiptMessages)).flat()) assert.deepEqual(JSON.parse(bytes.toString()), {
       type: 'invalidate', keys: ['rounds', `group-rounds:${groupId}`, `round:${expenseRoundId}`, `settlement:${expenseRoundId}`],
     })
-    const receiptSql = output.slice(receiptOutput).split('SQL:').slice(1).map(sql => sql.trim())
+    const receiptSql = requestSql(output.slice(receiptOutput))
     assert.equal(receiptSql.length, 3, 'receipt enqueue uses two SQL calls and worker storage uses one')
     assert.match(receiptSql[0], /FROM\s+users/)
     assert.match(receiptSql[1], /UPDATE\s+rounds[\s\S]*INSERT INTO\s+expense_receipts[\s\S]*graphile_worker\.add_job[\s\S]*INSERT INTO\s+mutation_requests/)
     assert.match(receiptSql[2], /UPDATE\s+expense_receipts[\s\S]*storage_status/)
     assert.ok(receiptSql.every(sql => !/\b(BEGIN|COMMIT|ROLLBACK)\b|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
     const receiptReadOutput = output.length
-    const receiptImage = await fetch(`${origin}/api/receipts/${savedReceipt.id}`, { headers: { authorization: `Bearer ${other.accessToken}` } })
+    const receiptImage = await requestWithRateLimit(`${origin}/api/receipts/${savedReceipt.id}`, { headers: { authorization: `Bearer ${other.accessToken}` } })
     assert.equal(receiptImage.status, 200)
     assert.equal(receiptImage.headers.get('content-type'), 'image/avif')
     assert.equal(receiptImage.headers.get('x-content-type-options'), 'nosniff')
     assert.equal(receiptImage.headers.get('cache-control'), 'private, no-store')
     assert.equal((await sharp(Buffer.from(await receiptImage.arrayBuffer())).metadata()).compression, 'av1')
-    const receiptReadSql = output.slice(receiptReadOutput).split('SQL:').slice(1).map(sql => sql.trim())
+    const receiptReadSql = requestSql(output.slice(receiptReadOutput))
     assert.equal(receiptReadSql.length, 2, 'receipt GET uses account lookup and a single authorized storage lookup')
     assert.match(receiptReadSql[0], /FROM\s+users/)
     assert.match(receiptReadSql[1], /FROM\s+expense_receipts[\s\S]*JOIN\s+expenses[\s\S]*JOIN\s+rounds[\s\S]*JOIN\s+round_members/)
@@ -293,32 +312,32 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     other.socket.on('message', onReceiptReplay)
     try {
       const replayOutput = output.length
-      const replay = await fetch(receiptPath, { method: 'POST', headers: receiptHeaders, body: receiptForm })
+      const replay = await requestWithRateLimit(receiptPath, { method: 'POST', headers: receiptHeaders, body: receiptForm })
       assert.equal(replay.status, 202)
       assert.deepEqual((await replay.json()).data, savedReceipt)
       await new Promise(resolve => setTimeout(resolve, 250))
       assert.equal(receiptReplayPublished, false)
-      assert.equal((output.slice(replayOutput).match(/SQL:/g) ?? []).length, 2)
+      assert.equal(requestSql(output.slice(replayOutput)).length, 2)
     } finally {
       mine.socket.off('message', onReceiptReplay)
       other.socket.off('message', onReceiptReplay)
     }
     const authOutput = output.length
-    const inactiveUpload = await fetch(receiptPath, { method: 'POST', headers: { origin, authorization: `Bearer ${createAccessToken(randomUUID(), 'session', secret)}` }, body: '{invalid form' })
+    const inactiveUpload = await requestWithRateLimit(receiptPath, { method: 'POST', headers: { origin, authorization: `Bearer ${createAccessToken(randomUUID(), 'session', secret)}` }, body: '{invalid form' })
     assert.equal(inactiveUpload.status, 401, 'account lookup precedes multipart validation')
-    assert.equal((output.slice(authOutput).match(/SQL:/g) ?? []).length, 1)
+    assert.equal(requestSql(output.slice(authOutput)).length, 1)
     const receiptDeleteTicket = randomUUID()
     const receiptDeleteHeaders = { ...expenseHeaders, 'idempotency-key': receiptDeleteTicket }
     const receiptDeleteBody = JSON.stringify({ expectedVersion: savedReceipt.version })
     const receiptDeleteMessages = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
     const receiptDeleteOutput = output.length
-    const receiptDeletedResponse = await fetch(`${receiptPath}/${savedReceipt.id}`, { method: 'DELETE', headers: receiptDeleteHeaders, body: receiptDeleteBody })
+    const receiptDeletedResponse = await requestWithRateLimit(`${receiptPath}/${savedReceipt.id}`, { method: 'DELETE', headers: receiptDeleteHeaders, body: receiptDeleteBody })
     assert.equal(receiptDeletedResponse.status, 200, await receiptDeletedResponse.clone().text())
     const deletedReceipt = (await receiptDeletedResponse.json()).data
     for (const [bytes] of await Promise.all(receiptDeleteMessages)) assert.deepEqual(JSON.parse(bytes.toString()), {
       type: 'invalidate', keys: ['rounds', `group-rounds:${groupId}`, `round:${expenseRoundId}`, `settlement:${expenseRoundId}`],
     })
-    const receiptDeleteSql = output.slice(receiptDeleteOutput).split('SQL:').slice(1).map(sql => sql.trim())
+    const receiptDeleteSql = requestSql(output.slice(receiptDeleteOutput))
     assert.equal(receiptDeleteSql.length, 3, 'receipt deletion including WebSocket publication uses three SQL calls')
     assert.match(receiptDeleteSql[0], /FROM\s+users/)
     assert.match(receiptDeleteSql[1], /LEFT JOIN\s+expense_receipts[\s\S]*operation\s*=\s*'receipt.delete'/)
@@ -330,12 +349,12 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     other.socket.on('message', onDeleteReplay)
     try {
       const replayOutput = output.length
-      const replay = await fetch(`${receiptPath}/${savedReceipt.id}`, { method: 'DELETE', headers: receiptDeleteHeaders, body: receiptDeleteBody })
+      const replay = await requestWithRateLimit(`${receiptPath}/${savedReceipt.id}`, { method: 'DELETE', headers: receiptDeleteHeaders, body: receiptDeleteBody })
       assert.equal(replay.status, 200)
       assert.deepEqual((await replay.json()).data, deletedReceipt)
       await new Promise(resolve => setTimeout(resolve, 250))
       assert.equal(deleteReplayPublished, false)
-      assert.equal((output.slice(replayOutput).match(/SQL:/g) ?? []).length, 2)
+      assert.equal(requestSql(output.slice(replayOutput)).length, 2)
     } finally {
       mine.socket.off('message', onDeleteReplay)
       other.socket.off('message', onDeleteReplay)
@@ -345,13 +364,13 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     const confirmBody = JSON.stringify({ expectedVersion: expenseVersion })
     const confirmMessages = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
     const confirmOutput = output.length
-    const confirmResponse = await fetch(`${origin}/api/rounds/${expenseRoundId}/confirm`, { method: 'POST', headers: confirmHeaders, body: confirmBody })
+    const confirmResponse = await requestWithRateLimit(`${origin}/api/rounds/${expenseRoundId}/confirm`, { method: 'POST', headers: confirmHeaders, body: confirmBody })
     assert.equal(confirmResponse.status, 200)
     const confirmed = (await confirmResponse.json()).data
     for (const [bytes] of await Promise.all(confirmMessages)) assert.deepEqual(JSON.parse(bytes.toString()), {
       type: 'invalidate', keys: ['rounds', `group-rounds:${groupId}`, `round:${expenseRoundId}`, `settlement:${expenseRoundId}`],
     })
-    const confirmSql = output.slice(confirmOutput).split('SQL:').slice(1).map(sql => sql.trim())
+    const confirmSql = requestSql(output.slice(confirmOutput))
     assert.equal(confirmSql.length, 6, 'confirmation and WebSocket publication use exactly six SQL calls')
     assert.match(confirmSql[0], /FROM\s+users/)
     assert.match(confirmSql[1], /^BEGIN/)
@@ -364,20 +383,20 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     const onReplay = () => { replayInvalidation = true }
     mine.socket.on('message', onReplay)
     try {
-      const replay = await fetch(`${origin}/api/rounds/${expenseRoundId}/confirm`, { method: 'POST', headers: confirmHeaders, body: confirmBody })
+      const replay = await requestWithRateLimit(`${origin}/api/rounds/${expenseRoundId}/confirm`, { method: 'POST', headers: confirmHeaders, body: confirmBody })
       assert.deepEqual((await replay.json()).data, confirmed)
       await new Promise(resolve => setTimeout(resolve, 250))
       assert.equal(replayInvalidation, false, 'confirmation replay must not publish again')
-      assert.equal((output.slice(confirmReplayOutput).match(/SQL:/g) ?? []).length, 5)
+      assert.equal(requestSql(output.slice(confirmReplayOutput)).length, 5)
     } finally { mine.socket.off('message', onReplay) }
     const reopenMessages = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
-    const reopened = await fetch(`${origin}/api/rounds/${expenseRoundId}/reopen`, { method: 'POST', headers: { ...roundHeaders, 'idempotency-key': randomUUID() }, body: JSON.stringify({ expectedVersion: confirmed.version }) })
+    const reopened = await requestWithRateLimit(`${origin}/api/rounds/${expenseRoundId}/reopen`, { method: 'POST', headers: { ...roundHeaders, 'idempotency-key': randomUUID() }, body: JSON.stringify({ expectedVersion: confirmed.version }) })
     assert.equal(reopened.status, 200)
     expenseVersion = (await reopened.json()).data.version
     await Promise.all(reopenMessages)
     for (const path of [`rounds/${expenseRoundId}/expenses/${savedExpense.id}`, `rounds/${expenseRoundId}`]) {
       const cleanupMessages = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
-      const cleanup = await fetch(`${origin}/api/${path}`, { method: 'DELETE', headers: { ...roundHeaders, 'idempotency-key': randomUUID() }, body: JSON.stringify({ expectedVersion: expenseVersion }) })
+      const cleanup = await requestWithRateLimit(`${origin}/api/${path}`, { method: 'DELETE', headers: { ...roundHeaders, 'idempotency-key': randomUUID() }, body: JSON.stringify({ expectedVersion: expenseVersion }) })
       assert.equal(cleanup.status, 200)
       expenseVersion = (await cleanup.json()).data.version
       await Promise.all(cleanupMessages)
@@ -386,7 +405,7 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     const drawRoundId = uuidV7()
     const roundPost = async (path, body, ticket = randomUUID(), actor = mine) => {
       const notifications = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
-      const response = await fetch(`${origin}/api/${path}`, { method: 'POST', headers: { ...roundHeaders, authorization: `Bearer ${actor.accessToken}`, 'idempotency-key': ticket }, body: JSON.stringify(body) })
+      const response = await requestWithRateLimit(`${origin}/api/${path}`, { method: 'POST', headers: { ...roundHeaders, authorization: `Bearer ${actor.accessToken}`, 'idempotency-key': ticket }, body: JSON.stringify(body) })
       assert.equal(response.status, 200, await response.clone().text())
       const events = await Promise.all(notifications)
       if (path.endsWith('/settlement-check')) for (const [bytes] of events) {
@@ -400,16 +419,16 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     const drawLocked = await roundPost(`rounds/${drawRoundId}/send`, { expectedVersion: drawConfirmed.version })
     const drawOutput = output.length
     const drawResult = await roundPost(`rounds/${drawRoundId}/draw`, { expectedVersion: drawLocked.version })
-    const drawSql = output.slice(drawOutput).split('SQL:').slice(1).map(sql => sql.trim())
+    const drawSql = requestSql(output.slice(drawOutput))
     assert.equal(drawSql.length, 3, 'draw including WebSocket publication uses exactly three SQL calls')
     assert.match(drawSql[0], /FROM\s+users/)
     assert.match(drawSql[1], /operation = 'round.draw'/)
     assert.match(drawSql[2], /FOR UPDATE OF\s+r[\s\S]*INSERT INTO\s+mutation_requests[\s\S]*UPDATE\s+rounds[\s\S]*UPDATE\s+expense_shares[\s\S]*INSERT INTO\s+settlement_balances[\s\S]*INSERT INTO\s+settlement_transfers/)
-    const receiverAccount = await fetch(`${origin}/api/me`, { headers: { authorization: `Bearer ${other.accessToken}` } }).then(response => response.json())
+    const receiverAccount = await requestWithRateLimit(`${origin}/api/me`, { headers: { authorization: `Bearer ${other.accessToken}` } }).then(response => response.json())
     try {
       const bankNotifications = [mine, other].map(person => once(person.socket, 'message', { signal: AbortSignal.timeout(10000) }))
       const bankOutput = output.length
-      const bankResponse = await fetch(`${origin}/api/me/bank-account`, {
+      const bankResponse = await requestWithRateLimit(`${origin}/api/me/bank-account`, {
         method: 'PUT', headers: { ...roundHeaders, authorization: `Bearer ${other.accessToken}` },
         body: JSON.stringify({ bankCode: '004', accountNumber: '12340312345678', accountHolder: TEST_ACCOUNTS[1].displayName, expectedBankVersion: receiverAccount.data.bankVersion }),
       })
@@ -419,7 +438,7 @@ test('authenticated WebSocket receives only its own committed invalidations', as
       assert.ok(senderBankKeys.includes(`settlement:${drawRoundId}`))
       assert.ok(senderBankKeys.every(key => /^settlement:[0-9a-f-]{36}$/.test(key)))
       assert.deepEqual(JSON.parse(ownerBankBytes.toString()).keys, ['me'])
-      const bankSql = output.slice(bankOutput).split('SQL:').slice(1).map(sql => sql.trim())
+      const bankSql = requestSql(output.slice(bankOutput))
       assert.equal(bankSql.length, 3, 'bank update uses AUTH + UPDATE + one audience SELECT')
       assert.ok(bankSql.every(sql => !/\b(BEGIN|COMMIT|ROLLBACK)\b/.test(sql)))
     } finally {
@@ -436,7 +455,7 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     const checkTicket = randomUUID(), checkOutput = output.length
     const checkResult = await roundPost(`rounds/${drawRoundId}/settlement-check`, checkBody, checkTicket, other)
     assert.equal(checkResult.version, drawResult.version)
-    const checkSql = output.slice(checkOutput).split('SQL:').slice(1).map(sql => sql.trim())
+    const checkSql = requestSql(output.slice(checkOutput))
     assert.equal(checkSql.length, 3, 'settlement check including WebSocket publication uses exactly three SQL calls')
     assert.match(checkSql[0], /FROM\s+users/)
     assert.match(checkSql[1], /AS incoming[\s\S]*AS user_ids/)
@@ -447,19 +466,19 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     mine.socket.on('message', onRepeatedCheck)
     try {
       const repeatedCheckOutput = output.length
-      const repeated = await fetch(`${origin}/api/rounds/${drawRoundId}/settlement-check`, {
+      const repeated = await requestWithRateLimit(`${origin}/api/rounds/${drawRoundId}/settlement-check`, {
         method: 'POST', headers: { ...roundHeaders, authorization: `Bearer ${other.accessToken}`, 'idempotency-key': checkTicket }, body: JSON.stringify(checkBody),
       })
       assert.equal(repeated.status, 404)
       assert.equal((await repeated.json()).error, 'not_found')
       await new Promise(resolve => setTimeout(resolve, 250))
       assert.equal(repeatedCheckInvalidation, false, 'unchanged receipt must not publish')
-      assert.equal((output.slice(repeatedCheckOutput).match(/SQL:/g) ?? []).length, 2)
+      assert.equal(requestSql(output.slice(repeatedCheckOutput)).length, 2)
     } finally { mine.socket.off('message', onRepeatedCheck) }
     await roundPost(`rounds/${drawRoundId}/settlement-check`, { ...checkBody, checked: false }, randomUUID(), other)
     const forceBody = { expectedVersion: drawResult.version }, forceTicket = randomUUID(), forceOutput = output.length
     const forced = await roundPost(`rounds/${drawRoundId}/force-complete`, forceBody, forceTicket)
-    const forceSql = output.slice(forceOutput).split('SQL:').slice(1).map(sql => sql.trim())
+    const forceSql = requestSql(output.slice(forceOutput))
     assert.equal(forceSql.length, 3, 'force completion including WebSocket publication uses exactly three SQL calls')
     assert.match(forceSql[0], /FROM\s+users/)
     assert.match(forceSql[1], /DISTINCT\s+receiver_id[\s\S]*AS pending_user_ids[\s\S]*AS user_ids/)
@@ -470,26 +489,26 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     mine.socket.on('message', onForceReplay)
     try {
       const replayOutput = output.length
-      const replay = await fetch(`${origin}/api/rounds/${drawRoundId}/force-complete`, {
+      const replay = await requestWithRateLimit(`${origin}/api/rounds/${drawRoundId}/force-complete`, {
         method: 'POST', headers: { ...roundHeaders, 'idempotency-key': forceTicket }, body: JSON.stringify(forceBody),
       })
       assert.equal(replay.status, 200)
       assert.deepEqual((await replay.json()).data, forced)
       await new Promise(resolve => setTimeout(resolve, 250))
       assert.equal(forceReplayInvalidation, false, 'force completion replay must not publish')
-      assert.equal((output.slice(replayOutput).match(/SQL:/g) ?? []).length, 2)
+      assert.equal(requestSql(output.slice(replayOutput)).length, 2)
     } finally { mine.socket.off('message', onForceReplay) }
-    const refreshed = await fetch(`${origin}/api/auth/refresh`, { method: 'POST', headers: { origin, cookie: refreshCookie } })
+    const refreshed = await requestWithRateLimit(`${origin}/api/auth/refresh`, { method: 'POST', headers: { origin, cookie: refreshCookie } })
     assert.equal(refreshed.status, 200, 'Refresh JWT works without an Access JWT')
-    assert.equal((await fetch(`${origin}/api/me`, { headers: { authorization: `Bearer ${mine.accessToken}` } })).status, 200, 'Refresh rotation does not revoke an unexpired Access JWT')
+    assert.equal((await requestWithRateLimit(`${origin}/api/me`, { headers: { authorization: `Bearer ${mine.accessToken}` } })).status, 200, 'Refresh rotation does not revoke an unexpired Access JWT')
     const newAccessToken = (await refreshed.json()).data.accessToken
     const newCookie = refreshed.headers.getSetCookie().map(value => value.split(';')[0]).join('; ')
-    assert.equal((await fetch(`${origin}/api/me`, { headers: { authorization: `Bearer ${newAccessToken}` } })).status, 200)
+    assert.equal((await requestWithRateLimit(`${origin}/api/me`, { headers: { authorization: `Bearer ${newAccessToken}` } })).status, 200)
     const newRefreshCookie = newCookie.split('; ').find(value => value.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`))
-    assert.equal((await fetch(`${origin}/api/auth/logout`, { method: 'POST', headers: { origin, cookie: newRefreshCookie } })).status, 200)
-    assert.equal((await fetch(`${origin}/api/me`, { headers: { authorization: `Bearer ${newAccessToken}` } })).status, 200, 'Logout deletes client tokens without revoking Access JWTs')
+    assert.equal((await requestWithRateLimit(`${origin}/api/auth/logout`, { method: 'POST', headers: { origin, cookie: newRefreshCookie } })).status, 200)
+    assert.equal((await requestWithRateLimit(`${origin}/api/me`, { headers: { authorization: `Bearer ${newAccessToken}` } })).status, 200, 'Logout deletes client tokens without revoking Access JWTs')
     const departure = once(mine.socket, 'message', { signal: AbortSignal.timeout(10000) })
-    const withdrawn = await fetch(`${origin}/api/auth/withdraw`, { method: 'POST', headers: { origin, authorization: `Bearer ${other.accessToken}` } })
+    const withdrawn = await requestWithRateLimit(`${origin}/api/auth/withdraw`, { method: 'POST', headers: { origin, authorization: `Bearer ${other.accessToken}` } })
     assert.equal(withdrawn.status, 200)
     assert.deepEqual(await withdrawn.json(), { ok: true })
     assert.equal(withdrawn.headers.get('Cache-Control'), 'private, no-store')
@@ -499,7 +518,25 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     assert.deepEqual(departureEvent, { type: 'invalidate', keys: departureEvent.keys })
     assert.ok(departureEvent.keys.includes('groups') && departureEvent.keys.includes(`group:${groupId}`))
     assert.ok(departureEvent.keys.every(value => value === 'groups' || /^group:[0-9a-f-]{36}$/.test(value)))
-    assert.equal((await fetch(`${origin}/api/me`, { headers: { authorization: `Bearer ${other.accessToken}` } })).status, 401, 'soft deletion rejects the withdrawn member\'s existing JWT')
+    assert.equal((await requestWithRateLimit(`${origin}/api/me`, { headers: { authorization: `Bearer ${other.accessToken}` } })).status, 401, 'soft deletion rejects the withdrawn member\'s existing JWT')
+
+    const limitedUser = randomUUID()
+    const limitedToken = createAccessToken(limitedUser, 'first-device', secret)
+    const reads = await Promise.all(Array.from({ length: 40 }, (_, i) => globalThis.fetch(`${origin}/api/openapi.json?read=${i}`, { headers: { authorization: `Bearer ${limitedToken}` } })))
+    assert.ok(reads.some(response => response.status === 200))
+    assert.ok(reads.some(response => response.status === 429), 'real Node/Next requests must share a user bucket')
+    await Promise.all(reads.map(response => response.arrayBuffer()))
+    const secondDevice = await globalThis.fetch(`${origin}/api/openapi.json`, { headers: { authorization: `Bearer ${createAccessToken(limitedUser, 'second-device', secret)}` } })
+    assert.equal(secondDevice.status, 429, 'another JWT for the same user must not reset tokens')
+
+    const uploadToken = createAccessToken(randomUUID(), 'upload-limit', secret)
+    const uploadInit = { method: 'POST', headers: { origin, authorization: `Bearer ${uploadToken}` }, body: '{invalid form' }
+    for (let i = 0; i < 3; i++) assert.equal((await globalThis.fetch(receiptPath, uploadInit)).status, 401, 'allowed requests still check member state')
+    const limitedOutput = output.length
+    const uploadDenied = await globalThis.fetch(receiptPath, uploadInit)
+    assert.equal(uploadDenied.status, 429)
+    assert.equal(uploadDenied.headers.get('Retry-After'), '6')
+    assert.equal(requestSql(output.slice(limitedOutput)).length, 0, 'a throttled request must execute no DB query')
   } finally {
     for (const socket of connections) socket.terminate()
     app.kill('SIGTERM')
