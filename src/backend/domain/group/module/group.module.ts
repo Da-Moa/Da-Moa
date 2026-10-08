@@ -2,13 +2,13 @@ import { AuthorizationModule } from '../../../global/auth/module/authorization.m
 import { Module } from '@nestjs/common';
 import { GroupController } from '../controller/group.controller';
 import { GroupService } from '../service/group.service';
-import { GroupRepository } from '../repository/group.repository';
+import { GroupRepositoryModule } from './groupRepository.module';
 import { PrismaModule } from '../../../global/database/prisma.module';
 
 @Module({
-  imports: [PrismaModule, AuthorizationModule],
+  imports: [PrismaModule, AuthorizationModule, GroupRepositoryModule],
   controllers: [GroupController],
-  providers: [GroupService, GroupRepository],
+  providers: [GroupService],
   exports: [GroupService],
 })
 export class GroupModule {}

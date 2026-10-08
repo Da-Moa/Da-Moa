@@ -37,8 +37,8 @@ import {
   publishBankInvalidation,
   publishDepartureInvalidation,
 } from '../../../global/util';
-import { GroupService } from '../../group';
-import { SettleService } from '../../settle';
+import { GroupAudienceReader } from '../../group';
+import { SettleAudienceReader } from '../../settle';
 import { UserService } from '../service/user.service';
 
 @RequestBodyLimit(16384)
@@ -47,8 +47,9 @@ import { UserService } from '../service/user.service';
 export class UserController {
   constructor(
     @Inject(UserService) private readonly operations: UserService,
-    @Inject(GroupService) private readonly groups: GroupService,
-    @Inject(SettleService) private readonly settlements: SettleService,
+    @Inject(GroupAudienceReader) private readonly groups: GroupAudienceReader,
+    @Inject(SettleAudienceReader)
+    private readonly settlements: SettleAudienceReader,
   ) {}
 
   @Get('api/me')
@@ -72,7 +73,7 @@ export class UserController {
     const session = await this.operations.completeOnboarding(user, body);
     after(() =>
       publishBankInvalidation(session.userId, (id) =>
-        this.settlements.getBankSettlementAudience(id),
+        this.settlements.findRecipients(id),
       ),
     );
     const cookies = new HttpResponse(null);
@@ -96,7 +97,7 @@ export class UserController {
     );
     after(() =>
       publishBankInvalidation(result.id, (id) =>
-        this.settlements.getBankSettlementAudience(id),
+        this.settlements.findRecipients(id),
       ),
     );
     return result;
@@ -111,7 +112,7 @@ export class UserController {
     const result = await this.operations.withdrawAccount(user);
     after(() =>
       publishDepartureInvalidation(result.groupIds, (ids) =>
-        this.groups.getDepartureAudience(ids),
+        this.groups.findRecipients(ids),
       ),
     );
     const cookies = new HttpResponse(null);

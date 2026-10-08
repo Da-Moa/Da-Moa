@@ -1,3 +1,5 @@
+import { GroupModule } from '../domain/group/module/group.module';
+import { SettleModule } from '../domain/settle/module/settle.module';
 import { databaseRows } from '../global/database/prisma.service';
 import 'reflect-metadata';
 import { after } from 'node:test';
@@ -16,7 +18,9 @@ import { getKakaoCallbackResponse as callback } from '../global/auth/controller/
 import { getTestLoginResponse as testLogin } from '../global/auth/controller/testLogin.controller';
 import { getRefreshResponse as refresh } from '../global/auth/controller/refresh.controller';
 
-@Module({ imports: [UserModule, AuthModule, HealthModule] })
+@Module({
+  imports: [UserModule, GroupModule, SettleModule, AuthModule, HealthModule],
+})
 class DomainTestModule {}
 let context:
   ReturnType<typeof NestFactory.createApplicationContext> | undefined;
@@ -126,12 +130,6 @@ export async function acceptInvite(
   return (await testProvider(GroupService)).acceptInvite(...args);
 }
 
-export async function getDepartureAudience(
-  ...args: Parameters<GroupService['getDepartureAudience']>
-): Promise<Awaited<ReturnType<GroupService['getDepartureAudience']>>> {
-  return (await testProvider(GroupService)).getDepartureAudience(...args);
-}
-
 export async function listRounds(
   ...args: Parameters<SettleService['listRounds']>
 ): Promise<Awaited<ReturnType<SettleService['listRounds']>>> {
@@ -215,12 +213,6 @@ export async function getReceipt(
   ...args: Parameters<SettleService['getReceipt']>
 ): Promise<Awaited<ReturnType<SettleService['getReceipt']>>> {
   return (await testProvider(SettleService)).getReceipt(...args);
-}
-
-export async function getBankSettlementAudience(
-  ...args: Parameters<SettleService['getBankSettlementAudience']>
-): Promise<Awaited<ReturnType<SettleService['getBankSettlementAudience']>>> {
-  return (await testProvider(SettleService)).getBankSettlementAudience(...args);
 }
 
 export async function signInKakao(

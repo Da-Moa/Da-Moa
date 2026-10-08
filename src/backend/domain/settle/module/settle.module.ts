@@ -2,13 +2,13 @@ import { AuthorizationModule } from '../../../global/auth/module/authorization.m
 import { Module } from '@nestjs/common';
 import { SettleController } from '../controller/settle.controller';
 import { SettleService } from '../service/settle.service';
-import { SettleRepository } from '../repository/settle.repository';
+import { SettleRepositoryModule } from './settleRepository.module';
 import { PrismaModule } from '../../../global/database/prisma.module';
 
 @Module({
-  imports: [PrismaModule, AuthorizationModule],
+  imports: [PrismaModule, AuthorizationModule, SettleRepositoryModule],
   controllers: [SettleController],
-  providers: [SettleService, SettleRepository],
+  providers: [SettleService],
   exports: [SettleService],
 })
 export class SettleModule {}

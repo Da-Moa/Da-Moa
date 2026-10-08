@@ -448,10 +448,4 @@ export class GroupService {
       },
     );
   }
-
-  getDepartureAudience(groupIds: string[]) {
-    return this.prisma.withDatabaseConnection((client) =>
-      this.repository.findDepartureAudience(client, groupIds),
-    );
-  }
 }

@@ -1839,10 +1839,4 @@ export class SettleService {
     if (!content) throw missing();
     return { mimeType: receipt.mime_type, content };
   }
-
-  getBankSettlementAudience(userId: string) {
-    return this.prisma.withDatabaseConnection((client) =>
-      this.repository.findBankSettlementAudience(client, userId),
-    );
-  }
 }
