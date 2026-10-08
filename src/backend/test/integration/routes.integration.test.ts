@@ -8,9 +8,9 @@ import { channel } from 'node:diagnostics_channel';
 import { before, after } from 'node:test';
 import { createBackend } from '../../domain/main';
 import { AuthService } from '../../global/auth/service/auth.service';
-import { disconnectPrismaClients } from '../../global/database/prisma.service';
+
 import { PrismaService } from '../../global/database/prisma.service';
-import { closeDatabasePools } from '../../global/database/dbClient.mjs';
+
 import { drainReceiptQueue } from './receiptWorkerTestSupport';
 import { uuidV7 } from '../../../shared/uuid.ts';
 import assert from 'node:assert/strict';
@@ -946,8 +946,8 @@ before(async () => {
 });
 after(async () => {
   await app?.close();
-  await disconnectPrismaClients();
-  await closeDatabasePools();
+
+
 });
 
 test('Nest HTTP uses the registered account Provider and retains transaction context', async (t) => {

@@ -1,5 +1,5 @@
 import { before } from 'node:test'
-import { getPrismaClient } from '../../global/database/prisma.service.ts'
+import { getPrismaClient } from '../domainTestSupport';
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -9,7 +9,7 @@ import { signInKakao } from '../domainTestSupport';
 import { readAccessToken } from '../../global/auth/native.ts'
 import { withdrawAccount } from '../domainTestSupport';
 import { AppError } from '../../global/apiPayload/errors.ts'
-import { getDatabasePool } from '../../global/database/dbClient.mjs'
+import { getDatabasePool } from '../domainTestSupport';
 import { completeTestOnboarding } from './bankTestSupport.ts'
 import { applyMigrations } from '../../../../scripts/migrations.mjs'
 
@@ -35,11 +35,11 @@ test('Kakao sign-in creates only missing provider identities with one SQL and no
     t.mock.method(console, 'info', (message: string) => {
       statements.push(message.replace(/^SQL:\s*/, '').replace(/\s+/g, ' ').trim())
     })
+    const pool = await getDatabasePool(testUrl)
     const assertOneStatement = () => {
       assert.equal(statements.length, 1)
       assert.match(statements[0], /INSERT INTO users.*WHERE NOT EXISTS.*ON CONFLICT \(provider, provider_subject\) DO NOTHING/)
       assert.doesNotMatch(statements[0], /\b(BEGIN|COMMIT|ROLLBACK|UPDATE|SET)\b|pg_advisory|FOR SHARE/)
-      const pool = getDatabasePool(testUrl)
       assert.equal(pool.idleCount, pool.totalCount, 'return connections after both success and failure')
     }
     const trace = async <T>(work: () => Promise<T>) => {

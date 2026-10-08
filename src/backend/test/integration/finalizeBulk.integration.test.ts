@@ -6,11 +6,9 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { createDatabaseClient } from '../../global/database/db';
-import { closeDatabasePools } from '../../global/database/dbClient.mjs';
-import {
-  disconnectPrismaClients,
-  PrismaService,
-} from '../../global/database/prisma.service';
+
+import { PrismaService } from '../../global/database/prisma.service';
+
 import type { AccessToken } from '../../global/auth/native';
 import { createGroup, createInvite, acceptInvite } from '../domainTestSupport';
 import { SettleService } from '../../domain/settle/service/settle.service';
@@ -44,8 +42,6 @@ test('send bulk-finalizes settlement with constant SQL count, exact money and at
   await db.connect();
   t.after(async () => {
     await db.end();
-    await disconnectPrismaClients();
-    await closeDatabasePools();
   });
   await applyMigrations(db);
   const people: AccessToken[] = [];
@@ -68,9 +64,10 @@ test('send bulk-finalizes settlement with constant SQL count, exact money and at
       randomUUID(),
       invite.sharePath!.split('/').at(-1)!,
     );
-  const repository = new SettleRepository(new PrismaService());
+  const prisma = await testProvider(PrismaService);
+  const repository = new SettleRepository(prisma);
   const service = new SettleService(
-    new PrismaService(),
+    prisma,
     repository,
     await testProvider(AuthorizationService),
     await testProvider(MutationExecutor),

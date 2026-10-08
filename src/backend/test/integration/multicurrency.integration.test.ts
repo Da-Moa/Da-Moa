@@ -1,5 +1,5 @@
 import { before } from 'node:test'
-import { getPrismaClient } from '../../global/database/prisma.service.ts'
+import { getPrismaClient } from '../domainTestSupport';
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import test from 'node:test'

@@ -11,6 +11,7 @@ import { SettleRepository } from '../repository/settle.repository';
 @Injectable()
 export class ReceiptWorker {
   private runner?: ReturnType<typeof run>;
+  private stopping?: Promise<void>;
   private readonly health = { running: false, readyWorkers: new Set<string>() };
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
@@ -18,6 +19,10 @@ export class ReceiptWorker {
     @Inject(ReceiptStorage) private readonly storage: ReceiptStorage,
     @Inject(RealtimePublisher) private readonly publisher: RealtimePublisher,
   ) {}
+  // Flush completion/failure writes before the runner releases its pool.
+  readonly preset = {
+    worker: { completeJobBatchDelay: 0, failJobBatchDelay: 0 },
+  };
   readonly tasks: TaskList = {
     store_receipt: async (payload, helpers) => {
       const data = payload as { id: string; userId: string; content: string };
@@ -85,6 +90,7 @@ export class ReceiptWorker {
   }
 
   async start() {
+    await this.stopping;
     if (!this.runner) {
       const health = this.health;
       const events = new EventEmitter();
@@ -120,12 +126,12 @@ export class ReceiptWorker {
         connectionString: process.env.DATABASE_URL || process.env.POSTGRES_URL,
         taskList: this.tasks,
         noHandleSignals: true,
+        preset: this.preset,
         concurrency: 2,
         pollInterval: 1000,
         events,
       });
       void this.runner.then((runner) => {
-        // Attach to the existing runner too when development reloads older instrumentation.
         if (runner.events !== events) track(runner.events);
         health.running = true;
         void runner.promise.then(stopped, (error) => {
@@ -137,12 +143,19 @@ export class ReceiptWorker {
     return await this.runner!;
   }
 
-  async stop() {
-    const runner = this.runner;
-    if (!runner) return;
-    await (await runner).stop();
-    if (this.runner === runner) this.runner = undefined;
-    this.health.running = false;
-    this.health.readyWorkers.clear();
+  stop() {
+    if (!this.stopping) {
+      this.stopping = (async () => {
+        const runner = this.runner;
+        if (!runner) return;
+        await (await runner).stop();
+        if (this.runner === runner) this.runner = undefined;
+        this.health.running = false;
+        this.health.readyWorkers.clear();
+      })().finally(() => {
+        this.stopping = undefined;
+      });
+    }
+    return this.stopping;
   }
 }

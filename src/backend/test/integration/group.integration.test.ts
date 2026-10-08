@@ -1,6 +1,6 @@
 import { mockPoolConnection, queryText } from '../dbTestSupport'
 import { before } from 'node:test'
-import { getPrismaClient } from '../../global/database/prisma.service.ts'
+import { getPrismaClient } from '../domainTestSupport';
 import { uuidV7 } from '../../../shared/uuid.ts'
 import assert from 'node:assert/strict'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
@@ -9,7 +9,7 @@ import { readAccessToken } from '../../global/auth/native.ts'
 import { signInKakao } from '../domainTestSupport';
 import { createDatabaseClient } from '../../global/database/db.ts';
 import { withDatabaseConnection } from '../domainTestSupport';
-import { getDatabasePool } from '../../global/database/dbClient.mjs'
+import { getDatabasePool } from '../domainTestSupport';
 import { acceptInvite, createGroup, createInvite, getGroup, getInvite, leaveGroup, listGroups, revokeInvite } from '../domainTestSupport';
 import { applyMigrations } from '../../../../scripts/migrations.mjs'
 import { completeTestOnboarding } from './bankTestSupport.ts'

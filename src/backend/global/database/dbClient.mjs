@@ -26,25 +26,13 @@ export function createDatabaseClient(value, { instrument = true, ...options } = 
   return instrumentQueries(client, instrument)
 }
 
-// Reuse pools across Next.js module reloads; separate URLs keep test databases isolated.
-const pools = globalThis[Symbol.for('da-moa.database.pools')] ??= new Map()
-
-export function getDatabasePool(value) {
-  if (!pools.has(value)) {
-    const pool = new Pool({
-      connectionString: value, max: 10, connectionTimeoutMillis: 10_000,
-      idleTimeoutMillis: 30_000, allowExitOnIdle: true,
-      // PostgreSQL startup parameters; no SET queries when borrowing a connection.
-      statement_timeout: 15_000, lock_timeout: 10_000,
-    })
-    pool.on('connect', client => instrumentQueries(client))
-    pool.on('error', error => console.error('Database pool idle client error', error))
-    pools.set(value, pool)
-  }
-  return pools.get(value)
-}
-
-export async function closeDatabasePools() {
-  await Promise.all([...pools.values()].map(pool => pool.end()))
-  pools.clear()
+export function createDatabasePool(value) {
+  const pool = new Pool({
+    connectionString: value, max: 10, connectionTimeoutMillis: 10_000,
+    idleTimeoutMillis: 30_000, allowExitOnIdle: true,
+    statement_timeout: 15_000, lock_timeout: 10_000,
+  })
+  pool.on('connect', client => instrumentQueries(client))
+  pool.on('error', error => console.error('Database pool idle client error', error))
+  return pool
 }

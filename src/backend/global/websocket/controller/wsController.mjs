@@ -48,7 +48,7 @@ export function createWsController(rateLimit, authenticate, publisher) {
   }
   function close() {
     unregister()
-    websocket.close()
+    return websocket.close()
   }
   return { handleUpgrade, close }
 }

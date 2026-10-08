@@ -1,4 +1,4 @@
-import { getPrismaClient } from '../../global/database/prisma.service.ts'
+import { getPrismaClient } from '../domainTestSupport';
 import { uuidV7 } from '../../../shared/uuid.ts'
 import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'

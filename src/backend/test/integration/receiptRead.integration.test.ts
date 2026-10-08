@@ -1,5 +1,5 @@
 import { before } from 'node:test'
-import { getPrismaClient } from '../../global/database/prisma.service.ts'
+import { getPrismaClient } from '../domainTestSupport';
 import { addStoredReceipt as addReceipt } from './receiptWorkerTestSupport'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
@@ -8,7 +8,7 @@ import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import sharp from 'sharp'
 import { readAccessToken } from '../../global/auth/native.ts'
 import { createDatabaseClient } from '../../global/database/db.ts'
-import { getDatabasePool } from '../../global/database/dbClient.mjs'
+import { getDatabasePool } from '../domainTestSupport';
 import { uuidV7 } from '../../../shared/uuid.ts'
 import { signInKakao } from '../domainTestSupport';
 import { acceptInvite, createGroup, createInvite } from '../domainTestSupport';
@@ -53,7 +53,7 @@ test('receipt read checks account and round participation in two SQL calls befor
     t.mock.method(S3Client.prototype, 'send', async function (this: S3Client, command: GetObjectCommand) {
       assert.ok(command instanceof GetObjectCommand)
       assert.equal(command.input.Key, objectKey)
-      const pool = getDatabasePool(testUrl)
+      const pool = await getDatabasePool(testUrl)
       assert.equal(pool.idleCount, pool.totalCount, 'release the DB connection before waiting for MinIO')
       events.push('GET')
       return Reflect.apply(originalSend, this, [command])

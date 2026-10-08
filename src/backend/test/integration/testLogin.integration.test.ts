@@ -1,4 +1,4 @@
-import { getPrismaClient } from '../../global/database/prisma.service.ts'
+import { getPrismaClient } from '../domainTestSupport';
 import assert from 'node:assert/strict'
 import { before, test } from 'node:test'
 import { networkInterfaces } from 'node:os'

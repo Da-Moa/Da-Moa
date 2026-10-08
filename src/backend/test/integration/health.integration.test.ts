@@ -226,14 +226,14 @@ test('receipt worker probes distinguish startup, queue errors, dependencies and 
     assert.equal(databaseDown.status, 503);
     assert.equal((await databaseDown.json()).checks.database, 'down');
     process.env.DATABASE_URL = testUrl;
-    await runner.stop();
+    await app.get(ReceiptWorker).stop();
     await runner.promise;
     runner = undefined;
     assert.equal((await get('worker')).status, 503);
     assert.equal((await get('worker/readyz')).status, 503);
   } finally {
     if (runner) {
-      await runner.stop();
+      await app.get(ReceiptWorker).stop();
       await runner.promise;
     }
     await new Promise<void>((resolve) => minio.close(() => resolve()));

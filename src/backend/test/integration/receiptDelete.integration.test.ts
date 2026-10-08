@@ -1,5 +1,5 @@
 import { before } from 'node:test'
-import { getPrismaClient } from '../../global/database/prisma.service.ts'
+import { getPrismaClient } from '../domainTestSupport';
 import { addStoredReceipt as addReceipt } from './receiptWorkerTestSupport'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
@@ -8,7 +8,7 @@ import { DeleteObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import sharp from 'sharp'
 import { readAccessToken } from '../../global/auth/native.ts'
 import { createDatabaseClient } from '../../global/database/db.ts'
-import { getDatabasePool } from '../../global/database/dbClient.mjs'
+import { getDatabasePool } from '../domainTestSupport';
 import { uuidV7 } from '../../../shared/uuid.ts'
 import { signInKakao } from '../domainTestSupport';
 import { acceptInvite, createGroup, createInvite } from '../domainTestSupport';
@@ -58,7 +58,7 @@ test('receipt deletion uses AUTH, authorized context and one atomic deletion wit
     t.mock.method(console, 'error', () => {})
     t.mock.method(S3Client.prototype, 'send', async function (this: S3Client, command: DeleteObjectCommand) {
       if (command instanceof DeleteObjectCommand) {
-        const pool = getDatabasePool(testUrl)
+        const pool = await getDatabasePool(testUrl)
         if (!concurrent) assert.equal(pool.idleCount, pool.totalCount, 'release the DB connection before MinIO cleanup')
         events.push('DELETE'); deletedKeys.push(command.input.Key!)
         if (failDelete) throw new Error('test cleanup failure')

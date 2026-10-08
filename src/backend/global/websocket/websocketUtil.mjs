@@ -48,10 +48,15 @@ export function createWebsocketUtil() {
 
   const heartbeat = setInterval(ping, 60000)
   heartbeat.unref()
+  let closing
   function close() {
-    clearInterval(heartbeat)
-    for (const socket of connections) socket.terminate()
-    server.close()
+    closing ??= (async () => {
+      clearInterval(heartbeat)
+      const pending = [...connections].map(socket => new Promise(resolve => socket.once('close', resolve)))
+      for (const socket of connections) socket.terminate()
+      await Promise.all([...pending, new Promise(resolve => server.close(() => resolve()))])
+    })()
+    return closing
   }
   return { upgrade, subscribe, publish, ping, close }
 }

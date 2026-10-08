@@ -1,4 +1,4 @@
-import { RealtimeAuthorizationService } from '../../global/auth/service/realtimeAuthorization.service.ts';
+import { RealtimeTransport } from '../../global/websocket/realtimeTransport.ts';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import test from 'node:test';
@@ -7,9 +7,7 @@ import { createBackend } from '../../domain/main.ts';
 import { GroupService } from '../../domain/group/service/group.service.ts';
 import { createAccessToken } from '../../global/auth/native.ts';
 import { PrismaService } from '../../global/database/prisma.service.ts';
-import { createRateLimitController } from '../../global/rateLimit/native.ts';
 import { RealtimePublisher } from '../../global/util/invalidationUtil.ts';
-import { createWsController } from '../../global/websocket/controller/wsController.mjs';
 
 test(
   'Nest mutations publish directly to authenticated WebSockets without an internal HTTP request',
@@ -32,27 +30,19 @@ test(
         }),
       },
     }));
-    const rateLimit = createRateLimitController();
     let websocket;
     let publisher;
     const sockets = [];
     let app;
     t.after(async () => {
       sockets.forEach((socket) => socket.terminate());
-      websocket?.close();
-      rateLimit.close();
       await app?.close();
       assert.equal(publisher.realtimeEnabled(), false);
     });
     ({ app } = await createBackend(async (backend) => {
-      const authorization = backend.get(RealtimeAuthorizationService);
       publisher = backend.get(RealtimePublisher);
-      websocket = createWsController(
-        rateLimit,
-        (token) => authorization.authenticate(token),
-        publisher,
-      );
-      backend.getHttpServer().on('upgrade', websocket.handleUpgrade);
+      websocket = backend.get(RealtimeTransport);
+      websocket.attach(backend.getHttpServer());
     }));
     t.mock.method(
       app.get(GroupService),

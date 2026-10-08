@@ -1,5 +1,5 @@
 import { mockPoolConnection, queryText, queryResult } from '../dbTestSupport'
-import { getPrismaClient } from '../../global/database/prisma.service.ts'
+import { getPrismaClient } from '../domainTestSupport';
 import { uuidV7 } from '../../../shared/uuid.ts'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
@@ -10,7 +10,7 @@ import { currentTimestamp, readAccessToken, type AccessToken } from '../../globa
 import { withdrawAccount } from '../domainTestSupport';
 import { signInKakao } from '../domainTestSupport';
 import { createDatabaseClient } from '../../global/database/db.ts'
-import { getDatabasePool } from '../../global/database/dbClient.mjs'
+import { getDatabasePool } from '../domainTestSupport';
 import { AppError } from '../../global/apiPayload/errors.ts'
 import { acceptInvite, createGroup, createInvite, leaveGroup } from '../domainTestSupport';
 import { addReceipt, createRound, deleteExpense, getRound, getSettlement, roundCommand, saveExpense, setSettlementCheck } from '../domainTestSupport';
@@ -105,7 +105,7 @@ test('reopen and send recheck a competing transition after the round read', { ti
     const fixture = await recordingRound()
     const confirmed = await roundCommand(fixture.owner, key(), fixture.roundId, 'confirm', { expectedVersion: fixture.version })
     const body = { expectedVersion: confirmed.version }
-    const pool = getDatabasePool(process.env.DATABASE_URL!), connect = pool.connect.bind(pool)
+    const pool = await getDatabasePool(process.env.DATABASE_URL!), connect = pool.connect.bind(pool)
     let resume!: () => void, reached!: () => void
     const paused = new Promise<void>(resolve => { reached = resolve }), gate = new Promise<void>(resolve => { resume = resolve })
     const connectionMock = mockPoolConnection(t, pool, async () => {
@@ -156,7 +156,7 @@ test('draw rechecks concurrent results and idempotency keys after its round read
       winnerRoundId = round.id
       winnerVersion = (await roundCommand(fixture.owner, key(), round.id, 'send', { expectedVersion: confirmed.version })).version
     }
-    const pool = getDatabasePool(process.env.DATABASE_URL!), connect = pool.connect.bind(pool)
+    const pool = await getDatabasePool(process.env.DATABASE_URL!), connect = pool.connect.bind(pool)
     let resume!: () => void, reached!: () => void
     const paused = new Promise<void>(resolve => { reached = resolve }), gate = new Promise<void>(resolve => { resume = resolve })
     const connectionMock = mockPoolConnection(t, pool, async () => {
@@ -243,7 +243,7 @@ test('force completion rechecks a competing completion or replay after reading p
     const finalized = await roundCommand(fixture.owner, key(), fixture.roundId, 'draw', { expectedVersion: locked.version })
     if (winnerAction === 'complete') await setSettlementCheck(fixture.owner, key(), fixture.roundId, { expectedVersion: finalized.version, checked: true })
     const requestKey = key(), body = { expectedVersion: finalized.version }
-    const pool = getDatabasePool(process.env.DATABASE_URL!), connect = pool.connect.bind(pool)
+    const pool = await getDatabasePool(process.env.DATABASE_URL!), connect = pool.connect.bind(pool)
     let resume!: () => void, reached!: () => void
     const paused = new Promise<void>(resolve => { reached = resolve }), gate = new Promise<void>(resolve => { resume = resolve })
     const connectionMock = mockPoolConnection(t, pool, async () => {
@@ -291,7 +291,7 @@ test('force completion with the same key on different rounds commits one and pre
     const locked = await roundCommand(fixture.owner, key(), round.id, 'send', { expectedVersion: confirmed.version })
     rounds.push({ id: round.id, version: locked.version! })
   }
-  const pool = getDatabasePool(process.env.DATABASE_URL!), connect = pool.connect.bind(pool)
+  const pool = await getDatabasePool(process.env.DATABASE_URL!), connect = pool.connect.bind(pool)
   let releaseReads!: () => void, reads = 0
   const bothRead = new Promise<void>(resolve => { releaseReads = resolve })
   const connectionMock = mockPoolConnection(t, pool, async () => {
@@ -336,7 +336,7 @@ test('settlement check rechecks a duplicate or completed round after its incomin
     const locked = await roundCommand(fixture.owner, key(), fixture.roundId, 'send', { expectedVersion: confirmed.version })
     const finalized = await roundCommand(fixture.owner, key(), fixture.roundId, 'draw', { expectedVersion: locked.version })
     const body = { expectedVersion: finalized.version, checked: true }
-    const pool = getDatabasePool(process.env.DATABASE_URL!), connect = pool.connect.bind(pool)
+    const pool = await getDatabasePool(process.env.DATABASE_URL!), connect = pool.connect.bind(pool)
     let resume!: () => void, reached!: () => void
     const paused = new Promise<void>(resolve => { reached = resolve }), gate = new Promise<void>(resolve => { resume = resolve })
     const connectionMock = mockPoolConnection(t, pool, async () => {
@@ -577,7 +577,7 @@ test('receipt storage rejects a concurrent round lock after its conditional UPDA
 test('expense DELETE rechecks state and concurrent deletion replay after its pre-lock read', { timeout: 15000 }, async t => {
   for (const action of ['confirm', 'same-key', 'different-key'] as const) {
     const fixture = await recordingRound(), requestKey = key(), body = { expectedVersion: fixture.version }
-    const pool = getDatabasePool(process.env.DATABASE_URL!), connect = pool.connect.bind(pool)
+    const pool = await getDatabasePool(process.env.DATABASE_URL!), connect = pool.connect.bind(pool)
     let resume!: () => void, reached!: () => void
     const paused = new Promise<void>(resolve => { reached = resolve }), gate = new Promise<void>(resolve => { resume = resolve })
     const connectionMock = mockPoolConnection(t, pool, async () => {
@@ -621,7 +621,7 @@ test('expense DELETE rechecks state and concurrent deletion replay after its pre
 test('expense PATCH invalidates already-read writes and rechecks a losing conditional UPDATE', { timeout: 15000 }, async t => {
   for (const action of ['confirm', 'delete', 'patch'] as const) {
     const fixture = await recordingRound()
-    const pool = getDatabasePool(process.env.DATABASE_URL!)
+    const pool = await getDatabasePool(process.env.DATABASE_URL!)
     const connect = pool.connect.bind(pool)
     let resume!: () => void, reached!: () => void, restoreQuery: (() => void) | undefined
     let held = false
@@ -683,7 +683,7 @@ test('expense PATCH invalidates already-read writes and rechecks a losing condit
 
 test('confirm holds the shared lock until commit and blocks expense creation/update and concurrent replay', { timeout: 15000 }, async t => {
   const fixture = await recordingRound()
-  const pool = getDatabasePool(process.env.DATABASE_URL!)
+  const pool = await getDatabasePool(process.env.DATABASE_URL!)
   const connect = pool.connect.bind(pool)
   let resume!: () => void, reached!: () => void
   const paused = new Promise<void>(resolve => { reached = resolve })

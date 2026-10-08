@@ -1,6 +1,6 @@
 import { mockPoolConnection, queryText, queryResult } from '../dbTestSupport'
 import { before } from 'node:test'
-import { getPrismaClient } from '../../global/database/prisma.service.ts'
+import { getPrismaClient } from '../domainTestSupport';
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import test from 'node:test'
@@ -12,7 +12,7 @@ import { findUser, saveBankAccount, saveOnboarding } from '../domainTestSupport'
 import { normalizeBankAccountInput } from '../../../shared/domain/user/index.ts'
 import { createDatabaseClient } from '../../global/database/db.ts';
 import { withDatabaseConnection } from '../domainTestSupport';
-import { getDatabasePool } from '../../global/database/dbClient.mjs'
+import { getDatabasePool } from '../domainTestSupport';
 import { getMeResponse as GET } from '../httpTestSupport'
 import { getBankAccountResponse as PUT } from '../httpTestSupport'
 import { applyMigrations } from '../../../../scripts/migrations.mjs'
@@ -120,7 +120,7 @@ test('withdrawal locks before checks and releases the transaction lock on commit
     await client.query('DELETE FROM rounds WHERE id=$1', [round.id])
 
     // A failure in membership exit must also cancel the user soft delete.
-    const pool = getDatabasePool(database)
+    const pool = await getDatabasePool(database)
     const connect = pool.connect.bind(pool)
     const connectionMock = mockPoolConnection(t, pool, async () => {
       const borrowed = await connect()
@@ -209,7 +209,7 @@ test('GET /api/me uses one AUTH SELECT without transaction SQL for app, onboardi
     statements = []
     assert.equal((await GET(new NextRequest('http://localhost/api/me'))).status, 401)
     assert.equal(statements.length, 0)
-    const pool = getDatabasePool(database)
+    const pool = await getDatabasePool(database)
     assert.equal(pool.idleCount, pool.totalCount, 'all borrowed connections are returned after success and rejection')
   } finally {
     if (previousLog === undefined) delete process.env.DB_QUERY_LOG
@@ -279,7 +279,7 @@ test('bank account uses AUTH then validation then conditional UPDATE; one concur
       assert.equal(await withDatabaseConnection(connection => saveBankAccount(connection, app.userId, normalized, currentTimestamp())), false,
         'a user withdrawn or no longer onboarded after AUTH cannot be updated')
     }
-    const pool = getDatabasePool(database)
+    const pool = await getDatabasePool(database)
     assert.equal(pool.idleCount, pool.totalCount)
   } finally {
     if (previousLog === undefined) delete process.env.DB_QUERY_LOG
@@ -361,7 +361,7 @@ test('onboarding uses AUTH + conditional UPDATE; concurrent signup/rejoin has on
         saveOnboarding(connection, limited.userId, normalized, Number(snapshot.updated_at), Number(snapshot.updated_at)))))
       assert.equal(savedCopies.filter(Boolean).length, 1)
     }
-    const pool = getDatabasePool(database)
+    const pool = await getDatabasePool(database)
     assert.equal(pool.idleCount, pool.totalCount)
   } finally {
     if (previousLog === undefined) delete process.env.DB_QUERY_LOG

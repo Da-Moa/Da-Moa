@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import test from 'node:test'
-import { getPrismaClient } from '../../global/database/prisma.service'
+import { getPrismaClient } from '../domainTestSupport';
 import { createDatabaseClient } from '../../global/database/db';
 import { withDatabaseConnection, withWriteTransaction } from '../domainTestSupport';
 import { signInKakao } from '../domainTestSupport';
@@ -14,7 +14,7 @@ process.env.AUTH_JWT_SECRET ||= 'prisma-integration-only-secret-at-least-32-byte
 test('Prisma models read migrated accounts and transactions roll back model writes', async t => {
   const native = createDatabaseClient(url)
   await native.connect(); t.after(() => native.end()); await applyMigrations(native)
-  const prisma = getPrismaClient(url)
+  const prisma = await getPrismaClient(url)
   const session = await signInKakao(`prisma-test:${randomUUID()}`, { displayName: 'ORM 확인', email: null, profileImageUrl: null })
   const account = await prisma.users.findUniqueOrThrow({ where: { id: session.userId } })
   assert.equal(account.display_name, 'ORM 확인')

@@ -1,10 +1,10 @@
 import { before } from 'node:test'
-import { getPrismaClient } from '../../global/database/prisma.service.ts'
+import { getPrismaClient } from '../domainTestSupport';
 import assert from 'node:assert/strict'
 import { channel } from 'node:diagnostics_channel'
 import test from 'node:test'
 import { withReadTransaction, withWriteTransaction } from '../domainTestSupport';
-import { getDatabasePool } from '../../global/database/dbClient.mjs'
+import { getDatabasePool } from '../domainTestSupport';
 
 const testUrl = process.env.TEST_DATABASE_URL
 if (!testUrl || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(testUrl).hostname)
@@ -22,8 +22,7 @@ test('PostgreSQL pool reuses connections, rolls back safely, and isolates concur
   })
   const logs: string[] = []
   t.mock.method(console, 'info', (sql: string) => logs.push(sql))
-  const pool = getDatabasePool(testUrl)
-  t.after(() => pool.end())
+  const pool = await getDatabasePool(testUrl)
   let queries = 0
   const countQuery = () => { queries++ }
   channel('da-moa.db.query').subscribe(countQuery)

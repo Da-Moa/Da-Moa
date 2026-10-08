@@ -1,4 +1,4 @@
-import { getPrismaClient } from '../../global/database/prisma.service';
+import { getPrismaClient } from '../domainTestSupport';
 import { runOnce } from 'graphile-worker';
 import { ReceiptWorker } from '../../domain/settle/service/receiptWorker';
 import { testProvider } from '../domainTestSupport';
@@ -9,9 +9,11 @@ export async function drainReceiptQueue(worker?: ReceiptWorker) {
   if (!connectionString || !new URL(connectionString).pathname.includes('test'))
     throw new Error('An isolated test database is required');
   await getPrismaClient(connectionString);
+  const provider = worker ?? (await testProvider(ReceiptWorker));
   await runOnce({
     connectionString,
-    taskList: (worker ?? (await testProvider(ReceiptWorker))).tasks,
+    taskList: provider.tasks,
+    preset: provider.preset,
     concurrency: 2,
     noHandleSignals: true,
   });

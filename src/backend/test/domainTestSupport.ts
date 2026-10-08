@@ -1,3 +1,4 @@
+import { RuntimeModule } from '../global/runtime/runtime.module';
 import type { Database } from '../global/database/db';
 import { GroupModule } from '../domain/group/module/group.module';
 import { SettleModule } from '../domain/settle/module/settle.module';
@@ -20,7 +21,14 @@ import { getTestLoginResponse as testLogin } from '../global/auth/controller/tes
 import { getRefreshResponse as refresh } from '../global/auth/controller/refresh.controller';
 
 @Module({
-  imports: [UserModule, GroupModule, SettleModule, AuthModule, HealthModule],
+  imports: [
+    RuntimeModule,
+    UserModule,
+    GroupModule,
+    SettleModule,
+    AuthModule,
+    HealthModule,
+  ],
 })
 class DomainTestModule {}
 let context:
@@ -300,4 +308,11 @@ export async function withWriteTransaction<T>(
     beforeLock,
     beforeBegin,
   );
+}
+
+export async function getPrismaClient(url: string) {
+  return (await testProvider(PrismaService)).clientFor(url);
+}
+export async function getDatabasePool(url: string) {
+  return (await testProvider(PrismaService)).poolFor(url);
 }

@@ -9,5 +9,5 @@ export function createWsController(
   publisher: RealtimePublisher,
 ): {
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void;
-  close(): void;
+  close(): Promise<void>;
 };

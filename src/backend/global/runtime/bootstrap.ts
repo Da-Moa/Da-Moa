@@ -1,22 +1,6 @@
-import { RealtimePublisher } from '../util/invalidationUtil';
-import { RealtimeAuthorizationService } from '../auth/service/realtimeAuthorization.service';
-import { createServer } from 'node:http';
-import type { Request, Response, NextFunction } from 'express';
 import { networkInterfaces } from 'node:os';
-import next from 'next';
-import { createBackend, startBackendWorkers } from '../../domain/main';
-import { ReceiptWorker } from '../../domain/settle/service/receiptWorker';
-import { disconnectPrismaClients } from '../database/prisma.service';
-import { closeDatabasePools } from '../database/dbClient.mjs';
-import { createRateLimitController } from '../rateLimit/native';
-import { createWsController } from '../websocket/controller/wsController.mjs';
-import {
-  collectDatabaseMetrics,
-  httpMetrics,
-  trackHttpResponse,
-} from '../monitoring/httpMetrics.mjs';
-import { jwtGuard } from '../auth/guard/jwt.guard';
-import { webRequest } from '../apiPayload/httpContext';
+import { createBackend } from '../../domain/main';
+import { RuntimeLifecycle } from './runtimeLifecycle';
 
 function serverPort(value: string | undefined, name: string) {
   const port = Number(value);
@@ -30,122 +14,25 @@ export async function bootstrap() {
   const port = serverPort(process.env.PORT || '3000', 'PORT');
   const metricsPort = process.env.METRICS_PORT
     ? serverPort(process.env.METRICS_PORT, 'METRICS_PORT')
-    : null;
+    : undefined;
   if (metricsPort === port)
     throw new Error('METRICS_PORT must differ from PORT');
   const host = process.env.HOST || (development ? '0.0.0.0' : '127.0.0.1');
-  const rateLimit = createRateLimitController();
-  let websocket!: ReturnType<typeof createWsController>;
-  let frontend!: ReturnType<typeof next>;
-
   const backend = await createBackend(async (app) => {
-    const authorization = app.get(RealtimeAuthorizationService);
-    websocket = createWsController(
-      rateLimit,
-      (token) => authorization.authenticate(token),
-      app.get(RealtimePublisher),
-    );
-    // Nest owns the HTTP listener; Next receives page requests on that listener.
-    const server = app.getHttpServer();
-    frontend = next({ dev: development, httpServer: server, port });
-    await frontend.prepare();
-    const handlePage = frontend.getRequestHandler();
-    server.on('upgrade', websocket.handleUpgrade);
-    app.use((request: Request, response: Response, nextRoute: NextFunction) => {
-      if (metricsPort !== null) trackHttpResponse(request, response);
-      if (rateLimit.handleRequest(request, response)) return;
-      const url = new URL(request.url || '/', 'http://localhost');
-      const pathname = url.pathname;
-      if (
-        ['/api/docs', '/api/docs/', '/api/docs/index.html'].includes(pathname)
-      ) {
-        const denied = jwtGuard(webRequest(request));
-        if (denied) {
-          response.writeHead(denied.status, Object.fromEntries(denied.headers));
-          void denied
-            .arrayBuffer()
-            .then((body) => response.end(Buffer.from(body)));
-          return;
-        }
-      }
-      if (
-        pathname === '/api' ||
-        pathname.startsWith('/api/') ||
-        pathname === '/auth/v1/kakao' ||
-        pathname === '/docs' ||
-        pathname.startsWith('/docs/')
-      ) {
-        nextRoute();
-        return;
-      }
-      void handlePage(request, response);
+    // Preserve the successful exit-code contract after all framework shutdown hooks finish.
+    app.enableShutdownHooks(['SIGTERM', 'SIGINT'], { useProcessExit: true });
+    await app.get(RuntimeLifecycle).prepare(app, {
+      frontend: { dev: development, port },
+      metricsPort,
+      host,
     });
   });
-
-  const metricsServer =
-    metricsPort === null
-      ? null
-      : createServer((request, response) => {
-          if (request.method !== 'GET' || request.url !== '/metrics') {
-            response.writeHead(404).end();
-            return;
-          }
-          response
-            .writeHead(200, {
-              'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
-              'Cache-Control': 'no-store',
-            })
-            .end(httpMetrics());
-        });
-  let metricsTimer: ReturnType<typeof setInterval> | undefined;
-  let stopping = false;
-  const shutdown = async () => {
-    if (stopping) return;
-    stopping = true;
-    const timeout = setTimeout(() => process.exit(1), 10_000);
-    timeout.unref();
-    websocket.close();
-    rateLimit.close();
-    if (metricsTimer) clearInterval(metricsTimer);
-    try {
-      await Promise.all([
-        backend.app.close(),
-        frontend.close(),
-        backend.app.get(ReceiptWorker).stop(),
-        metricsServer?.listening
-          ? new Promise<void>((resolve, reject) =>
-              metricsServer.close((error) =>
-                error ? reject(error) : resolve(),
-              ),
-            )
-          : undefined,
-      ]);
-      await disconnectPrismaClients();
-      await closeDatabasePools();
-      process.exit(0);
-    } catch (error) {
-      console.error('Application shutdown failed', error);
-      process.exit(1);
-    }
-  };
-  process.once('SIGTERM', shutdown);
-  process.once('SIGINT', shutdown);
-
-  await startBackendWorkers(backend.app);
-  if (metricsServer && metricsPort !== null) {
-    await collectDatabaseMetrics();
-    metricsTimer = setInterval(() => void collectDatabaseMetrics(), 30_000);
-    metricsTimer.unref();
-    await new Promise<void>((resolve, reject) => {
-      metricsServer.once('error', reject);
-      metricsServer.listen(
-        metricsPort,
-        process.env.HOST || '127.0.0.1',
-        resolve,
-      );
-    });
+  try {
+    await backend.app.listen(port, host);
+  } catch (error) {
+    await backend.app.close();
+    throw error;
   }
-  await backend.app.listen(port, host);
   const allInterfaces = host === '0.0.0.0' || host === '::';
   const localHost = allInterfaces
     ? 'localhost'

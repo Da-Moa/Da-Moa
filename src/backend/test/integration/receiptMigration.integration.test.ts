@@ -1,5 +1,5 @@
 import { before } from 'node:test'
-import { getPrismaClient } from '../../global/database/prisma.service.ts'
+import { getPrismaClient } from '../domainTestSupport';
 import { addStoredReceipt as addReceipt } from './receiptWorkerTestSupport'
 import { uuidV7 } from '../../../shared/uuid.ts'
 import assert from 'node:assert/strict'
