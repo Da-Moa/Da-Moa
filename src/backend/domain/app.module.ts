@@ -1,3 +1,4 @@
+import { RealtimeAuthorizationModule } from '../global/auth/module/realtimeAuthorization.module';
 import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { GroupModule } from './group/module/group.module';
@@ -15,6 +16,7 @@ import { ApiModule } from '../global/apiPayload/module/api.module';
 @Module({
   imports: [
     HealthModule,
+    RealtimeAuthorizationModule,
     GroupModule,
     SettleModule,
     UserModule,

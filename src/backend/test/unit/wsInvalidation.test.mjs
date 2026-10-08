@@ -1,3 +1,4 @@
+import { RealtimeAuthorizationService } from '../../global/auth/service/realtimeAuthorization.service.ts';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import test from 'node:test';
@@ -35,17 +36,21 @@ test(
       },
     }));
     const rateLimit = createRateLimitController();
-    const websocket = createWsController(rateLimit);
+    let websocket;
     const sockets = [];
     let app;
     t.after(async () => {
       sockets.forEach((socket) => socket.terminate());
-      websocket.close();
+      websocket?.close();
       rateLimit.close();
       await app?.close();
       assert.equal(realtimeEnabled(), false);
     });
     ({ app } = await createBackend(async (backend) => {
+      const authorization = backend.get(RealtimeAuthorizationService);
+      websocket = createWsController(rateLimit, (token) =>
+        authorization.authenticate(token),
+      );
       backend.getHttpServer().on('upgrade', websocket.handleUpgrade);
     }));
     t.mock.method(

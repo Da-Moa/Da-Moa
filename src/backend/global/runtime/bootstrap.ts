@@ -1,3 +1,4 @@
+import { RealtimeAuthorizationService } from '../auth/service/realtimeAuthorization.service';
 import { createServer } from 'node:http';
 import type { Request, Response, NextFunction } from 'express';
 import { networkInterfaces } from 'node:os';
@@ -33,10 +34,14 @@ export async function bootstrap() {
     throw new Error('METRICS_PORT must differ from PORT');
   const host = process.env.HOST || (development ? '0.0.0.0' : '127.0.0.1');
   const rateLimit = createRateLimitController();
-  const websocket = createWsController(rateLimit);
+  let websocket!: ReturnType<typeof createWsController>;
   let frontend!: ReturnType<typeof next>;
 
   const backend = await createBackend(async (app) => {
+    const authorization = app.get(RealtimeAuthorizationService);
+    websocket = createWsController(rateLimit, (token) =>
+      authorization.authenticate(token),
+    );
     // Nest owns the HTTP listener; Next receives page requests on that listener.
     const server = app.getHttpServer();
     frontend = next({ dev: development, httpServer: server, port });

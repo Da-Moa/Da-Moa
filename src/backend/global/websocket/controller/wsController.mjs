@@ -1,8 +1,8 @@
 import { registerInvalidationPublisher } from '../../util/invalidationUtil.ts'
-import { authenticateWebsocketToken, getKakaoRedirectUris } from '../../auth/native.ts'
+import { getKakaoRedirectUris } from '../../auth/native.ts'
 import { createWebsocketUtil } from '../websocketUtil.mjs'
 
-export function createWsController(rateLimit) {
+export function createWsController(rateLimit, authenticate) {
   const websocket = createWebsocketUtil()
   const unregister = registerInvalidationPublisher((userId, keys) => {
     websocket.publish(`user:${userId}`, { type: 'invalidate', keys })
@@ -26,7 +26,7 @@ export function createWsController(rateLimit) {
     const protocols = request.headers['sec-websocket-protocol']?.split(',').map(value => value.trim()) ?? []
     const token = protocols.length === 2 && protocols[0] === 'da-moa' ? protocols[1] : null
     if (rateLimit.limitWebsocket(token, socket)) return
-    void authenticateWebsocketToken(token).then(auth => {
+    void authenticate(token).then(auth => {
       if (!auth.id || socket.destroyed) { socket.destroy(); return }
       const userId = auth.id
       websocket.upgrade(request, socket, head, connection => {
@@ -34,7 +34,7 @@ export function createWsController(rateLimit) {
         let authTimer
         const revalidate = async () => {
           try {
-            const current = await authenticateWebsocketToken(token)
+            const current = await authenticate(token)
             if (connection.readyState !== connection.OPEN) return
             // A short-lived Access JWT must refresh through the browser before reconnecting.
             if (current.status === 401) connection.close(4001)

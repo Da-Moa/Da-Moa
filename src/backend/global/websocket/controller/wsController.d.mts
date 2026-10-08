@@ -4,6 +4,7 @@ import type { createRateLimitController } from '../../rateLimit/native';
 
 export function createWsController(
   rateLimit: ReturnType<typeof createRateLimitController>,
+  authenticate: (token: string | null) => Promise<{ status: number; id?: string }>,
 ): {
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void;
   close(): void;
