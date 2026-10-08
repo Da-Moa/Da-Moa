@@ -5,7 +5,7 @@ import { PrismaService } from '../../../global/database/prisma.service';
 import { groupErrors } from '../code/group.error.code';
 import { GroupException } from '../exception/group.exception';
 import { createHash, randomUUID } from 'node:crypto';
-import { requireAccount } from '../../../global/auth';
+import { AuthorizationService } from '../../../global/auth/service/authorization.service';
 import {
   createInviteToken,
   isInviteToken,
@@ -47,9 +47,11 @@ import { GroupRepository } from '../repository/group.repository';
 export class GroupService {
   constructor(
     @Inject(PrismaService)
-    private readonly prisma: PrismaService = new PrismaService(),
+    private readonly prisma: PrismaService,
     @Inject(GroupRepository)
-    private readonly repository: GroupRepository = new GroupRepository(),
+    private readonly repository: GroupRepository,
+    @Inject(AuthorizationService)
+    private readonly authorization: AuthorizationService,
   ) {}
 
   private groupDTO(row: GroupRow): GroupSummary {
@@ -83,7 +85,7 @@ export class GroupService {
     const { limit, cursor } = pagination(query);
     const search = query.has('q') ? textInput(query.get('q'), 100) : null;
     return this.prisma.withDatabaseConnection(async (client) => {
-      const account = await requireAccount(client, access);
+      const account = await this.authorization.requireAccount(client, access);
       const page = pageOf(
         await this.repository.findGroups(
           client,
@@ -124,7 +126,7 @@ export class GroupService {
 
   async getGroup(access: Identity, groupId: string): Promise<GroupDetail> {
     return this.prisma.withDatabaseConnection(async (client) => {
-      const account = await requireAccount(client, access);
+      const account = await this.authorization.requireAccount(client, access);
       const rows = await this.repository.findGroupWithMembers(client, groupId);
       if (!rows.some((row) => row.user_id === account.id)) throw missing();
       const group = rows[0];
@@ -165,7 +167,7 @@ export class GroupService {
       throw new GroupException(groupErrors.GROUP_CREATION_KEY_REQUIRED);
     const id = key.toLowerCase();
     return this.prisma.withDatabaseConnection(async (client) => {
-      const account = await requireAccount(client, access);
+      const account = await this.authorization.requireAccount(client, access);
       try {
         await this.repository.insertGroup(
           client,
@@ -228,7 +230,7 @@ export class GroupService {
         return { id: groupId };
       },
       async (client) => {
-        userId = (await requireAccount(client, access)).id;
+        userId = (await this.authorization.requireAccount(client, access)).id;
       },
     );
     captureAudience?.(audience);
@@ -246,7 +248,7 @@ export class GroupService {
     if (body.replaceInviteId !== undefined)
       textInput(body.replaceInviteId, 128);
     return this.prisma.withDatabaseConnection(async (client) => {
-      const account = await requireAccount(client, access);
+      const account = await this.authorization.requireAccount(client, access);
       const digest = mutationDigest(key, { groupId, ...body });
       const group = await this.repository.findInviteMutation(
         client,
@@ -314,7 +316,7 @@ export class GroupService {
     captureAudience?: (userIds: string[]) => void,
   ): Promise<GroupMutationResult> {
     return this.prisma.withDatabaseConnection(async (client) => {
-      const account = await requireAccount(client, access);
+      const account = await this.authorization.requireAccount(client, access);
       const digest = mutationDigest(key, { groupId, inviteId });
       const group = await this.repository.findInviteMutation(
         client,
@@ -382,7 +384,7 @@ export class GroupService {
 
   async getInvite(access: Identity, token: string): Promise<InvitePreview> {
     return this.prisma.withDatabaseConnection(async (client) => {
-      const account = await requireAccount(client, access);
+      const account = await this.authorization.requireAccount(client, access);
       const row = await this.validInvite(client, token, account.id);
       return {
         groupId: row.group_id,
@@ -401,7 +403,7 @@ export class GroupService {
   ): Promise<GroupMutationResult> {
     return this.prisma.withDatabaseConnection(
       async (client, discardConnection) => {
-        const account = await requireAccount(client, access);
+        const account = await this.authorization.requireAccount(client, access);
         if (!isInviteToken(token)) throw missing();
         const tokenHash = createHash('sha256').update(token).digest('hex');
         const digest = mutationDigest(key, { tokenHash });
@@ -453,31 +455,3 @@ export class GroupService {
     );
   }
 }
-
-// Native workers and integration callers use the same class implementation.
-const instance = new GroupService();
-export const requireGroupMembership = (
-  ...args: Parameters<GroupService['requireGroupMembership']>
-) => instance.requireGroupMembership(...args);
-export const listGroups = (...args: Parameters<GroupService['listGroups']>) =>
-  instance.listGroups(...args);
-export const getGroup = (...args: Parameters<GroupService['getGroup']>) =>
-  instance.getGroup(...args);
-export const createGroup = (...args: Parameters<GroupService['createGroup']>) =>
-  instance.createGroup(...args);
-export const leaveGroup = (...args: Parameters<GroupService['leaveGroup']>) =>
-  instance.leaveGroup(...args);
-export const createInvite = (
-  ...args: Parameters<GroupService['createInvite']>
-) => instance.createInvite(...args);
-export const revokeInvite = (
-  ...args: Parameters<GroupService['revokeInvite']>
-) => instance.revokeInvite(...args);
-export const getInvite = (...args: Parameters<GroupService['getInvite']>) =>
-  instance.getInvite(...args);
-export const acceptInvite = (
-  ...args: Parameters<GroupService['acceptInvite']>
-) => instance.acceptInvite(...args);
-export const getDepartureAudience = (
-  ...args: Parameters<GroupService['getDepartureAudience']>
-) => instance.getDepartureAudience(...args);

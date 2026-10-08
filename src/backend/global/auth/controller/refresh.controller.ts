@@ -25,7 +25,7 @@ function unavailableResponse() {
 
 export async function getRefreshResponse(
   request: HttpRequest,
-  authService: AuthService = new AuthService(),
+  authService: AuthService,
 ) {
   if (!sameOrigin(request)) {
     return HttpResponse.json(

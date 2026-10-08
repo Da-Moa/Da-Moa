@@ -8,7 +8,10 @@ import {
   type KakaoProfile,
 } from '../../../global/auth/authUtil';
 import { issueTokens } from '../../../global/auth/service/authTokens';
-import { requireAccount } from '../../../global/auth/service/authorization.service';
+import {
+  AuthorizationService,
+  type Account as AuthorizedAccount,
+} from '../../../global/auth/service/authorization.service';
 import {
   objectBody,
   mutationDigest,
@@ -20,7 +23,6 @@ import {
   normalizeBankAccountInput,
   type Account,
   type BankAccountInput,
-  type UserAccountState,
   type SignInUserDTO,
   type BankAccountResponseDTO,
 } from '../../../../shared/domain/user';
@@ -32,15 +34,15 @@ import {
 } from '../exception/user.exception';
 import { UserRepository } from '../repository/user.repository';
 
-type AuthorizedAccount = UserAccountState & { purpose: 'app' | 'onboarding' };
-
 @Injectable()
 export class UserService {
   constructor(
     @Inject(PrismaService)
-    private readonly prisma: PrismaService = new PrismaService(),
+    private readonly prisma: PrismaService,
     @Inject(UserRepository)
-    private readonly repository: UserRepository = new UserRepository(),
+    private readonly repository: UserRepository,
+    @Inject(AuthorizationService)
+    private readonly authorization: AuthorizationService,
   ) {}
 
   private assertBankVersion(
@@ -62,7 +64,11 @@ export class UserService {
       onboarding: true,
     });
     return this.prisma.withDatabaseConnection(async (client) => {
-      const account = await requireAccount(client, access, true);
+      const account = await this.authorization.requireAccount(
+        client,
+        access,
+        true,
+      );
       this.assertOnboarding(account, bank);
       const now = currentTimestamp();
       const session = issueTokens(account.id, 'app', now);
@@ -87,7 +93,7 @@ export class UserService {
     input: unknown,
   ): Promise<BankAccountResponseDTO> {
     return this.prisma.withDatabaseConnection(async (client) => {
-      const account = await requireAccount(client, access);
+      const account = await this.authorization.requireAccount(client, access);
       const bank = normalizeBankAccountInput(objectBody(input));
       mutationDigest(requestKey, null);
       if (
@@ -105,7 +111,7 @@ export class UserService {
 
   withdrawAccount(access: AccessToken | null) {
     return this.prisma.withWriteTransaction(async (client) => {
-      const account = await requireAccount(client, access);
+      const account = await this.authorization.requireAccount(client, access);
       const rows = await getUnfinishedUserRounds(client, account.id);
       if (rows.length) throw unfinishedRounds(rows);
       const result = await this.repository.softDeleteUser(
@@ -120,37 +126,13 @@ export class UserService {
     });
   }
 
-  async getUserAccountState(
-    client: Database,
-    userId: string,
-  ): Promise<UserAccountState | null> {
-    const row = await this.repository.findUser(client, userId);
-    if (!row) return null;
-    return {
-      id: row.id,
-      displayName: row.display_name,
-      email: row.email,
-      profileImageUrl: row.profile_image_url,
-      bankName: row.bank_name,
-      accountNumber: row.account_number,
-      formattedAccountNumber: row.account_number_formatted,
-      accountHolder: row.account_holder,
-      bankCode: row.bank_code,
-      bankVerifiedAt:
-        row.bank_verified_at === null ? null : Number(row.bank_verified_at),
-      bankVersion: Number(row.bank_version),
-      updatedAt: Number(row.updated_at),
-      deletedAt: row.deleted_at === null ? null : Number(row.deleted_at),
-      onboardingCompletedAt:
-        row.onboarding_completed_at === null
-          ? null
-          : Number(row.onboarding_completed_at),
-    };
-  }
-
   getMe(access: AccessToken | null): Promise<Account> {
     return this.prisma.withDatabaseConnection(async (client) => {
-      const account = await requireAccount(client, access, true);
+      const account = await this.authorization.requireAccount(
+        client,
+        access,
+        true,
+      );
       const {
         id,
         displayName,
@@ -232,29 +214,3 @@ export class UserService {
     return this.repository.findTestSignInUser(client, id, providerSubject);
   }
 }
-
-// Native workers and integration callers use the same class implementation.
-const instance = new UserService();
-export const completeOnboarding = (
-  ...args: Parameters<UserService['completeOnboarding']>
-) => instance.completeOnboarding(...args);
-export const updateBankAccount = (
-  ...args: Parameters<UserService['updateBankAccount']>
-) => instance.updateBankAccount(...args);
-export const withdrawAccount = (
-  ...args: Parameters<UserService['withdrawAccount']>
-) => instance.withdrawAccount(...args);
-export const getUserAccountState = (
-  ...args: Parameters<UserService['getUserAccountState']>
-) => instance.getUserAccountState(...args);
-export const getMe = (...args: Parameters<UserService['getMe']>) =>
-  instance.getMe(...args);
-export const findOrCreateKakaoUser = (
-  ...args: Parameters<UserService['findOrCreateKakaoUser']>
-) => instance.findOrCreateKakaoUser(...args);
-export const createTestOnboardingUser = (
-  ...args: Parameters<UserService['createTestOnboardingUser']>
-) => instance.createTestOnboardingUser(...args);
-export const getTestSignInUser = (
-  ...args: Parameters<UserService['getTestSignInUser']>
-) => instance.getTestSignInUser(...args);

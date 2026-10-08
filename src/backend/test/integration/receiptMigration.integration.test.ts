@@ -7,10 +7,10 @@ import { createHash, randomUUID } from 'node:crypto'
 import test from 'node:test'
 import sharp from 'sharp'
 import { readAccessToken } from '../../global/auth/native.ts'
-import { signInKakao } from '../../global/auth/index.ts'
+import { signInKakao } from '../domainTestSupport';
 import { createDatabaseClient } from '../../global/database/db.ts'
-import { acceptInvite, createGroup, createInvite } from '../../domain/group/index.ts'
-import { createRound, deleteExpense, getReceipt, getRound, removeReceipt, roundCommand, saveExpense } from '../../domain/settle/index.ts'
+import { acceptInvite, createGroup, createInvite } from '../domainTestSupport';
+import { createRound, deleteExpense, getReceipt, getRound, removeReceipt, roundCommand, saveExpense } from '../domainTestSupport';
 import { completeTestOnboarding } from './bankTestSupport.ts'
 import { applyMigrations } from '../../../../scripts/migrations.mjs'
 

@@ -3,12 +3,12 @@ import assert from 'node:assert/strict'
 import { before, test } from 'node:test'
 import { networkInterfaces } from 'node:os'
 import { HttpRequest as NextRequest } from '../../global/apiPayload/httpContext'
-import { getTestLoginResponse as POST } from '../../global/auth'
+import { getTestLoginResponse as POST } from '../domainTestSupport';
 import { getAccessTokenResponse as accessTokenResponse } from '../../global/auth'
 import { ACCESS_TOKEN_COOKIE_NAME, readAccessToken, REFRESH_TOKEN_COOKIE_NAME } from '../../global/auth/native.ts'
-import { getAccount } from '../../global/auth/service/authorization.service.ts'
-import { completeOnboarding } from '../../domain/user/index.ts'
-import { signInTestAccount } from '../../global/auth/index.ts'
+import { getAccount } from '../domainTestSupport';
+import { completeOnboarding } from '../domainTestSupport';
+import { signInTestAccount } from '../domainTestSupport';
 import { createDatabaseClient } from '../../global/database/db.ts'
 import { TEST_ACCOUNTS, TEST_ONBOARDING_KEY } from '../../../shared/testAccounts.ts'
 import { applyMigrations } from '../../../../scripts/migrations.mjs'
@@ -122,7 +122,7 @@ test('onboarding preview creates a fresh limited test session on every click and
   try {
     Object.assign(process.env, { NODE_ENV: 'production', KAKAO_REDIRECT_URI: 'http://localhost/auth/v1/kakao' })
     assert.equal((await POST(loginRequest(TEST_ONBOARDING_KEY))).status, 404)
-    assert.throws(() => signInTestAccount(TEST_ONBOARDING_KEY), { code: 'not_found' })
+    await assert.rejects(signInTestAccount(TEST_ONBOARDING_KEY), { code: 'not_found' })
   } finally {
     for (const [name, value] of Object.entries(previousEnv)) {
       if (value === undefined) delete process.env[name]

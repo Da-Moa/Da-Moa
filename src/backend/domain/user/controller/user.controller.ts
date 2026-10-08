@@ -37,15 +37,19 @@ import {
   publishBankInvalidation,
   publishDepartureInvalidation,
 } from '../../../global/util';
-import { getDepartureAudience } from '../../group';
-import { getBankSettlementAudience } from '../../settle';
+import { GroupService } from '../../group';
+import { SettleService } from '../../settle';
 import { UserService } from '../service/user.service';
 
 @RequestBodyLimit(16384)
 @ApiSuccess(userSuccess)
 @Controller()
 export class UserController {
-  constructor(@Inject(UserService) private readonly operations: UserService) {}
+  constructor(
+    @Inject(UserService) private readonly operations: UserService,
+    @Inject(GroupService) private readonly groups: GroupService,
+    @Inject(SettleService) private readonly settlements: SettleService,
+  ) {}
 
   @Get('api/me')
   me(@CurrentUser() user: AuthenticatedUser) {
@@ -67,7 +71,9 @@ export class UserController {
     );
     const session = await this.operations.completeOnboarding(user, body);
     after(() =>
-      publishBankInvalidation(session.userId, getBankSettlementAudience),
+      publishBankInvalidation(session.userId, (id) =>
+        this.settlements.getBankSettlementAudience(id),
+      ),
     );
     const cookies = new HttpResponse(null);
     setAuthCookies(cookies, session);
@@ -88,7 +94,11 @@ export class UserController {
       idempotencyKey,
       body,
     );
-    after(() => publishBankInvalidation(result.id, getBankSettlementAudience));
+    after(() =>
+      publishBankInvalidation(result.id, (id) =>
+        this.settlements.getBankSettlementAudience(id),
+      ),
+    );
     return result;
   }
 
@@ -100,7 +110,9 @@ export class UserController {
   ) {
     const result = await this.operations.withdrawAccount(user);
     after(() =>
-      publishDepartureInvalidation(result.groupIds, getDepartureAudience),
+      publishDepartureInvalidation(result.groupIds, (ids) =>
+        this.groups.getDepartureAudience(ids),
+      ),
     );
     const cookies = new HttpResponse(null);
     clearAuthCookies(cookies, { returnTo: true, oidc: true });

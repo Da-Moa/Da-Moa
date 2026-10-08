@@ -6,9 +6,9 @@ import test from 'node:test'
 import { readAccessToken } from '../../global/auth/native.ts'
 import { uuidV7 } from '../../../shared/uuid.ts'
 import { createDatabaseClient } from '../../global/database/db.ts'
-import { signInKakao } from '../../global/auth/index.ts'
-import { acceptInvite, createGroup, createInvite } from '../../domain/group/index.ts'
-import { createRound, deleteExpense, getRound, getSettlement, listRounds, roundCommand, saveExpense, setSettlementCheck } from '../../domain/settle/index.ts'
+import { signInKakao } from '../domainTestSupport';
+import { acceptInvite, createGroup, createInvite } from '../domainTestSupport';
+import { createRound, deleteExpense, getRound, getSettlement, listRounds, roundCommand, saveExpense, setSettlementCheck } from '../domainTestSupport';
 import type { Currency, ExpenseRequestDTO } from '../../../shared/domain/settle/index.ts'
 import { applyMigrations } from '../../../../scripts/migrations.mjs'
 import { completeTestOnboarding } from './bankTestSupport.ts'

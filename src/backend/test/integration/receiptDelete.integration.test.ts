@@ -10,9 +10,9 @@ import { readAccessToken } from '../../global/auth/native.ts'
 import { createDatabaseClient } from '../../global/database/db.ts'
 import { getDatabasePool } from '../../global/database/dbClient.mjs'
 import { uuidV7 } from '../../../shared/uuid.ts'
-import { signInKakao } from '../../global/auth/index.ts'
-import { acceptInvite, createGroup, createInvite } from '../../domain/group/index.ts'
-import { createRound, getReceipt, removeReceipt, saveExpense } from '../../domain/settle/index.ts'
+import { signInKakao } from '../domainTestSupport';
+import { acceptInvite, createGroup, createInvite } from '../domainTestSupport';
+import { createRound, getReceipt, removeReceipt, saveExpense } from '../domainTestSupport';
 import { completeTestOnboarding } from './bankTestSupport.ts'
 import { applyMigrations } from '../../../../scripts/migrations.mjs'
 

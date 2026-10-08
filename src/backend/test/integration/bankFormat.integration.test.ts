@@ -5,9 +5,9 @@ import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { readAccessToken } from '../../global/auth/native.ts'
-import { completeOnboarding, updateBankAccount } from '../../domain/user/index.ts'
-import { signInKakao } from '../../global/auth/index.ts'
-import { getAccount } from '../../global/auth/service/authorization.service.ts'
+import { completeOnboarding, updateBankAccount } from '../domainTestSupport';
+import { signInKakao } from '../domainTestSupport';
+import { getAccount } from '../domainTestSupport';
 import { createDatabaseClient } from '../../global/database/db.ts'
 import { applyMigrations } from '../../../../scripts/migrations.mjs'
 

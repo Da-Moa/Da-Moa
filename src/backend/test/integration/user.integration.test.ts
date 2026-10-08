@@ -6,9 +6,9 @@ import { randomUUID } from 'node:crypto'
 import test from 'node:test'
 import { HttpRequest as NextRequest } from '../../global/apiPayload/httpContext'
 import { createAccessToken, currentTimestamp, readAccessToken } from '../../global/auth/native.ts'
-import { signInKakao } from '../../global/auth/index.ts'
-import { completeOnboarding, updateBankAccount, withdrawAccount } from '../../domain/user/index.ts'
-import { findUser, saveBankAccount, saveOnboarding } from '../../domain/user/repository/user.repository.ts'
+import { signInKakao } from '../domainTestSupport';
+import { completeOnboarding, updateBankAccount, withdrawAccount } from '../domainTestSupport';
+import { findUser, saveBankAccount, saveOnboarding } from '../domainTestSupport';
 import { normalizeBankAccountInput } from '../../../shared/domain/user/index.ts'
 import { createDatabaseClient, withDatabaseConnection } from '../../global/database/db.ts'
 import { getDatabasePool } from '../../global/database/dbClient.mjs'
@@ -17,8 +17,8 @@ import { getBankAccountResponse as PUT } from '../httpTestSupport'
 import { applyMigrations } from '../../../../scripts/migrations.mjs'
 import { completeTestOnboarding } from './bankTestSupport.ts'
 import { uuidV7 } from '../../../shared/uuid.ts'
-import { createGroup } from '../../domain/group/index.ts'
-import { createRound } from '../../domain/settle/index.ts'
+import { createGroup } from '../domainTestSupport';
+import { createRound } from '../domainTestSupport';
 
 const database = process.env.TEST_DATABASE_URL
 if (!database || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(database).hostname) || !new URL(database).pathname.toLowerCase().includes('test')) throw new Error('TEST_DATABASE_URL must name an isolated local test database')

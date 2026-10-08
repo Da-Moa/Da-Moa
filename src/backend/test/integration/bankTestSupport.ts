@@ -1,6 +1,6 @@
 import type { AccessToken } from '../../global/auth/native.ts'
-import { completeOnboarding, updateBankAccount } from '../../domain/user/index.ts'
-import { getAccount } from '../../global/auth/service/authorization.service.ts'
+import { completeOnboarding, updateBankAccount } from '../domainTestSupport';
+import { getAccount } from '../domainTestSupport';
 
 type BankFixture = { bankName: string; accountHolder: string; accountNumber: string; confirmRejoin?: boolean }
 const updateVersions = new Map<string, number>()

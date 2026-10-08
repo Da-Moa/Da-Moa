@@ -37,7 +37,7 @@ function loginRedirect(request: HttpRequest, error: string) {
 
 export async function getKakaoCallbackResponse(
   request: HttpRequest,
-  authService: AuthService = new AuthService(),
+  authService: AuthService,
 ) {
   const providerError = request.nextUrl.searchParams.get('error');
   const code = request.nextUrl.searchParams.get('code');

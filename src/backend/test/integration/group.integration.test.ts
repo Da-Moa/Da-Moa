@@ -6,13 +6,13 @@ import assert from 'node:assert/strict'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import test from 'node:test'
 import { readAccessToken } from '../../global/auth/native.ts'
-import { signInKakao } from '../../global/auth/index.ts'
+import { signInKakao } from '../domainTestSupport';
 import { createDatabaseClient, withDatabaseConnection } from '../../global/database/db.ts'
 import { getDatabasePool } from '../../global/database/dbClient.mjs'
-import { acceptInvite, createGroup, createInvite, getGroup, getInvite, leaveGroup, listGroups, revokeInvite } from '../../domain/group/index.ts'
+import { acceptInvite, createGroup, createInvite, getGroup, getInvite, leaveGroup, listGroups, revokeInvite } from '../domainTestSupport';
 import { applyMigrations } from '../../../../scripts/migrations.mjs'
 import { completeTestOnboarding } from './bankTestSupport.ts'
-import { createRound, getRound, roundCommand } from '../../domain/settle/index.ts'
+import { createRound, getRound, roundCommand } from '../domainTestSupport';
 import { publishGroupInvalidation, registerInvalidationPublisher } from '../../global/util/invalidationUtil.ts'
 
 const database = process.env.TEST_DATABASE_URL

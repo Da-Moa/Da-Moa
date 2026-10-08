@@ -1,3 +1,4 @@
+import { testProvider } from './domainTestSupport';
 import 'reflect-metadata';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
@@ -23,40 +24,27 @@ import type {
 } from 'express';
 import { AppError, errorResponse } from '../global/apiPayload/errors';
 import { GroupController } from '../domain/group/controller/group.controller';
-import { GroupService } from '../domain/group/service/group.service';
 import { SettleController } from '../domain/settle/controller/settle.controller';
-import { SettleService } from '../domain/settle/service/settle.service';
 import { HealthController } from '../domain/health/controller/health.controller';
-import { HealthService } from '../domain/health/service/health.service';
-import { HealthRepository } from '../domain/health/repository/health.repository';
-import { PrismaService } from '../global/database/prisma.service';
-import { checkReceiptWorker, checkReceiptWorkerReady } from '../domain/settle';
 import type { HttpRequest } from '../global/apiPayload/httpContext';
 
 import { UserController } from '../domain/user/controller/user.controller';
-import { UserService } from '../domain/user/service/user.service';
 
 const validationPipe = createValidationPipe();
 const bodyInterceptor = new RequestBodyInterceptor();
 const originGuard = new OriginGuard(new Reflector());
 const jwtGuard = new JwtGuard();
 const interceptor = new ApiResponseInterceptor(new Reflector());
-const controllers = [
-  new UserController(new UserService()),
-  new GroupController(new GroupService()),
-  new SettleController(new SettleService()),
-  new HealthController(
-    new HealthService(new HealthRepository(new PrismaService()), {
-      worker: checkReceiptWorker,
-      workerReady: checkReceiptWorkerReady,
-    }),
-  ),
-];
 // Test transport follows the actual Nest route and parameter decorators; no second API dispatch tree.
 export async function dispatch(
   request: HttpRequest,
   _context: { params: Promise<{ path: string[] }> },
 ) {
+  const controllers = await Promise.all(
+    [UserController, GroupController, SettleController, HealthController].map(
+      (type) => testProvider(type as new (...args: any[]) => object),
+    ),
+  );
   const pathname = new URL(request.url).pathname.slice(1);
   for (const controller of controllers)
     for (const name of Object.getOwnPropertyNames(

@@ -5,9 +5,9 @@ import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import test from 'node:test'
 import pg from 'pg'
-import { signInKakao } from '../../global/auth/index.ts'
+import { signInKakao } from '../domainTestSupport';
 import { readAccessToken } from '../../global/auth/native.ts'
-import { withdrawAccount } from '../../domain/user/index.ts'
+import { withdrawAccount } from '../domainTestSupport';
 import { AppError } from '../../global/apiPayload/errors.ts'
 import { getDatabasePool } from '../../global/database/dbClient.mjs'
 import { completeTestOnboarding } from './bankTestSupport.ts'
@@ -110,7 +110,7 @@ test('Kakao sign-in creates only missing provider identities with one SQL and no
         WHERE provider='kakao' AND provider_subject=$1`, [racingSubject])).rows[0].count, 1)
     } finally { await db.query('ROLLBACK') }
     statements = []
-    assert.throws(() => signInKakao('', profile), /Kakao subject is required/)
+    await assert.rejects(signInKakao('', profile), /Kakao subject is required/)
     assert.equal(statements.length, 0)
   } finally {
     if (oldQueryLog === undefined) delete process.env.DB_QUERY_LOG

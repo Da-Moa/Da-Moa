@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import test from 'node:test'
 import { getPrismaClient } from '../../global/database/prisma.service'
 import { createDatabaseClient, withDatabaseConnection, withWriteTransaction } from '../../global/database/db'
-import { signInKakao } from '../../global/auth'
+import { signInKakao } from '../domainTestSupport';
 import { applyMigrations } from '../../../../scripts/migrations.mjs'
 const url = process.env.TEST_DATABASE_URL
 if (!url || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(url).hostname) || !new URL(url).pathname.includes('test')) throw new Error('An isolated local test database is required')

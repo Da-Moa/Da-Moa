@@ -1,13 +1,10 @@
 import { Injectable, Inject } from '@nestjs/common';
-import {
-  PrismaService,
-  databaseRows,
-} from '../../../global/database/prisma.service';
+import { PrismaService } from '../../../global/database/prisma.service';
 import { randomUUID } from 'node:crypto';
 import type { Database } from '../../../global/util';
 import type { KakaoProfile } from '../../../global/auth';
 import type { BankAccountInput } from '../../../../shared/domain/user';
-import type { SignInUserRow, UserRow } from '../dao/user.dao';
+import type { SignInUserRow } from '../dao/user.dao';
 import { endUserMembershipsSql } from '../../group/repository';
 import { unfinishedUserRoundsSql } from '../../settle/repository';
 import type { UnfinishedUserRound } from '../../../../shared/domain/settle';
@@ -16,16 +13,8 @@ import type { UnfinishedUserRound } from '../../../../shared/domain/settle';
 export class UserRepository {
   constructor(
     @Inject(PrismaService)
-    private readonly prisma: PrismaService = new PrismaService(),
+    private readonly prisma: PrismaService,
   ) {}
-
-  async findUser(
-    client: Database,
-    userId: string,
-  ): Promise<UserRow | undefined> {
-    const row = await client.prisma.users.findFirst({ where: { id: userId } });
-    return row ? databaseRows<UserRow>(row) : undefined;
-  }
 
   async findOrCreateKakaoUser(
     client: Database,
@@ -194,9 +183,3 @@ export class UserRepository {
     return rows[0];
   }
 }
-
-// Native workers and integration callers use the same class implementation.
-const instance = new UserRepository();
-export const findUser: UserRepository['findUser'] = instance.findUser.bind(instance);
-export const saveBankAccount: UserRepository['saveBankAccount'] = instance.saveBankAccount.bind(instance);
-export const saveOnboarding: UserRepository['saveOnboarding'] = instance.saveOnboarding.bind(instance);

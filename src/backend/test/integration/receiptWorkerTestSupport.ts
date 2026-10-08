@@ -1,7 +1,7 @@
 import { getPrismaClient } from '../../global/database/prisma.service'
 import { runOnce } from 'graphile-worker'
 import { receiptTasks } from '../../domain/settle/service/receiptWorker'
-import { addReceipt } from '../../domain/settle'
+import { addReceipt } from '../domainTestSupport';
 
 export async function drainReceiptQueue() {
   const connectionString = process.env.TEST_DATABASE_URL

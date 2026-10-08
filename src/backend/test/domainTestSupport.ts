@@ -1,0 +1,288 @@
+import { databaseRows } from '../global/database/prisma.service';
+import 'reflect-metadata';
+import { after } from 'node:test';
+import { NestFactory } from '@nestjs/core';
+import { Module, type Type } from '@nestjs/common';
+import { UserModule } from '../domain/user/module/user.module';
+import { AuthModule } from '../global/auth/module/auth.module';
+import { HealthModule } from '../domain/health/module/health.module';
+import { UserService } from '../domain/user/service/user.service';
+import { GroupService } from '../domain/group/service/group.service';
+import { SettleService } from '../domain/settle/service/settle.service';
+import { AuthService } from '../global/auth/service/auth.service';
+import { AuthorizationService } from '../global/auth/service/authorization.service';
+import { UserRepository } from '../domain/user/repository/user.repository';
+import { getKakaoCallbackResponse as callback } from '../global/auth/controller/kakaoCallback.controller';
+import { getTestLoginResponse as testLogin } from '../global/auth/controller/testLogin.controller';
+import { getRefreshResponse as refresh } from '../global/auth/controller/refresh.controller';
+
+@Module({ imports: [UserModule, AuthModule, HealthModule] })
+class DomainTestModule {}
+let context:
+  ReturnType<typeof NestFactory.createApplicationContext> | undefined;
+export async function testProvider<T>(token: Type<T>): Promise<T> {
+  context ??= NestFactory.createApplicationContext(DomainTestModule, {
+    logger: ['error'],
+  });
+  return (await context).get(token);
+}
+after(async () => {
+  if (context) await (await context).close();
+});
+
+export async function completeOnboarding(
+  ...args: Parameters<UserService['completeOnboarding']>
+): Promise<Awaited<ReturnType<UserService['completeOnboarding']>>> {
+  return (await testProvider(UserService)).completeOnboarding(...args);
+}
+
+export async function updateBankAccount(
+  ...args: Parameters<UserService['updateBankAccount']>
+): Promise<Awaited<ReturnType<UserService['updateBankAccount']>>> {
+  return (await testProvider(UserService)).updateBankAccount(...args);
+}
+
+export async function withdrawAccount(
+  ...args: Parameters<UserService['withdrawAccount']>
+): Promise<Awaited<ReturnType<UserService['withdrawAccount']>>> {
+  return (await testProvider(UserService)).withdrawAccount(...args);
+}
+
+export async function getMe(
+  ...args: Parameters<UserService['getMe']>
+): Promise<Awaited<ReturnType<UserService['getMe']>>> {
+  return (await testProvider(UserService)).getMe(...args);
+}
+
+export async function findOrCreateKakaoUser(
+  ...args: Parameters<UserService['findOrCreateKakaoUser']>
+): Promise<Awaited<ReturnType<UserService['findOrCreateKakaoUser']>>> {
+  return (await testProvider(UserService)).findOrCreateKakaoUser(...args);
+}
+
+export async function createTestOnboardingUser(
+  ...args: Parameters<UserService['createTestOnboardingUser']>
+): Promise<Awaited<ReturnType<UserService['createTestOnboardingUser']>>> {
+  return (await testProvider(UserService)).createTestOnboardingUser(...args);
+}
+
+export async function getTestSignInUser(
+  ...args: Parameters<UserService['getTestSignInUser']>
+): Promise<Awaited<ReturnType<UserService['getTestSignInUser']>>> {
+  return (await testProvider(UserService)).getTestSignInUser(...args);
+}
+
+export async function requireGroupMembership(
+  ...args: Parameters<GroupService['requireGroupMembership']>
+): Promise<Awaited<ReturnType<GroupService['requireGroupMembership']>>> {
+  return (await testProvider(GroupService)).requireGroupMembership(...args);
+}
+
+export async function listGroups(
+  ...args: Parameters<GroupService['listGroups']>
+): Promise<Awaited<ReturnType<GroupService['listGroups']>>> {
+  return (await testProvider(GroupService)).listGroups(...args);
+}
+
+export async function getGroup(
+  ...args: Parameters<GroupService['getGroup']>
+): Promise<Awaited<ReturnType<GroupService['getGroup']>>> {
+  return (await testProvider(GroupService)).getGroup(...args);
+}
+
+export async function createGroup(
+  ...args: Parameters<GroupService['createGroup']>
+): Promise<Awaited<ReturnType<GroupService['createGroup']>>> {
+  return (await testProvider(GroupService)).createGroup(...args);
+}
+
+export async function leaveGroup(
+  ...args: Parameters<GroupService['leaveGroup']>
+): Promise<Awaited<ReturnType<GroupService['leaveGroup']>>> {
+  return (await testProvider(GroupService)).leaveGroup(...args);
+}
+
+export async function createInvite(
+  ...args: Parameters<GroupService['createInvite']>
+): Promise<Awaited<ReturnType<GroupService['createInvite']>>> {
+  return (await testProvider(GroupService)).createInvite(...args);
+}
+
+export async function revokeInvite(
+  ...args: Parameters<GroupService['revokeInvite']>
+): Promise<Awaited<ReturnType<GroupService['revokeInvite']>>> {
+  return (await testProvider(GroupService)).revokeInvite(...args);
+}
+
+export async function getInvite(
+  ...args: Parameters<GroupService['getInvite']>
+): Promise<Awaited<ReturnType<GroupService['getInvite']>>> {
+  return (await testProvider(GroupService)).getInvite(...args);
+}
+
+export async function acceptInvite(
+  ...args: Parameters<GroupService['acceptInvite']>
+): Promise<Awaited<ReturnType<GroupService['acceptInvite']>>> {
+  return (await testProvider(GroupService)).acceptInvite(...args);
+}
+
+export async function getDepartureAudience(
+  ...args: Parameters<GroupService['getDepartureAudience']>
+): Promise<Awaited<ReturnType<GroupService['getDepartureAudience']>>> {
+  return (await testProvider(GroupService)).getDepartureAudience(...args);
+}
+
+export async function listRounds(
+  ...args: Parameters<SettleService['listRounds']>
+): Promise<Awaited<ReturnType<SettleService['listRounds']>>> {
+  return (await testProvider(SettleService)).listRounds(...args);
+}
+
+export async function getRound(
+  ...args: Parameters<SettleService['getRound']>
+): Promise<Awaited<ReturnType<SettleService['getRound']>>> {
+  return (await testProvider(SettleService)).getRound(...args);
+}
+
+export async function createRound(
+  ...args: Parameters<SettleService['createRound']>
+): Promise<Awaited<ReturnType<SettleService['createRound']>>> {
+  return (await testProvider(SettleService)).createRound(...args);
+}
+
+export async function saveExpense(
+  ...args: Parameters<SettleService['saveExpense']>
+): Promise<Awaited<ReturnType<SettleService['saveExpense']>>> {
+  return (await testProvider(SettleService)).saveExpense(...args);
+}
+
+export async function deleteExpense(
+  ...args: Parameters<SettleService['deleteExpense']>
+): Promise<Awaited<ReturnType<SettleService['deleteExpense']>>> {
+  return (await testProvider(SettleService)).deleteExpense(...args);
+}
+
+export async function checkExclusion(
+  ...args: Parameters<SettleService['checkExclusion']>
+): Promise<Awaited<ReturnType<SettleService['checkExclusion']>>> {
+  return (await testProvider(SettleService)).checkExclusion(...args);
+}
+
+export async function excludeMember(
+  ...args: Parameters<SettleService['excludeMember']>
+): Promise<Awaited<ReturnType<SettleService['excludeMember']>>> {
+  return (await testProvider(SettleService)).excludeMember(...args);
+}
+
+export async function roundCommand(
+  ...args: Parameters<SettleService['roundCommand']>
+): Promise<Awaited<ReturnType<SettleService['roundCommand']>>> {
+  return (await testProvider(SettleService)).roundCommand(...args);
+}
+
+export async function setSettlementCheck(
+  ...args: Parameters<SettleService['setSettlementCheck']>
+): Promise<Awaited<ReturnType<SettleService['setSettlementCheck']>>> {
+  return (await testProvider(SettleService)).setSettlementCheck(...args);
+}
+
+export async function getSettlement(
+  ...args: Parameters<SettleService['getSettlement']>
+): Promise<Awaited<ReturnType<SettleService['getSettlement']>>> {
+  return (await testProvider(SettleService)).getSettlement(...args);
+}
+
+export async function addReceipt(
+  ...args: Parameters<SettleService['addReceipt']>
+): Promise<Awaited<ReturnType<SettleService['addReceipt']>>> {
+  const [access, key, roundId, expenseId, ...input] = args;
+  return (await testProvider(SettleService)).addReceipt(
+    access,
+    key,
+    roundId,
+    expenseId,
+    ...input,
+  );
+}
+
+export async function removeReceipt(
+  ...args: Parameters<SettleService['removeReceipt']>
+): Promise<Awaited<ReturnType<SettleService['removeReceipt']>>> {
+  return (await testProvider(SettleService)).removeReceipt(...args);
+}
+
+export async function getReceipt(
+  ...args: Parameters<SettleService['getReceipt']>
+): Promise<Awaited<ReturnType<SettleService['getReceipt']>>> {
+  return (await testProvider(SettleService)).getReceipt(...args);
+}
+
+export async function getBankSettlementAudience(
+  ...args: Parameters<SettleService['getBankSettlementAudience']>
+): Promise<Awaited<ReturnType<SettleService['getBankSettlementAudience']>>> {
+  return (await testProvider(SettleService)).getBankSettlementAudience(...args);
+}
+
+export async function signInKakao(
+  ...args: Parameters<AuthService['signInKakao']>
+): Promise<Awaited<ReturnType<AuthService['signInKakao']>>> {
+  return (await testProvider(AuthService)).signInKakao(...args);
+}
+
+export async function signInTestAccount(
+  ...args: Parameters<AuthService['signInTestAccount']>
+): Promise<Awaited<ReturnType<AuthService['signInTestAccount']>>> {
+  return (await testProvider(AuthService)).signInTestAccount(...args);
+}
+
+export async function getAccount(
+  ...args: Parameters<AuthorizationService['getAccount']>
+): Promise<Awaited<ReturnType<AuthorizationService['getAccount']>>> {
+  return (await testProvider(AuthorizationService)).getAccount(...args);
+}
+
+export async function requireAccount(
+  ...args: Parameters<AuthorizationService['requireAccount']>
+): Promise<Awaited<ReturnType<AuthorizationService['requireAccount']>>> {
+  return (await testProvider(AuthorizationService)).requireAccount(...args);
+}
+
+export async function findUser(
+  client: import('../global/database/db').Database,
+  userId: string,
+) {
+  const row = await client.prisma.users.findFirst({ where: { id: userId } });
+  return row
+    ? databaseRows<import('../domain/user/dao/user.dao').UserRow>(row)
+    : undefined;
+}
+
+export async function saveBankAccount(
+  ...args: Parameters<UserRepository['saveBankAccount']>
+): Promise<Awaited<ReturnType<UserRepository['saveBankAccount']>>> {
+  return (await testProvider(UserRepository)).saveBankAccount(...args);
+}
+
+export async function saveOnboarding(
+  ...args: Parameters<UserRepository['saveOnboarding']>
+): Promise<Awaited<ReturnType<UserRepository['saveOnboarding']>>> {
+  return (await testProvider(UserRepository)).saveOnboarding(...args);
+}
+
+export async function getKakaoCallbackResponse(
+  request: Parameters<typeof callback>[0],
+) {
+  return callback(request, await testProvider(AuthService));
+}
+
+export async function getTestLoginResponse(
+  request: Parameters<typeof testLogin>[0],
+) {
+  return testLogin(request, await testProvider(AuthService));
+}
+
+export async function getRefreshResponse(
+  request: Parameters<typeof refresh>[0],
+) {
+  return refresh(request, await testProvider(AuthService));
+}

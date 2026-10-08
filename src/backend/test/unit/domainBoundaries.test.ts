@@ -12,7 +12,12 @@ const graph = new Map<string, string[]>()
 for (const [file, source] of sources) {
   const imports: string[] = []
   const visit = (node: ts.Node) => {
-    if (ts.isImportDeclaration(node) && !node.importClause?.isTypeOnly && ts.isStringLiteral(node.moduleSpecifier)) imports.push(node.moduleSpecifier.text)
+    if (ts.isImportDeclaration(node) && !node.importClause?.isTypeOnly && ts.isStringLiteral(node.moduleSpecifier)) {
+      const clause = node.importClause
+      const bindings = clause?.namedBindings
+      const onlyTypes = clause && !clause.name && bindings && ts.isNamedImports(bindings) && bindings.elements.every(item => item.isTypeOnly)
+      if (!onlyTypes) imports.push(node.moduleSpecifier.text)
+    }
     if (ts.isExportDeclaration(node) && !node.isTypeOnly && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) imports.push(node.moduleSpecifier.text)
     if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
       assert.ok(ts.isStringLiteral(node.arguments[0]), `Uninspectable import: ${file}`)
@@ -87,4 +92,19 @@ test('business routes use one HTTP mapping per controller method and class provi
     assert.doesNotMatch(controller, /@All|handle\(/)
     assert.doesNotMatch(readFileSync(`src/backend/domain/${domain}/module/${domain}.module.ts`, 'utf8'), /useValue/)
   }
+})
+
+
+test('backend runtime imports remain acyclic after module wiring', () => {
+  const completed = new Set<string>()
+  const active: string[] = []
+  const visit = (file: string) => {
+    assert.ok(!active.includes(file), `Runtime cycle: ${[...active, file].join(' -> ')}`)
+    if (completed.has(file)) return
+    active.push(file)
+    for (const dependency of graph.get(file) ?? []) visit(dependency)
+    active.pop()
+    completed.add(file)
+  }
+  for (const file of sources.keys()) if (file.includes('/backend/')) visit(file)
 })

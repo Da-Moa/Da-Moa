@@ -1,3 +1,4 @@
+import { MutationExecutor } from '../../../global/util/idempotencyUtil';
 import type { RoundListQueryDTO } from '../dto/req/settle.request.dto';
 import type { PageQueryDTO } from '../../../global/apiPayload/dto/req/page.request.dto';
 import { Injectable, Inject } from '@nestjs/common';
@@ -6,7 +7,7 @@ import { PrismaService } from '../../../global/database/prisma.service';
 import { settleErrors } from '../code/settle.error.code';
 import { SettleException } from '../exception/settle.exception';
 import { randomInt, randomUUID } from 'node:crypto';
-import { requireAccount } from '../../../global/auth';
+import { AuthorizationService } from '../../../global/auth/service/authorization.service';
 import { MAX_GROUP_MEMBERS } from '../../../../shared/domain/group';
 import { bankDisplayName } from '../../../../shared/domain/user';
 import {
@@ -17,7 +18,6 @@ import {
   deleteReceiptObject,
   readReceipt,
   type Database,
-  domainMutation,
   idsInput,
   nowSeconds,
   onlyKeys,
@@ -90,9 +90,12 @@ type ReceiptAudience = (audience: {
 export class SettleService {
   constructor(
     @Inject(PrismaService)
-    private readonly prisma: PrismaService = new PrismaService(),
+    private readonly prisma: PrismaService,
     @Inject(SettleRepository)
-    private readonly repository: SettleRepository = new SettleRepository(),
+    private readonly repository: SettleRepository,
+    @Inject(AuthorizationService)
+    private readonly authorization: AuthorizationService,
+    @Inject(MutationExecutor) private readonly mutations: MutationExecutor,
   ) {}
 
   private async roundFor(
@@ -261,7 +264,7 @@ export class SettleService {
   ) {
     query = queryParameters(query);
     return this.prisma.withDatabaseConnection(async (client) => {
-      const account = await requireAccount(client, access);
+      const account = await this.authorization.requireAccount(client, access);
       const { limit, cursor } = pagination(query);
       const status = query.get('status');
       const search = query.has('q') ? textInput(query.get('q'), 100) : null;
@@ -293,7 +296,7 @@ export class SettleService {
   ): Promise<RoundDetail> {
     query = queryParameters(query);
     return this.prisma.withDatabaseConnection(async (client) => {
-      const account = await requireAccount(client, access);
+      const account = await this.authorization.requireAccount(client, access);
       const { limit, cursor } = pagination(query);
       const { rows } = await this.repository.findRoundDetail(
         client,
@@ -363,7 +366,7 @@ export class SettleService {
   ) {
     return this.prisma.withDatabaseConnection((client, discardConnection) =>
       this.prisma.withWriteLock(client, discardConnection, async (client) => {
-        const account = await requireAccount(client, access);
+        const account = await this.authorization.requireAccount(client, access);
         onlyKeys(body, ['name', 'participantIds']);
         const name = textInput(body.name, 100),
           ids = idsInput(body.participantIds);
@@ -699,7 +702,7 @@ export class SettleService {
       },
       undefined,
       async (client) => {
-        userId = (await requireAccount(client, access)).id;
+        userId = (await this.authorization.requireAccount(client, access)).id;
         digest = mutationDigest(key, {
           roundId,
           expenseId: undefined,
@@ -770,7 +773,8 @@ export class SettleService {
       return this.createExpense(access, key, roundId, body, captureAudience);
     return this.prisma.withDatabaseConnection(
       async (client, discardConnection) => {
-        const userId = (await requireAccount(client, access)).id;
+        const userId = (await this.authorization.requireAccount(client, access))
+          .id;
         const digest = mutationDigest(key, { roundId, expenseId, ...body });
         const round = (
           await this.repository.findExpenseUpdate(
@@ -905,7 +909,7 @@ export class SettleService {
         return result;
       },
       async (client) => {
-        userId = (await requireAccount(client, access)).id;
+        userId = (await this.authorization.requireAccount(client, access)).id;
         onlyKeys(body, ['expectedVersion']);
         digest = mutationDigest(key, { roundId, expenseId, ...body });
         round = (
@@ -987,7 +991,7 @@ export class SettleService {
 
   async checkExclusion(access: Identity, roundId: string, userId: string) {
     return this.prisma.withDatabaseConnection(async (client) => {
-      const account = await requireAccount(client, access),
+      const account = await this.authorization.requireAccount(client, access),
         round = await this.roundFor(client, roundId, account.id);
       this.creator(round);
       return this.exclusions(client, round, userId);
@@ -1007,7 +1011,7 @@ export class SettleService {
     }) => void,
   ) {
     return this.prisma.withDatabaseConnection(async (client) => {
-      const account = await requireAccount(client, access);
+      const account = await this.authorization.requireAccount(client, access);
       onlyKeys(body, ['expectedVersion']);
       mutationDigest(key, { roundId, targetId, ...body });
       const {
@@ -1193,7 +1197,7 @@ export class SettleService {
           this.validateRoundConfirmation(round, body.expectedVersion);
       },
       async (client) => {
-        userId = (await requireAccount(client, access)).id;
+        userId = (await this.authorization.requireAccount(client, access)).id;
         onlyKeys(body, ['expectedVersion']);
         digest = mutationDigest(key, { roundId, ...body });
       },
@@ -1215,7 +1219,7 @@ export class SettleService {
       return this.confirmRound(access, key, roundId, body, captureAudience);
     if (action === 'force-complete')
       return this.prisma.withDatabaseConnection(async (client) => {
-        const account = await requireAccount(client, access);
+        const account = await this.authorization.requireAccount(client, access);
         onlyKeys(body, ['expectedVersion']);
         const digest = mutationDigest(key, { roundId, ...body });
         const {
@@ -1274,7 +1278,7 @@ export class SettleService {
       });
     if (action === 'complete')
       return this.prisma.withDatabaseConnection(async (client) => {
-        const account = await requireAccount(client, access);
+        const account = await this.authorization.requireAccount(client, access);
         onlyKeys(body, ['expectedVersion']);
         const digest = mutationDigest(key, { roundId, ...body });
         const expectedVersion =
@@ -1316,7 +1320,7 @@ export class SettleService {
       });
     if (action === 'draw')
       return this.prisma.withDatabaseConnection(async (client) => {
-        const account = await requireAccount(client, access);
+        const account = await this.authorization.requireAccount(client, access);
         onlyKeys(body, ['expectedVersion']);
         const digest = mutationDigest(key, { roundId, ...body });
         const {
@@ -1376,7 +1380,7 @@ export class SettleService {
       });
     if (action === 'reopen')
       return this.prisma.withDatabaseConnection(async (client) => {
-        const account = await requireAccount(client, access);
+        const account = await this.authorization.requireAccount(client, access);
         onlyKeys(body, ['expectedVersion']);
         mutationDigest(key, { roundId, ...body });
         const {
@@ -1439,13 +1443,13 @@ export class SettleService {
           return result;
         },
         async (client) => {
-          userId = (await requireAccount(client, access)).id;
+          userId = (await this.authorization.requireAccount(client, access)).id;
         },
       );
     }
     onlyKeys(body, ['expectedVersion']);
     if (action !== 'send') throw missing();
-    return domainMutation(
+    return this.mutations.execute(
       access,
       key,
       `round.${action}`,
@@ -1488,7 +1492,7 @@ export class SettleService {
     }) => void,
   ) {
     return this.prisma.withDatabaseConnection(async (client) => {
-      const account = await requireAccount(client, access);
+      const account = await this.authorization.requireAccount(client, access);
       onlyKeys(body, ['expectedVersion', 'checked', 'senderId', 'currency']);
       if (typeof body.checked !== 'boolean')
         throw new SettleException(settleErrors.CHECK_STATE_REQUIRED);
@@ -1562,7 +1566,7 @@ export class SettleService {
     roundId: string,
   ): Promise<SettlementDTO> {
     return this.prisma.withDatabaseConnection(async (client) => {
-      const account = await requireAccount(client, access);
+      const account = await this.authorization.requireAccount(client, access);
       const {
         rows: [round],
       } = await this.repository.findSettlement(client, roundId, account.id);
@@ -1651,7 +1655,7 @@ export class SettleService {
   ) {
     if (!access) throw new SettleException(settleErrors.UNAUTHORIZED);
     const account = await this.prisma.withDatabaseConnection((client) =>
-      requireAccount(client, access),
+      this.authorization.requireAccount(client, access),
     );
     const upload: ReceiptUpload =
       typeof input[0] === 'function'
@@ -1735,7 +1739,7 @@ export class SettleService {
     let objectKey: string | null = null;
     let audience: Parameters<ReceiptAudience>[0] | undefined;
     const result = await this.prisma.withDatabaseConnection(async (client) => {
-      const account = await requireAccount(client, access);
+      const account = await this.authorization.requireAccount(client, access);
       onlyKeys(body, ['expectedVersion']);
       const digest = mutationDigest(key, {
         roundId,
@@ -1816,7 +1820,7 @@ export class SettleService {
 
   async getReceipt(access: Identity, receiptId: string) {
     const receipt = await this.prisma.withDatabaseConnection(async (client) => {
-      const account = await requireAccount(client, access);
+      const account = await this.authorization.requireAccount(client, access);
       const { rows } = await this.repository.findReceipt(
         client,
         receiptId,
@@ -1842,44 +1846,3 @@ export class SettleService {
     );
   }
 }
-
-// Native workers and integration callers use the same class implementation.
-const instance = new SettleService();
-export const listRounds = (...args: Parameters<SettleService['listRounds']>) =>
-  instance.listRounds(...args);
-export const getRound = (...args: Parameters<SettleService['getRound']>) =>
-  instance.getRound(...args);
-export const createRound = (
-  ...args: Parameters<SettleService['createRound']>
-) => instance.createRound(...args);
-export const saveExpense = (
-  ...args: Parameters<SettleService['saveExpense']>
-) => instance.saveExpense(...args);
-export const deleteExpense = (
-  ...args: Parameters<SettleService['deleteExpense']>
-) => instance.deleteExpense(...args);
-export const checkExclusion = (
-  ...args: Parameters<SettleService['checkExclusion']>
-) => instance.checkExclusion(...args);
-export const excludeMember = (
-  ...args: Parameters<SettleService['excludeMember']>
-) => instance.excludeMember(...args);
-export const roundCommand = (
-  ...args: Parameters<SettleService['roundCommand']>
-) => instance.roundCommand(...args);
-export const setSettlementCheck = (
-  ...args: Parameters<SettleService['setSettlementCheck']>
-) => instance.setSettlementCheck(...args);
-export const getSettlement = (
-  ...args: Parameters<SettleService['getSettlement']>
-) => instance.getSettlement(...args);
-export const addReceipt: SettleService['addReceipt'] =
-  instance.addReceipt.bind(instance);
-export const removeReceipt = (
-  ...args: Parameters<SettleService['removeReceipt']>
-) => instance.removeReceipt(...args);
-export const getReceipt = (...args: Parameters<SettleService['getReceipt']>) =>
-  instance.getReceipt(...args);
-export const getBankSettlementAudience = (
-  ...args: Parameters<SettleService['getBankSettlementAudience']>
-) => instance.getBankSettlementAudience(...args);

@@ -8,12 +8,13 @@ import {
   accessTokenForRefresh, createAccessToken, createRefreshToken, currentTimestamp, readAccessToken, readRefreshToken,
   type AccessToken,
 } from '../../global/auth/native.ts'
-import { withdrawAccount } from '../../domain/user/index.ts'
-import { signInKakao, type AuthSession } from '../../global/auth/index.ts'
-import { getAccount } from '../../global/auth/service/authorization.service.ts'
+import { withdrawAccount } from '../domainTestSupport';
+import { type AuthSession } from '../../global/auth/index.ts';
+import { signInKakao } from '../domainTestSupport';
+import { getAccount } from '../domainTestSupport';
 import { createDatabaseClient, withReadTransaction, withWriteTransaction } from '../../global/database/db.ts'
 import { AppError } from '../../global/apiPayload/errors.ts'
-import { acceptInvite, createGroup, createInvite, getGroup, getInvite, listGroups } from '../../domain/group/index.ts'
+import { acceptInvite, createGroup, createInvite, getGroup, getInvite, listGroups } from '../domainTestSupport';
 import { applyMigrations } from '../../../../scripts/migrations.mjs'
 import { completeTestOnboarding as completeOnboarding, updateTestBankAccount as updateBankAccount } from './bankTestSupport.ts'
 

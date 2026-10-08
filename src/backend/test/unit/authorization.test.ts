@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { requireAccount } from '../../global/auth/service/authorization.service.ts'
+import { AuthorizationService } from '../../global/auth/service/authorization.service.ts'
+import { AccountStateRepository } from '../../domain/user/repository/accountState.repository'
+import { PrismaService } from '../../global/database/prisma.service'
+const authorization = new AuthorizationService(new AccountStateRepository(), new PrismaService())
+const requireAccount = authorization.requireAccount.bind(authorization)
 import type { Database } from '../../global/database/db.ts'
 import { AppError } from '../../global/apiPayload/errors.ts'
 
@@ -26,7 +30,7 @@ test('authorization checks account state without querying session validity', asy
   assert.equal(returning.purpose, 'onboarding')
   assert.equal((await requireAccount(client([row]), access)).accountNumber, '0012')
   await requireAccount({ prisma: { users: { findFirst: async (query: unknown) => {
-    assert.deepEqual(query, { where: { id: 'u' } })
+    assert.deepEqual((query as { where: unknown }).where, { id: 'u' })
     return row
   } } } } as unknown as Database, access)
 })

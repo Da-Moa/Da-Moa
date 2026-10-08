@@ -7,12 +7,12 @@ import { randomUUID } from 'node:crypto'
 import test from 'node:test'
 import sharp from 'sharp'
 import { readAccessToken, type AccessToken } from '../../global/auth/native.ts'
-import { updateBankAccount as saveBankAccount, withdrawAccount } from '../../domain/user/index.ts'
-import { signInKakao } from '../../global/auth/index.ts'
-import { getAccount } from '../../global/auth/service/authorization.service.ts'
+import { updateBankAccount as saveBankAccount, withdrawAccount } from '../domainTestSupport';
+import { signInKakao } from '../domainTestSupport';
+import { getAccount } from '../domainTestSupport';
 import { createDatabaseClient } from '../../global/database/db.ts'
-import { acceptInvite, createGroup, createInvite, getGroup, getInvite, leaveGroup, listGroups } from '../../domain/group/index.ts'
-import { checkExclusion, createRound, deleteExpense, excludeMember, getReceipt, getRound, getSettlement, listRounds, removeReceipt, roundCommand, saveExpense, setSettlementCheck } from '../../domain/settle/index.ts'
+import { acceptInvite, createGroup, createInvite, getGroup, getInvite, leaveGroup, listGroups } from '../domainTestSupport';
+import { checkExclusion, createRound, deleteExpense, excludeMember, getReceipt, getRound, getSettlement, listRounds, removeReceipt, roundCommand, saveExpense, setSettlementCheck } from '../domainTestSupport';
 import type { MutationResult } from '../../../shared/domainTypes.ts'
 import { CURRENCY_CODES } from '../../../shared/domain/settle/money.ts'
 import { applyMigrations } from '../../../../scripts/migrations.mjs'

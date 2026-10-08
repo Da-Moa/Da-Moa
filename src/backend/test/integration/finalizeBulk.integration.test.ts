@@ -1,3 +1,6 @@
+import { testProvider } from '../domainTestSupport';
+import { AuthorizationService } from '../../global/auth/service/authorization.service';
+import { MutationExecutor } from '../../global/util/idempotencyUtil';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
@@ -8,7 +11,7 @@ import {
   PrismaService,
 } from '../../global/database/prisma.service';
 import type { AccessToken } from '../../global/auth/native';
-import { createGroup, createInvite, acceptInvite } from '../../domain/group';
+import { createGroup, createInvite, acceptInvite } from '../domainTestSupport';
 import { SettleService } from '../../domain/settle/service/settle.service';
 import { SettleRepository } from '../../domain/settle/repository/settle.repository';
 import {
@@ -65,7 +68,7 @@ test('send bulk-finalizes settlement with constant SQL count, exact money and at
       invite.sharePath!.split('/').at(-1)!,
     );
   const repository = new SettleRepository();
-  const service = new SettleService(new PrismaService(), repository);
+  const service = new SettleService(new PrismaService(), repository, await testProvider(AuthorizationService), await testProvider(MutationExecutor));
 
   type ExpenseInput = {
     currency: Currency;

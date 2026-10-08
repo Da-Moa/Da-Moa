@@ -5,7 +5,7 @@ import { generateKeyPairSync, randomUUID, sign } from 'node:crypto'
 import { test } from 'node:test'
 import { HttpRequest as NextRequest } from '../../global/apiPayload/httpContext'
 import { getKakaoLoginResponse as login } from '../../global/auth'
-import { getKakaoCallbackResponse as callback } from '../../global/auth'
+import { getKakaoCallbackResponse as callback } from '../domainTestSupport';
 import { OIDC_COOKIE_NAMES, readRefreshToken, REFRESH_TOKEN_COOKIE_NAME } from '../../global/auth/native.ts'
 import { createDatabaseClient } from '../../global/database/db.ts'
 import { applyMigrations } from '../../../../scripts/migrations.mjs'

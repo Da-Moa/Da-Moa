@@ -9,7 +9,7 @@ import { testLoginGuard } from '../../../../shared/testAccounts';
 
 export async function getTestLoginResponse(
   request: HttpRequest,
-  authService: AuthService = new AuthService(),
+  authService: AuthService,
 ) {
   try {
     const expected = requestOrigin(request);

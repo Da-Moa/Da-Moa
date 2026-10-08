@@ -1,3 +1,5 @@
+import { AccountStateRepository } from '../../domain/user/repository/accountState.repository';
+import type { Database } from '../../global/database/db';
 import type { INestApplication } from '@nestjs/common';
 import { channel } from 'node:diagnostics_channel';
 import { before, after } from 'node:test';
@@ -928,4 +930,53 @@ after(async () => {
   await app?.close();
   await disconnectPrismaClients();
   await closeDatabasePools();
+});
+
+test('Nest HTTP uses the registered account Provider and retains transaction context', async (t) => {
+  const actor = await session('DI 검증');
+  const accounts = app.get(AccountStateRepository);
+  const blocked = t.mock.method(accounts, 'findState', async () => null);
+  assert.equal((await request('me', actor.accessToken)).status, 401);
+  assert.equal(
+    (await request('groups', actor.accessToken, 'POST', { name: 'DI 차단' }))
+      .status,
+    401,
+  );
+  assert.equal(blocked.mock.callCount(), 2);
+  blocked.mock.restore();
+
+  const contexts: Database[] = [];
+  const original = accounts.findState.bind(accounts);
+  const observed = t.mock.method(
+    accounts,
+    'findState',
+    async (client: Database, id: string) => {
+      contexts.push(client);
+      return original(client, id);
+    },
+  );
+  const previousLog = process.env.DB_QUERY_LOG;
+  process.env.DB_QUERY_LOG = 'true';
+  t.after(() => {
+    if (previousLog === undefined) delete process.env.DB_QUERY_LOG;
+    else process.env.DB_QUERY_LOG = previousLog;
+  });
+  const statements: string[] = [];
+  t.mock.method(console, 'info', (message: string) =>
+    statements.push(message.replace(/\s+/g, ' ')),
+  );
+  const result = await request('auth/withdraw', actor.accessToken, 'POST');
+  assert.equal(result.status, 200, await result.clone().text());
+  assert.equal(contexts.length, 1);
+  assert.equal(
+    statements.filter((sql) => /FROM "public"\."users"/.test(sql)).length,
+    1,
+    'one AUTH SELECT per request',
+  );
+  assert.notEqual(
+    contexts[0].prisma,
+    app.get(PrismaService).client,
+    'authorization must use the write transaction client',
+  );
+  observed.mock.restore();
 });

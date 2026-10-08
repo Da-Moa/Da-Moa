@@ -19,9 +19,9 @@ import { issueTokens, refreshTokens } from './authTokens';
 export class AuthService {
   constructor(
     @Inject(PrismaService)
-    private readonly prisma: PrismaService = new PrismaService(),
+    private readonly prisma: PrismaService,
     @Inject(UserService)
-    private readonly userService: UserService = new UserService(),
+    private readonly userService: UserService,
   ) {}
 
   signInKakao(providerSubject: string, profile: KakaoProfile) {
@@ -76,9 +76,3 @@ export class AuthService {
     return refreshTokens(refresh);
   }
 }
-
-export const signInKakao = (...args: Parameters<AuthService['signInKakao']>) =>
-  new AuthService().signInKakao(...args);
-export const signInTestAccount = (
-  ...args: Parameters<AuthService['signInTestAccount']>
-) => new AuthService().signInTestAccount(...args);

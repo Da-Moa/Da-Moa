@@ -7,13 +7,13 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { before, test } from 'node:test'
 import sharp from 'sharp'
 import { currentTimestamp, readAccessToken, type AccessToken } from '../../global/auth/native.ts'
-import { withdrawAccount } from '../../domain/user/index.ts'
-import { signInKakao } from '../../global/auth/index.ts'
+import { withdrawAccount } from '../domainTestSupport';
+import { signInKakao } from '../domainTestSupport';
 import { createDatabaseClient } from '../../global/database/db.ts'
 import { getDatabasePool } from '../../global/database/dbClient.mjs'
 import { AppError } from '../../global/apiPayload/errors.ts'
-import { acceptInvite, createGroup, createInvite, leaveGroup } from '../../domain/group/index.ts'
-import { addReceipt, createRound, deleteExpense, getRound, getSettlement, roundCommand, saveExpense, setSettlementCheck } from '../../domain/settle/index.ts'
+import { acceptInvite, createGroup, createInvite, leaveGroup } from '../domainTestSupport';
+import { addReceipt, createRound, deleteExpense, getRound, getSettlement, roundCommand, saveExpense, setSettlementCheck } from '../domainTestSupport';
 import { applyMigrations } from '../../../../scripts/migrations.mjs'
 import { completeTestOnboarding as completeOnboarding } from './bankTestSupport.ts'
 

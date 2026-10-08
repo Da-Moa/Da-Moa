@@ -7,9 +7,9 @@ import test from 'node:test'
 import sharp from 'sharp'
 import { DeleteObjectCommand, HeadObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { readAccessToken } from '../../global/auth/native.ts'
-import { signInKakao } from '../../global/auth/index.ts'
-import { acceptInvite, createGroup, createInvite } from '../../domain/group/index.ts'
-import { addReceipt, checkExclusion, createRound, deleteExpense, excludeMember, getReceipt, getRound, getSettlement, listRounds, removeReceipt, roundCommand, saveExpense, setSettlementCheck } from '../../domain/settle/index.ts'
+import { signInKakao } from '../domainTestSupport';
+import { acceptInvite, createGroup, createInvite } from '../domainTestSupport';
+import { addReceipt, checkExclusion, createRound, deleteExpense, excludeMember, getReceipt, getRound, getSettlement, listRounds, removeReceipt, roundCommand, saveExpense, setSettlementCheck } from '../domainTestSupport';
 import { createDatabaseClient } from '../../global/database/db.ts'
 import { uuidV7 } from '../../../shared/uuid.ts'
 import { completeTestOnboarding } from './bankTestSupport.ts'
