@@ -39,17 +39,16 @@ import {
 } from '../../../global/apiPayload/apiResponse.interceptor';
 import { settleErrors } from '../code/settle.error.code';
 import { SettleException } from '../exception/settle.exception';
-import {
-  realtimeEnabled,
-  publishRoundInvalidation,
-  type RoundAudience,
-} from '../../../global/util';
+import { RealtimePublisher, type RoundAudience } from '../../../global/util';
 import { readBytes } from '../../../global/util';
 import { MAX_RECEIPT_REQUEST_BYTES } from '../../../../shared/domain/settle';
 @ApiSuccess(settleSuccess)
 @Controller()
 export class SettleController {
-  constructor(@Inject(SettleService) private readonly service: SettleService) {}
+  constructor(
+    @Inject(SettleService) private readonly service: SettleService,
+    @Inject(RealtimePublisher) private readonly publisher: RealtimePublisher,
+  ) {}
 
   @Get('api/groups/:groupId/rounds')
   listGroupRounds(
@@ -80,8 +79,10 @@ export class SettleController {
         audience = { groupId, userIds: ids };
       },
     );
-    if (realtimeEnabled())
-      after(() => publishRoundInvalidation(result.id, audience, false));
+    if (this.publisher.realtimeEnabled())
+      after(() =>
+        this.publisher.publishRoundInvalidation(result.id, audience, false),
+      );
     return result;
   }
 
@@ -121,8 +122,10 @@ export class SettleController {
         audience = value;
       },
     );
-    if (realtimeEnabled())
-      after(() => publishRoundInvalidation(roundId, audience, false));
+    if (this.publisher.realtimeEnabled())
+      after(() =>
+        this.publisher.publishRoundInvalidation(roundId, audience, false),
+      );
     return result;
   }
 
@@ -153,8 +156,10 @@ export class SettleController {
         audience = value;
       },
     );
-    if (realtimeEnabled())
-      after(() => publishRoundInvalidation(roundId, audience, true));
+    if (this.publisher.realtimeEnabled())
+      after(() =>
+        this.publisher.publishRoundInvalidation(roundId, audience, true),
+      );
     return result;
   }
 
@@ -177,8 +182,10 @@ export class SettleController {
         audience = value;
       },
     );
-    if (realtimeEnabled())
-      after(() => publishRoundInvalidation(roundId, audience, false));
+    if (this.publisher.realtimeEnabled())
+      after(() =>
+        this.publisher.publishRoundInvalidation(roundId, audience, false),
+      );
     return result;
   }
 
@@ -201,8 +208,10 @@ export class SettleController {
         audience = value;
       },
     );
-    if (realtimeEnabled())
-      after(() => publishRoundInvalidation(roundId, audience, false));
+    if (this.publisher.realtimeEnabled())
+      after(() =>
+        this.publisher.publishRoundInvalidation(roundId, audience, false),
+      );
     return result;
   }
 
@@ -225,8 +234,10 @@ export class SettleController {
         audience = value;
       },
     );
-    if (realtimeEnabled())
-      after(() => publishRoundInvalidation(roundId, audience, false));
+    if (this.publisher.realtimeEnabled())
+      after(() =>
+        this.publisher.publishRoundInvalidation(roundId, audience, false),
+      );
     return result;
   }
 
@@ -249,8 +260,10 @@ export class SettleController {
         audience = value;
       },
     );
-    if (realtimeEnabled())
-      after(() => publishRoundInvalidation(roundId, audience, false));
+    if (this.publisher.realtimeEnabled())
+      after(() =>
+        this.publisher.publishRoundInvalidation(roundId, audience, false),
+      );
     return result;
   }
 
@@ -273,8 +286,10 @@ export class SettleController {
         audience = value;
       },
     );
-    if (realtimeEnabled())
-      after(() => publishRoundInvalidation(roundId, audience, false));
+    if (this.publisher.realtimeEnabled())
+      after(() =>
+        this.publisher.publishRoundInvalidation(roundId, audience, false),
+      );
     return result;
   }
 
@@ -297,8 +312,10 @@ export class SettleController {
         audience = value;
       },
     );
-    if (realtimeEnabled())
-      after(() => publishRoundInvalidation(roundId, audience, false));
+    if (this.publisher.realtimeEnabled())
+      after(() =>
+        this.publisher.publishRoundInvalidation(roundId, audience, false),
+      );
     return result;
   }
 
@@ -321,8 +338,10 @@ export class SettleController {
         audience = value;
       },
     );
-    if (realtimeEnabled())
-      after(() => publishRoundInvalidation(roundId, audience, false));
+    if (this.publisher.realtimeEnabled())
+      after(() =>
+        this.publisher.publishRoundInvalidation(roundId, audience, false),
+      );
     return result;
   }
 
@@ -346,8 +365,10 @@ export class SettleController {
         audience = value;
       },
     );
-    if (realtimeEnabled())
-      after(() => publishRoundInvalidation(roundId, audience, false));
+    if (this.publisher.realtimeEnabled())
+      after(() =>
+        this.publisher.publishRoundInvalidation(roundId, audience, false),
+      );
     return result;
   }
 
@@ -371,8 +392,10 @@ export class SettleController {
         audience = value;
       },
     );
-    if (realtimeEnabled())
-      after(() => publishRoundInvalidation(roundId, audience, false));
+    if (this.publisher.realtimeEnabled())
+      after(() =>
+        this.publisher.publishRoundInvalidation(roundId, audience, false),
+      );
     return result;
   }
 
@@ -405,8 +428,10 @@ export class SettleController {
         audience = value;
       },
     );
-    if (realtimeEnabled())
-      after(() => publishRoundInvalidation(roundId, audience, false));
+    if (this.publisher.realtimeEnabled())
+      after(() =>
+        this.publisher.publishRoundInvalidation(roundId, audience, false),
+      );
     return result;
   }
 
@@ -431,8 +456,10 @@ export class SettleController {
         audience = value;
       },
     );
-    if (realtimeEnabled())
-      after(() => publishRoundInvalidation(roundId, audience, false));
+    if (this.publisher.realtimeEnabled())
+      after(() =>
+        this.publisher.publishRoundInvalidation(roundId, audience, false),
+      );
     return result;
   }
 
@@ -458,8 +485,10 @@ export class SettleController {
         audience = value;
       },
     );
-    if (realtimeEnabled())
-      after(() => publishRoundInvalidation(roundId, audience, false));
+    if (this.publisher.realtimeEnabled())
+      after(() =>
+        this.publisher.publishRoundInvalidation(roundId, audience, false),
+      );
     return result;
   }
 

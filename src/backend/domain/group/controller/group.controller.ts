@@ -21,11 +21,14 @@ import {
 } from '../dto/req/group.request.dto';
 import { groupSuccess } from '../code/group.success.code';
 import { ApiSuccess } from '../../../global/apiPayload/apiResponse.interceptor';
-import { realtimeEnabled, publishGroupInvalidation } from '../../../global/util';
+import { RealtimePublisher } from '../../../global/util/invalidationUtil';
 @ApiSuccess(groupSuccess)
 @Controller()
 export class GroupController {
-  constructor(@Inject(GroupService) private readonly service: GroupService) {}
+  constructor(
+    @Inject(GroupService) private readonly service: GroupService,
+    @Inject(RealtimePublisher) private readonly publisher: RealtimePublisher,
+  ) {}
 
   @Get('api/groups')
   listGroups(
@@ -52,8 +55,10 @@ export class GroupController {
         audience = ids;
       },
     );
-    if (realtimeEnabled())
-      after(() => publishGroupInvalidation(result.id, audience, false));
+    if (this.publisher.realtimeEnabled())
+      after(() =>
+        this.publisher.publishGroupInvalidation(result.id, audience, false),
+      );
     return result;
   }
 
@@ -81,8 +86,10 @@ export class GroupController {
         audience = ids;
       },
     );
-    if (realtimeEnabled())
-      after(() => publishGroupInvalidation(groupId, audience, false));
+    if (this.publisher.realtimeEnabled())
+      after(() =>
+        this.publisher.publishGroupInvalidation(groupId, audience, false),
+      );
     return result;
   }
 
@@ -105,8 +112,10 @@ export class GroupController {
         audience = ids;
       },
     );
-    if (realtimeEnabled())
-      after(() => publishGroupInvalidation(groupId, audience, true));
+    if (this.publisher.realtimeEnabled())
+      after(() =>
+        this.publisher.publishGroupInvalidation(groupId, audience, true),
+      );
     return result;
   }
 
@@ -128,8 +137,10 @@ export class GroupController {
         audience = ids;
       },
     );
-    if (realtimeEnabled())
-      after(() => publishGroupInvalidation(groupId, audience, true));
+    if (this.publisher.realtimeEnabled())
+      after(() =>
+        this.publisher.publishGroupInvalidation(groupId, audience, true),
+      );
     return result;
   }
 
@@ -157,8 +168,10 @@ export class GroupController {
         audience = ids;
       },
     );
-    if (realtimeEnabled())
-      after(() => publishGroupInvalidation(result.id, audience, false));
+    if (this.publisher.realtimeEnabled())
+      after(() =>
+        this.publisher.publishGroupInvalidation(result.id, audience, false),
+      );
     return result;
   }
 }

@@ -1,3 +1,4 @@
+import { RealtimePublisher } from '../util/invalidationUtil';
 import { RealtimeAuthorizationService } from '../auth/service/realtimeAuthorization.service';
 import { createServer } from 'node:http';
 import type { Request, Response, NextFunction } from 'express';
@@ -39,8 +40,10 @@ export async function bootstrap() {
 
   const backend = await createBackend(async (app) => {
     const authorization = app.get(RealtimeAuthorizationService);
-    websocket = createWsController(rateLimit, (token) =>
-      authorization.authenticate(token),
+    websocket = createWsController(
+      rateLimit,
+      (token) => authorization.authenticate(token),
+      app.get(RealtimePublisher),
     );
     // Nest owns the HTTP listener; Next receives page requests on that listener.
     const server = app.getHttpServer();

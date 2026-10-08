@@ -1,14 +1,20 @@
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
-import {
-  registerInvalidationPublisher,
-  publishInvalidations,
-  publishGroupInvalidation,
-  publishRoundInvalidation,
-  publishBankInvalidation,
-  publishDepartureInvalidation,
-  realtimeEnabled,
-} from '../../global/util/invalidationUtil';
+import { RealtimePublisher } from '../../global/util/invalidationUtil';
+const publications = new RealtimePublisher();
+const registerInvalidationPublisher =
+  publications.registerInvalidationPublisher.bind(publications);
+const realtimeEnabled = publications.realtimeEnabled.bind(publications);
+const publishInvalidations =
+  publications.publishInvalidations.bind(publications);
+const publishGroupInvalidation =
+  publications.publishGroupInvalidation.bind(publications);
+const publishRoundInvalidation =
+  publications.publishRoundInvalidation.bind(publications);
+const publishBankInvalidation =
+  publications.publishBankInvalidation.bind(publications);
+const publishDepartureInvalidation =
+  publications.publishDepartureInvalidation.bind(publications);
 
 function publisher(t: TestContext) {
   const messages: { userId: string; keys: string[] }[] = [];

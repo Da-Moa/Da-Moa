@@ -33,10 +33,7 @@ import {
   CurrentUser,
   type AuthenticatedUser,
 } from '../../../global/auth';
-import {
-  publishBankInvalidation,
-  publishDepartureInvalidation,
-} from '../../../global/util';
+import { RealtimePublisher } from '../../../global/util/invalidationUtil';
 import { GroupAudienceReader } from '../../group';
 import { SettleAudienceReader } from '../../settle';
 import { UserService } from '../service/user.service';
@@ -50,6 +47,7 @@ export class UserController {
     @Inject(GroupAudienceReader) private readonly groups: GroupAudienceReader,
     @Inject(SettleAudienceReader)
     private readonly settlements: SettleAudienceReader,
+    @Inject(RealtimePublisher) private readonly publisher: RealtimePublisher,
   ) {}
 
   @Get('api/me')
@@ -72,7 +70,7 @@ export class UserController {
     );
     const session = await this.operations.completeOnboarding(user, body);
     after(() =>
-      publishBankInvalidation(session.userId, (id) =>
+      this.publisher.publishBankInvalidation(session.userId, (id) =>
         this.settlements.findRecipients(id),
       ),
     );
@@ -96,7 +94,7 @@ export class UserController {
       body,
     );
     after(() =>
-      publishBankInvalidation(result.id, (id) =>
+      this.publisher.publishBankInvalidation(result.id, (id) =>
         this.settlements.findRecipients(id),
       ),
     );
@@ -111,7 +109,7 @@ export class UserController {
   ) {
     const result = await this.operations.withdrawAccount(user);
     after(() =>
-      publishDepartureInvalidation(result.groupIds, (ids) =>
+      this.publisher.publishDepartureInvalidation(result.groupIds, (ids) =>
         this.groups.findRecipients(ids),
       ),
     );

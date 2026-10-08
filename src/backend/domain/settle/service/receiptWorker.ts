@@ -3,7 +3,7 @@ import { PrismaService } from '../../../global/database/prisma.service';
 import { EventEmitter } from 'node:events';
 import { isUUID } from 'class-validator';
 import { run, type TaskList } from 'graphile-worker';
-import { publishRoundInvalidation } from '../../../global/util/invalidationUtil';
+import { RealtimePublisher } from '../../../global/util/invalidationUtil';
 import { ReceiptStorage } from '../../../global/util/minio.util';
 import { MAX_RECEIPT_BYTES } from '../../../../shared/domain/settle/receipt';
 import { SettleRepository } from '../repository/settle.repository';
@@ -16,6 +16,7 @@ export class ReceiptWorker {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(SettleRepository) private readonly repository: SettleRepository,
     @Inject(ReceiptStorage) private readonly storage: ReceiptStorage,
+    @Inject(RealtimePublisher) private readonly publisher: RealtimePublisher,
   ) {}
   readonly tasks: TaskList = {
     store_receipt: async (payload, helpers) => {
@@ -43,7 +44,7 @@ export class ReceiptWorker {
           await this.storage.deleteReceiptObject(objectKey);
           return;
         }
-        await publishRoundInvalidation(saved.round_id, {
+        await this.publisher.publishRoundInvalidation(saved.round_id, {
           groupId: saved.group_id,
           userIds: saved.user_ids,
         });
@@ -53,7 +54,7 @@ export class ReceiptWorker {
             this.repository.finishReceiptStorage(client, data.id, null),
           );
           if (failed)
-            await publishRoundInvalidation(failed.round_id, {
+            await this.publisher.publishRoundInvalidation(failed.round_id, {
               groupId: failed.group_id,
               userIds: failed.user_ids,
             });

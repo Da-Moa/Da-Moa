@@ -8,10 +8,7 @@ import { GroupService } from '../../domain/group/service/group.service.ts';
 import { createAccessToken } from '../../global/auth/native.ts';
 import { PrismaService } from '../../global/database/prisma.service.ts';
 import { createRateLimitController } from '../../global/rateLimit/native.ts';
-import {
-  publishGroupInvalidation,
-  realtimeEnabled,
-} from '../../global/util/invalidationUtil.ts';
+import { RealtimePublisher } from '../../global/util/invalidationUtil.ts';
 import { createWsController } from '../../global/websocket/controller/wsController.mjs';
 
 test(
@@ -37,6 +34,7 @@ test(
     }));
     const rateLimit = createRateLimitController();
     let websocket;
+    let publisher;
     const sockets = [];
     let app;
     t.after(async () => {
@@ -44,12 +42,15 @@ test(
       websocket?.close();
       rateLimit.close();
       await app?.close();
-      assert.equal(realtimeEnabled(), false);
+      assert.equal(publisher.realtimeEnabled(), false);
     });
     ({ app } = await createBackend(async (backend) => {
       const authorization = backend.get(RealtimeAuthorizationService);
-      websocket = createWsController(rateLimit, (token) =>
-        authorization.authenticate(token),
+      publisher = backend.get(RealtimePublisher);
+      websocket = createWsController(
+        rateLimit,
+        (token) => authorization.authenticate(token),
+        publisher,
       );
       backend.getHttpServer().on('upgrade', websocket.handleUpgrade);
     }));
@@ -94,7 +95,7 @@ test(
     await received;
     // Use a delivered marker to observe the outsider's socket without timing sleeps.
     const marker = once(sockets[1], 'message');
-    await publishGroupInvalidation('marker', ['outsider'], true);
+    await publisher.publishGroupInvalidation('marker', ['outsider'], true);
     await marker;
     assert.deepEqual(messages.get('owner'), [
       { type: 'invalidate', keys: ['groups', 'group:group-1'] },

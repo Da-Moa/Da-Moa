@@ -1,10 +1,9 @@
-import { registerInvalidationPublisher } from '../../util/invalidationUtil.ts'
 import { getKakaoRedirectUris } from '../../auth/native.ts'
 import { createWebsocketUtil } from '../websocketUtil.mjs'
 
-export function createWsController(rateLimit, authenticate) {
+export function createWsController(rateLimit, authenticate, publisher) {
   const websocket = createWebsocketUtil()
-  const unregister = registerInvalidationPublisher((userId, keys) => {
+  const unregister = publisher.registerInvalidationPublisher((userId, keys) => {
     websocket.publish(`user:${userId}`, { type: 'invalidate', keys })
   })
 
