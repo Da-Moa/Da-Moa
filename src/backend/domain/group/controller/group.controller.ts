@@ -1,3 +1,4 @@
+import { JsonBody } from '../../../global/apiPayload/requestBody.interceptor';
 import { groupErrors } from '../code/group.error.code';
 import { RequiredIdempotencyKey } from '../../../global/apiPayload/requiredHeader.decorator';
 import {
@@ -38,6 +39,7 @@ export class GroupController {
     return this.service.listGroups(user, query);
   }
 
+  @JsonBody()
   @Post('api/groups')
   @HttpCode(200)
   async createGroup(
@@ -93,6 +95,7 @@ export class GroupController {
     return result;
   }
 
+  @JsonBody()
   @Post('api/groups/:groupId/invites')
   @HttpCode(200)
   async createInvite(

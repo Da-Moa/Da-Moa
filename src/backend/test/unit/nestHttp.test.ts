@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { request as nodeRequest } from 'node:http';
 import { GroupService } from '../../domain/group/service/group.service';
 import { SettleService } from '../../domain/settle/service/settle.service';
 import { UserService } from '../../domain/user/service/user.service';
@@ -23,6 +24,129 @@ import {
   createRefreshToken,
   REFRESH_TOKEN_COOKIE_NAME,
 } from '../../global/auth/native';
+
+test('Nest JSON parser preserves byte limits, UTF-8, object shape and native Body DTOs after authentication', async (t) => {
+  const previous = process.env.AUTH_JWT_SECRET;
+  process.env.AUTH_JWT_SECRET = 'native-json-test-secret-at-least-32-bytes';
+  const { app } = await createBackend();
+  t.after(async () => {
+    await app.close();
+    if (previous === undefined) delete process.env.AUTH_JWT_SECRET;
+    else process.env.AUTH_JWT_SECRET = previous;
+  });
+  await app.listen(0, '127.0.0.1');
+  const origin = await app.getUrl();
+  const token = createAccessToken('json-user', 'json-session');
+  let calls = 0;
+  t.mock.method(
+    app.get(GroupService),
+    'createGroup',
+    async (...[_user, _key, body]: Parameters<GroupService['createGroup']>) => {
+      calls++;
+      assert.ok(body instanceof CreateGroupRequestDTO);
+      return { id: body.name };
+    },
+  );
+  const headers = {
+    origin,
+    authorization: `Bearer ${token}`,
+    'idempotency-key': 'json-test-key',
+  };
+  const post = (body: BodyInit, extra: Record<string, string> = {}) =>
+    fetch(`${origin}/api/groups`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(10000),
+      headers: { ...headers, ...extra },
+      body,
+    });
+  const valid = await post('{"name":"first","name":"parsed"}', {
+    'content-type': 'text/plain',
+  });
+  assert.equal(valid.status, 200);
+  assert.equal(
+    (await valid.json()).data.id,
+    'parsed',
+    'duplicate keys keep JSON.parse semantics',
+  );
+  for (const body of [
+    '[]',
+    'null',
+    '123',
+    '"text"',
+    '{',
+    '{}',
+    '{"name":123}',
+    '{"name":"ok","extra":true}',
+  ]) {
+    const invalid = await post(body, { 'content-type': 'application/json' });
+    assert.equal(invalid.status, 400, body);
+    assert.equal((await invalid.json()).error, 'invalid_input');
+  }
+  const invalidUtf8 = Buffer.concat([
+    Buffer.from('{"name":"'),
+    Buffer.from([0xc3, 0x28]),
+    Buffer.from('"}'),
+  ]);
+  assert.equal((await post(invalidUtf8)).status, 400);
+  assert.equal(
+    (
+      await post(Buffer.from('{"name":"utf16"}', 'utf16le'), {
+        'content-type': 'application/json; charset=utf-16le',
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await fetch(`${origin}/api/me/onboarding`, {
+        method: 'POST',
+        headers,
+        body: ' '.repeat(16385) + '{}',
+      })
+    ).status,
+    413,
+    'account routes retain their 16 KiB limit',
+  );
+  const oversized = ' '.repeat(1024 * 1024 + 1) + '{}';
+  assert.equal((await post(oversized)).status, 413);
+  assert.equal(
+    (
+      await fetch(`${origin}/api/groups`, {
+        method: 'POST',
+        headers: { origin },
+        body: oversized,
+      })
+    ).status,
+    401,
+    'unauthorized oversized JSON is rejected by the Guard first',
+  );
+  const streamed = await new Promise<number>((resolve, reject) => {
+    const request = nodeRequest(
+      `${origin}/api/groups`,
+      { method: 'POST', headers },
+      (response) => {
+        response.resume();
+        response.once('end', () => resolve(response.statusCode!));
+      },
+    );
+    request.on('error', reject);
+    request.setTimeout(10000, () =>
+      request.destroy(new Error('Chunked JSON request timed out')),
+    );
+    for (let i = 0; i < 17; i++) request.write(' '.repeat(65536));
+    request.end('{}');
+  });
+  assert.equal(
+    streamed,
+    413,
+    'chunked bodies are bounded without Content-Length',
+  );
+  assert.equal(
+    calls,
+    1,
+    'invalid or oversized requests never reach the domain service',
+  );
+});
 
 test('Nest HTTP routes enforce JWT before body parsing, preserve cookies, and dispatch each domain', async (t) => {
   const previous = process.env.AUTH_JWT_SECRET;
@@ -107,7 +231,12 @@ test('Nest HTTP routes enforce JWT before body parsing, preserve cookies, and di
     assert.equal(asset.status, 200);
     assert.match(asset.headers.get('content-type') ?? '', /text\/css/);
   }
-  for (const path of ['/docs-json', '/docs-yaml', '/api/docs-json', '/api/docs-yaml']) {
+  for (const path of [
+    '/docs-json',
+    '/docs-yaml',
+    '/api/docs-json',
+    '/api/docs-yaml',
+  ]) {
     assert.equal((await request(path, 'GET', undefined, true)).status, 404);
   }
   const groups = app.get(GroupService);
@@ -272,6 +401,21 @@ test('Nest HTTP routes enforce JWT before body parsing, preserve cookies, and di
   assert.equal(refreshPayload.meta.code, 'auth_ok');
   assert.equal(refreshed.headers.getSetCookie().length, 2);
   assert.equal(refreshed.headers.get('x-powered-by'), null);
+  const loggedOut = await fetch(`${origin}/api/auth/logout`, {
+    method: 'POST',
+    headers: { origin, cookie: `${REFRESH_TOKEN_COOKIE_NAME}=${refresh}` },
+    body: '{invalid',
+  });
+  assert.equal(
+    loggedOut.status,
+    200,
+    'logout accepts a Refresh cookie without an Access header',
+  );
+  assert.ok(
+    loggedOut.headers
+      .getSetCookie()
+      .every((cookie) => cookie.includes('Max-Age=0')),
+  );
 });
 
 test('required idempotency headers reject absent and blank values before every mutation handler', async (t) => {

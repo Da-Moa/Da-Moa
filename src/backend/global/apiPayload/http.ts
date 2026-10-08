@@ -1,10 +1,14 @@
 import { AppError } from './errors'
-import { objectBody } from '../util/mutations'
 import { getKakaoRedirectUris } from '../auth/native'
+import type { Request as ExpressRequest } from 'express'
 
 export function requestOrigin(request: Request): URL | null {
   const host = request.headers.get('host') ?? new URL(request.url).host
   const protocol = request.headers.get('x-forwarded-proto')?.split(',')[0].trim() || new URL(request.url).protocol.slice(0, -1)
+  return allowedOrigin(host, protocol)
+}
+
+function allowedOrigin(host: string, protocol: string): URL | null {
   if (!host || !['http', 'https'].includes(protocol)) return null
   try {
     const origin = new URL(`${protocol}://${host}`)
@@ -17,6 +21,13 @@ export function requestOrigin(request: Request): URL | null {
 export function sameOrigin(request: Request): boolean {
   const expected = requestOrigin(request)
   return Boolean(expected && request.headers.get('origin') === expected.origin)
+}
+
+export function sameNodeOrigin(request: ExpressRequest): boolean {
+  const forwarded = request.headers['x-forwarded-proto']
+  const protocol = (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : '') || request.protocol
+  const expected = allowedOrigin(request.headers.host || 'localhost', protocol)
+  return Boolean(expected && request.headers.origin === expected.origin)
 }
 
 export async function readBytes(request: Request, limit: number, code = 'request_too_large') {
@@ -39,13 +50,4 @@ export async function readBytes(request: Request, limit: number, code = 'request
   let offset = 0
   for (const part of parts) { bytes.set(part, offset); offset += part.byteLength }
   return bytes
-}
-
-export async function readJsonBody(request: Request, limit = 1024 * 1024) {
-  const bytes = await readBytes(request, limit)
-  if (!bytes.length) return {}
-  let parsed: unknown
-  try { parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) }
-  catch { throw new AppError(400, 'invalid_input', '올바른 JSON 입력이 필요합니다') }
-  return objectBody(parsed)
 }

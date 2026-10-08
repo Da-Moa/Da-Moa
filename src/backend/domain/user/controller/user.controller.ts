@@ -1,5 +1,9 @@
 import { RequiredIdempotencyKey } from '../../../global/apiPayload/requiredHeader.decorator';
-import { RequestBodyLimit } from '../../../global/apiPayload/requestBody.interceptor';
+import { RequestCookies } from '@edge-runtime/cookies';
+import {
+  JsonBody,
+  RequestBodyLimit,
+} from '../../../global/apiPayload/requestBody.interceptor';
 import {
   Controller,
   Get,
@@ -14,7 +18,6 @@ import {
 import type { Request, Response as ServerResponse } from 'express';
 import {
   after,
-  webRequest,
   HttpResponse,
   copyResponseCookies,
 } from '../../../global/apiPayload/httpContext';
@@ -55,6 +58,7 @@ export class UserController {
     return this.operations.getMe(user);
   }
 
+  @JsonBody()
   @Post('api/me/onboarding')
   @HttpCode(200)
   async onboarding(
@@ -64,9 +68,10 @@ export class UserController {
     body: OnboardingRequestDTO,
     @Res({ passthrough: true }) response: ServerResponse,
   ) {
-    const web = webRequest(request);
     const returnTo = readReturnToCookie(
-      web.cookies.get(RETURN_TO_COOKIE_NAME)?.value,
+      new RequestCookies(
+        new Headers({ cookie: request.headers.cookie ?? '' }),
+      ).get(RETURN_TO_COOKIE_NAME)?.value,
     );
     const session = await this.operations.completeOnboarding(user, body);
     after(() =>
@@ -81,6 +86,7 @@ export class UserController {
     return { id: session.userId, returnTo, accessToken: session.accessToken };
   }
 
+  @JsonBody()
   @Put('api/me/bank-account')
   async bank(
     @CurrentUser() user: AuthenticatedUser,

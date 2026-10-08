@@ -31,7 +31,7 @@ import type { HttpRequest } from '../global/apiPayload/httpContext';
 import { UserController } from '../domain/user/controller/user.controller';
 
 const validationPipe = createValidationPipe();
-const bodyInterceptor = new RequestBodyInterceptor();
+const bodyInterceptor = new RequestBodyInterceptor(new Reflector());
 const originGuard = new OriginGuard(new Reflector());
 const jwtGuard = new JwtGuard();
 const interceptor = new ApiResponseInterceptor(new Reflector());
@@ -79,15 +79,20 @@ export async function dispatch(
       const params = Object.fromEntries(
         names.map((key, index) => [key, decodeURIComponent(match[index + 1])]),
       );
-      const stream = request.body
-        ? Readable.from([Buffer.from(await request.arrayBuffer())])
-        : Readable.from([]);
+      const bytes = request.body
+        ? Buffer.from(await request.arrayBuffer())
+        : null;
+      const stream = Readable.from(bytes ? [bytes] : []);
       const url = new URL(request.url);
       const nodeRequest = Object.assign(stream, {
         originalUrl: url.pathname + url.search,
         protocol: url.protocol.slice(0, -1),
         method: request.method,
-        headers: { ...Object.fromEntries(request.headers), host: url.host },
+        headers: {
+          ...Object.fromEntries(request.headers),
+          host: url.host,
+          ...(bytes ? { 'content-length': String(bytes.length) } : {}),
+        },
       }) as unknown as ExpressRequest;
       const headers = new Headers(),
         emitter = new EventEmitter();

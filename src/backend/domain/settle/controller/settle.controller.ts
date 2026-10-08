@@ -1,3 +1,4 @@
+import { JsonBody } from '../../../global/apiPayload/requestBody.interceptor';
 import { RequiredIdempotencyKey } from '../../../global/apiPayload/requiredHeader.decorator';
 import { PageQueryDTO } from '../../../global/apiPayload/dto/req/page.request.dto';
 import {
@@ -59,6 +60,7 @@ export class SettleController {
     return this.service.listRounds(user, query, groupId);
   }
 
+  @JsonBody()
   @Post('api/groups/:groupId/rounds')
   @HttpCode(200)
   async createRound(
@@ -103,6 +105,7 @@ export class SettleController {
     return this.service.getRound(user, roundId, query);
   }
 
+  @JsonBody()
   @Delete('api/rounds/:roundId')
   @HttpCode(200)
   async cancelRound(
@@ -137,6 +140,7 @@ export class SettleController {
     return this.service.getSettlement(user, roundId);
   }
 
+  @JsonBody()
   @Post('api/rounds/:roundId/settlement-check')
   @HttpCode(200)
   async setSettlementCheck(
@@ -163,6 +167,7 @@ export class SettleController {
     return result;
   }
 
+  @JsonBody()
   @Post('api/rounds/:roundId/confirm')
   @HttpCode(200)
   async confirmRound(
@@ -189,6 +194,7 @@ export class SettleController {
     return result;
   }
 
+  @JsonBody()
   @Post('api/rounds/:roundId/reopen')
   @HttpCode(200)
   async reopenRound(
@@ -215,6 +221,7 @@ export class SettleController {
     return result;
   }
 
+  @JsonBody()
   @Post('api/rounds/:roundId/send')
   @HttpCode(200)
   async sendRound(
@@ -241,6 +248,7 @@ export class SettleController {
     return result;
   }
 
+  @JsonBody()
   @Post('api/rounds/:roundId/draw')
   @HttpCode(200)
   async drawRound(
@@ -267,6 +275,7 @@ export class SettleController {
     return result;
   }
 
+  @JsonBody()
   @Post('api/rounds/:roundId/complete')
   @HttpCode(200)
   async completeRound(
@@ -293,6 +302,7 @@ export class SettleController {
     return result;
   }
 
+  @JsonBody()
   @Post('api/rounds/:roundId/force-complete')
   @HttpCode(200)
   async forceCompleteRound(
@@ -319,6 +329,7 @@ export class SettleController {
     return result;
   }
 
+  @JsonBody()
   @Post('api/rounds/:roundId/expenses')
   @HttpCode(200)
   async createExpense(
@@ -345,6 +356,7 @@ export class SettleController {
     return result;
   }
 
+  @JsonBody()
   @Patch('api/rounds/:roundId/expenses/:expenseId')
   @HttpCode(200)
   async updateExpense(
@@ -372,6 +384,7 @@ export class SettleController {
     return result;
   }
 
+  @JsonBody()
   @Delete('api/rounds/:roundId/expenses/:expenseId')
   @HttpCode(200)
   async deleteExpense(
@@ -408,6 +421,7 @@ export class SettleController {
     return this.service.checkExclusion(user, roundId, userId);
   }
 
+  @JsonBody()
   @Post('api/rounds/:roundId/members/:userId/exclude')
   @HttpCode(200)
   async excludeMember(
@@ -463,6 +477,7 @@ export class SettleController {
     return result;
   }
 
+  @JsonBody()
   @Delete('api/rounds/:roundId/expenses/:expenseId/receipts/:receiptId')
   @HttpCode(200)
   async removeReceipt(

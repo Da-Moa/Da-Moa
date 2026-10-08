@@ -6,8 +6,7 @@ import type { Duplex } from 'node:stream';
 import next from 'next';
 import { RateLimitService } from '../rateLimit/rateLimit.service';
 import { trackHttpResponse } from '../monitoring/httpMetrics.mjs';
-import { jwtGuard } from '../auth/guard/jwt.guard';
-import { webRequest } from '../apiPayload/httpContext';
+import { nativeJwtGuard } from '../auth/guard/jwt.guard';
 
 @Injectable()
 export class FrontendRuntime {
@@ -37,7 +36,7 @@ export class FrontendRuntime {
       if (
         ['/api/docs', '/api/docs/', '/api/docs/index.html'].includes(pathname)
       ) {
-        const denied = jwtGuard(webRequest(request));
+        const denied = nativeJwtGuard(request);
         if (denied) {
           response.writeHead(denied.status, Object.fromEntries(denied.headers));
           void denied

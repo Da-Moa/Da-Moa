@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { AppError, errorResponse } from '../../global/apiPayload/errors.ts'
+import { errorResponse } from '../../global/apiPayload/errors.ts'
 import { pageOf, pagination } from '../../global/util/index.ts'
-import { readJsonBody } from '../../global/apiPayload/http.ts'
 
 test('pagination cursors include only the position and reject malformed or overflowing values', () => {
   const first = { id: 'entry-one', createdAt: 100, description: 'private expense', accountNumber: '001234' }
@@ -15,11 +14,7 @@ test('pagination cursors include only the position and reject malformed or overf
   }
 })
 
-test('JSON bodies are bounded before parsing and database physical limits are input errors', async () => {
-  await assert.rejects(readJsonBody(new Request('http://localhost', { method: 'POST', body: 'x'.repeat(100) }), 50), error => (error as { status: number }).status === 413)
-  await assert.rejects(readJsonBody(new Request('http://localhost', { method: 'POST', body: '[]' })), error => error instanceof AppError && error.message === '입력값을 확인해 주세요')
-  await assert.rejects(readJsonBody(new Request('http://localhost', { method: 'POST', body: '{' })), error => error instanceof AppError && error.message === '올바른 JSON 입력이 필요합니다')
-  assert.deepEqual(await readJsonBody(new Request('http://localhost', { method: 'POST', body: '{"amount":"9007199254740993"}' })), { amount: '9007199254740993' })
+test('database physical limits are input errors', () => {
   assert.equal(errorResponse({ code: '22003' }).status, 400)
 })
 

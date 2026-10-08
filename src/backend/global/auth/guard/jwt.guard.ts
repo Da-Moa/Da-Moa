@@ -3,7 +3,7 @@ import {
   type CanActivate,
   type ExecutionContext,
 } from '@nestjs/common';
-import { webRequest } from '../../apiPayload/httpContext';
+import { RequestCookies } from '@edge-runtime/cookies';
 import { HttpResponseException } from '../../apiPayload/handler/global.exception.handler';
 import { clearAuthCookies } from '../controller/authCookies';
 import { HttpResponse, type HttpRequest } from '../../apiPayload/httpContext';
@@ -12,21 +12,32 @@ import { apiJwtPolicy, readApiJwt } from '../apiJwtUtil';
 import { AppError, errorResponse } from '../../apiPayload/errors';
 import type { AccessToken } from '../authUtil';
 import type { AuthenticatedRequest } from '../decorator/currentUser.decorator';
+import type { Request as ExpressRequest } from 'express';
 
 export function jwtGuard(
   request: HttpRequest,
   authenticated?: (user: AccessToken) => void,
 ): Response | null {
   const { pathname } = request.nextUrl;
-  const method = request.method;
-  const policy = apiJwtPolicy(method, pathname);
-  if (policy === 'public') return null;
-  const user = readApiJwt(
-    method,
+  return authorizeApiRequest(
+    request.method,
     pathname,
     request.headers.get('authorization'),
     request.cookies.get(REFRESH_TOKEN_COOKIE_NAME)?.value,
+    authenticated,
   );
+}
+
+function authorizeApiRequest(
+  method: string,
+  pathname: string,
+  authorization: string | null,
+  refreshCookie: string | undefined,
+  authenticated?: (user: AccessToken) => void,
+): Response | null {
+  const policy = apiJwtPolicy(method, pathname);
+  if (policy === 'public') return null;
+  const user = readApiJwt(method, pathname, authorization, refreshCookie);
   if (user) {
     authenticated?.(user);
     return null;
@@ -50,10 +61,31 @@ export class JwtGuard implements CanActivate {
   canActivate(context: ExecutionContext) {
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     delete request.user;
-    const denied = jwtGuard(webRequest(request), (user) => {
+    const denied = nativeJwtGuard(request, (user) => {
       request.user = user;
     });
     if (denied) throw new HttpResponseException(denied);
     return true;
   }
+}
+
+export function nativeJwtGuard(
+  request: ExpressRequest,
+  authenticated?: (user: AccessToken) => void,
+): Response | null {
+  const pathname = new URL(request.originalUrl, 'http://localhost').pathname;
+  const policy = apiJwtPolicy(request.method, pathname);
+  const refreshCookie =
+    policy === 'refresh' || policy === 'logout'
+      ? new RequestCookies(
+          new Headers({ cookie: request.headers.cookie ?? '' }),
+        ).get(REFRESH_TOKEN_COOKIE_NAME)?.value
+      : undefined;
+  return authorizeApiRequest(
+    request.method,
+    pathname,
+    request.headers.authorization ?? null,
+    refreshCookie,
+    authenticated,
+  );
 }

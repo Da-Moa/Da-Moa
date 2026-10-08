@@ -6,8 +6,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { API_SUCCESS } from './apiResponse.interceptor';
-import { sameOrigin } from './http';
-import { webRequest } from './httpContext';
+import { sameNodeOrigin } from './http';
 import { AppError } from './errors';
 
 @Injectable()
@@ -22,7 +21,7 @@ export class OriginGuard implements CanActivate {
     if (
       ordinaryApi &&
       !['GET', 'HEAD'].includes(request.method) &&
-      !sameOrigin(webRequest(request))
+      !sameNodeOrigin(request)
     ) {
       throw new AppError(403, 'forbidden', '허용되지 않은 요청입니다');
     }
