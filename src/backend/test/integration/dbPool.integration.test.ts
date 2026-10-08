@@ -3,7 +3,7 @@ import { getPrismaClient } from '../../global/database/prisma.service.ts'
 import assert from 'node:assert/strict'
 import { channel } from 'node:diagnostics_channel'
 import test from 'node:test'
-import { withReadTransaction, withWriteTransaction } from '../../global/database/db.ts'
+import { withReadTransaction, withWriteTransaction } from '../domainTestSupport';
 import { getDatabasePool } from '../../global/database/dbClient.mjs'
 
 const testUrl = process.env.TEST_DATABASE_URL

@@ -1,6 +1,7 @@
+import type { Database } from '../global/database/db';
 import { GroupModule } from '../domain/group/module/group.module';
 import { SettleModule } from '../domain/settle/module/settle.module';
-import { databaseRows } from '../global/database/prisma.service';
+import { databaseRows, PrismaService } from '../global/database/prisma.service';
 import 'reflect-metadata';
 import { after } from 'node:test';
 import { NestFactory } from '@nestjs/core';
@@ -277,4 +278,26 @@ export async function getRefreshResponse(
   request: Parameters<typeof refresh>[0],
 ) {
   return refresh(request, await testProvider(AuthService));
+}
+
+export async function withDatabaseConnection<T>(
+  work: (client: Database, discard: () => void) => Promise<T>,
+): Promise<T> {
+  return (await testProvider(PrismaService)).withDatabaseConnection(work);
+}
+export async function withReadTransaction<T>(
+  work: (client: Database) => Promise<T>,
+): Promise<T> {
+  return (await testProvider(PrismaService)).withReadTransaction(work);
+}
+export async function withWriteTransaction<T>(
+  work: (client: Database) => Promise<T>,
+  beforeLock?: (client: Database) => Promise<void>,
+  beforeBegin?: (client: Database) => Promise<void>,
+): Promise<T> {
+  return (await testProvider(PrismaService)).withWriteTransaction(
+    work,
+    beforeLock,
+    beforeBegin,
+  );
 }

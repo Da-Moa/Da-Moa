@@ -7,7 +7,8 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import test from 'node:test'
 import { readAccessToken } from '../../global/auth/native.ts'
 import { signInKakao } from '../domainTestSupport';
-import { createDatabaseClient, withDatabaseConnection } from '../../global/database/db.ts'
+import { createDatabaseClient } from '../../global/database/db.ts';
+import { withDatabaseConnection } from '../domainTestSupport';
 import { getDatabasePool } from '../../global/database/dbClient.mjs'
 import { acceptInvite, createGroup, createInvite, getGroup, getInvite, leaveGroup, listGroups, revokeInvite } from '../domainTestSupport';
 import { applyMigrations } from '../../../../scripts/migrations.mjs'

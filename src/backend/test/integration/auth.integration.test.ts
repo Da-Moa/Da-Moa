@@ -12,7 +12,8 @@ import { withdrawAccount } from '../domainTestSupport';
 import { type AuthSession } from '../../global/auth/index.ts';
 import { signInKakao } from '../domainTestSupport';
 import { getAccount } from '../domainTestSupport';
-import { createDatabaseClient, withReadTransaction, withWriteTransaction } from '../../global/database/db.ts'
+import { createDatabaseClient } from '../../global/database/db.ts';
+import { withReadTransaction, withWriteTransaction } from '../domainTestSupport';
 import { AppError } from '../../global/apiPayload/errors.ts'
 import { acceptInvite, createGroup, createInvite, getGroup, getInvite, listGroups } from '../domainTestSupport';
 import { applyMigrations } from '../../../../scripts/migrations.mjs'

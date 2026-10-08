@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import test from 'node:test'
 import { getPrismaClient } from '../../global/database/prisma.service'
-import { createDatabaseClient, withDatabaseConnection, withWriteTransaction } from '../../global/database/db'
+import { createDatabaseClient } from '../../global/database/db';
+import { withDatabaseConnection, withWriteTransaction } from '../domainTestSupport';
 import { signInKakao } from '../domainTestSupport';
 import { applyMigrations } from '../../../../scripts/migrations.mjs'
 const url = process.env.TEST_DATABASE_URL

@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import sharp from 'sharp'
 import { signInKakao } from '../../../backend/test/domainTestSupport.ts'
 import { REFRESH_TOKEN_COOKIE_NAME } from '../../../backend/global/auth/native.ts'
-import { withWriteTransaction } from '../../../backend/global/database/db.ts'
+import { withWriteTransaction } from '../../../backend/test/domainTestSupport';
 import { BANKS, formatAccountNumber } from '../../../shared/domain/user/index.ts'
 import { CURRENCIES, CURRENCY_CODES } from '../../../shared/domain/settle/money.ts'
 

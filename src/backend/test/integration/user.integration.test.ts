@@ -10,7 +10,8 @@ import { signInKakao } from '../domainTestSupport';
 import { completeOnboarding, updateBankAccount, withdrawAccount } from '../domainTestSupport';
 import { findUser, saveBankAccount, saveOnboarding } from '../domainTestSupport';
 import { normalizeBankAccountInput } from '../../../shared/domain/user/index.ts'
-import { createDatabaseClient, withDatabaseConnection } from '../../global/database/db.ts'
+import { createDatabaseClient } from '../../global/database/db.ts';
+import { withDatabaseConnection } from '../domainTestSupport';
 import { getDatabasePool } from '../../global/database/dbClient.mjs'
 import { getMeResponse as GET } from '../httpTestSupport'
 import { getBankAccountResponse as PUT } from '../httpTestSupport'
