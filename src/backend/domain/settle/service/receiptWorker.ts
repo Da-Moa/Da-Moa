@@ -36,17 +36,28 @@ export class ReceiptWorker {
         throw new Error('Invalid receipt job');
       // Retries overwrite only this receipt's deterministic object, including after a lost DB response.
       const objectKey = `receipts/${data.userId}/${data.id}.avif`;
+      const timeout = new AbortController();
+      const timer = setTimeout(
+        () =>
+          timeout.abort(new Error('Receipt task timed out after 60 seconds')),
+        60_000,
+      );
+      timer.unref();
+      const signal = AbortSignal.any([timeout.signal, helpers.abortSignal]);
       try {
         await this.storage.putReceipt(
           objectKey,
           Buffer.from(data.content, 'base64'),
           'image/avif',
+          signal,
         );
+        signal.throwIfAborted();
         const saved = await this.prisma.withDatabaseConnection((client) =>
           this.repository.finishReceiptStorage(client, data.id, objectKey),
         );
+        signal.throwIfAborted();
         if (!saved) {
-          await this.storage.deleteReceiptObject(objectKey);
+          await this.storage.deleteReceiptObject(objectKey, signal);
           return;
         }
         await this.publisher.publishRoundInvalidation(saved.round_id, {
@@ -64,7 +75,14 @@ export class ReceiptWorker {
               userIds: failed.user_ids,
             });
         }
+        if (timeout.signal.aborted) throw timeout.signal.reason;
+        if (helpers.abortSignal.aborted)
+          throw new Error('Receipt task interrupted during worker shutdown', {
+            cause: error,
+          });
         throw error;
+      } finally {
+        clearTimeout(timer);
       }
     },
   };

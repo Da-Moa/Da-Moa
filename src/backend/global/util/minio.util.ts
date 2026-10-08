@@ -28,9 +28,15 @@ function config() {
 
 @Injectable()
 export class ReceiptStorage {
-  async putReceipt(key: string, content: Uint8Array, mimeType: string) {
+  async putReceipt(
+    key: string,
+    content: Uint8Array,
+    mimeType: string,
+    abortSignal?: AbortSignal,
+  ) {
     const { bucket, client } = config();
     try {
+      abortSignal?.throwIfAborted();
       await client.send(
         new PutObjectCommand({
           Bucket: bucket,
@@ -38,6 +44,7 @@ export class ReceiptStorage {
           Body: content,
           ContentType: mimeType,
         }),
+        { abortSignal },
       );
       return key;
     } catch (error) {
@@ -72,10 +79,13 @@ export class ReceiptStorage {
     }
   }
 
-  async deleteReceiptObject(key: string) {
+  async deleteReceiptObject(key: string, abortSignal?: AbortSignal) {
     const { bucket, client } = config();
     try {
-      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+      abortSignal?.throwIfAborted();
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }), {
+        abortSignal,
+      });
     } finally {
       client.destroy();
     }
