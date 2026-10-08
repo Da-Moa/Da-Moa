@@ -799,9 +799,10 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         await probe.query('SELECT pg_advisory_unlock(1684106607)')
       } finally { await probe.end() }
       evenVersion = (await trace(6, 'confirm', () => roundCommand(a, key(), even.id, 'confirm', { expectedVersion: evenVersion }))).version!
-      // Two shares + two balances + one transfer, finalized directly by send.
+      // Shares, balances, transfers and finalized_at are saved by one bulk statement.
       let sendAudience: { groupId: string; userIds: string[] } | undefined
-      evenVersion = (await trace(18, true, () => roundCommand(a, key(), even.id, 'send', { expectedVersion: evenVersion }, audience => { sendAudience = audience }))).version!
+      evenVersion = (await trace(13, true, () => roundCommand(a, key(), even.id, 'send', { expectedVersion: evenVersion }, audience => { sendAudience = audience }))).version!
+      assert.equal(statements.filter(sql => sql.includes('jsonb_to_recordset') && sql.includes('INSERT INTO settlement_balances') && sql.includes('INSERT INTO settlement_transfers')).length, 1)
       assert.equal(statements.filter(sql => sql.includes('FROM round_members rm JOIN users')).length, 1)
       assert.equal(statements.filter(sql => sql.includes('FROM expenses e WHERE e.round_id = $1 ORDER BY e.id')).length, 1)
       assert.equal(sendAudience?.groupId, group.id)

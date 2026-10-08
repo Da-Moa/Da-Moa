@@ -562,56 +562,56 @@ export class SettleRepository {
     ).rows[0];
   }
 
-  saveFinalShare(
-    client: Database,
-    expenseId: string,
-    userId: string,
-    amountMinor: string,
-    receivedRemainder: boolean,
-  ) {
-    return this.prisma.query(
-      client,
-      'UPDATE expense_shares SET final_amount_minor=$3,received_remainder=$4 WHERE expense_id=$1 AND user_id=$2',
-      [expenseId, userId, amountMinor, receivedRemainder],
-    );
-  }
-
-  insertBalance(
+  saveFinalSettlement(
     client: Database,
     roundId: string,
-    userId: string,
-    paidMinor: string,
-    burdenMinor: string,
-    balanceMinor: string,
-    currency: Currency,
+    result: ReturnType<typeof finalizeCurrencySettlement>,
+    now: number,
   ) {
     return this.prisma.query(
       client,
-      'INSERT INTO settlement_balances(round_id,user_id,paid_minor,burden_minor,balance_minor,currency) VALUES($1,$2,$3,$4,$5,$6)',
-      [roundId, userId, paidMinor, burdenMinor, balanceMinor, currency],
-    );
-  }
-
-  insertTransfer(
-    client: Database,
-    roundId: string,
-    senderId: string,
-    receiverId: string,
-    amountMinor: string,
-    currency: Currency,
-  ) {
-    return this.prisma.query(
-      client,
-      'INSERT INTO settlement_transfers(round_id,sender_id,receiver_id,amount_minor,currency) VALUES($1,$2,$3,$4,$5)',
-      [roundId, senderId, receiverId, amountMinor, currency],
-    );
-  }
-
-  finalizeRound(client: Database, roundId: string, now: number) {
-    return this.prisma.query(
-      client,
-      'UPDATE rounds SET finalized_at=$2 WHERE id=$1',
-      [roundId, now],
+      `WITH shares AS (
+    UPDATE expense_shares s SET final_amount_minor=data.amount_minor,received_remainder=data.received_remainder
+    FROM jsonb_to_recordset($3::jsonb) AS data(expense_id text,user_id text,amount_minor numeric,received_remainder boolean)
+    WHERE s.round_id=$1 AND s.expense_id=data.expense_id AND s.user_id=data.user_id
+  ), balances AS (
+    INSERT INTO settlement_balances(round_id,user_id,paid_minor,burden_minor,balance_minor,currency)
+    SELECT $1,data.user_id,data.paid_minor,data.burden_minor,data.balance_minor,data.currency
+    FROM jsonb_to_recordset($4::jsonb) AS data(user_id text,paid_minor numeric,burden_minor numeric,balance_minor numeric,currency text)
+  ), transfers AS (
+    INSERT INTO settlement_transfers(round_id,sender_id,receiver_id,amount_minor,currency)
+    SELECT $1,data.sender_id,data.receiver_id,data.amount_minor,data.currency
+    FROM jsonb_to_recordset($5::jsonb) AS data(sender_id text,receiver_id text,amount_minor numeric,currency text)
+  ) UPDATE rounds SET finalized_at=$2 WHERE id=$1 RETURNING id`,
+      [
+        roundId,
+        now,
+        JSON.stringify(
+          result.shares.map((share) => ({
+            expense_id: share.expenseId,
+            user_id: share.userId,
+            amount_minor: share.amountMinor,
+            received_remainder: share.receivedRemainder,
+          })),
+        ),
+        JSON.stringify(
+          result.balances.map((balance) => ({
+            currency: balance.currency,
+            user_id: balance.userId,
+            paid_minor: balance.paidMinor,
+            burden_minor: balance.burdenMinor,
+            balance_minor: balance.balanceMinor,
+          })),
+        ),
+        JSON.stringify(
+          result.transfers.map((transfer) => ({
+            currency: transfer.currency,
+            sender_id: transfer.senderId,
+            receiver_id: transfer.receiverId,
+            amount_minor: transfer.amountMinor,
+          })),
+        ),
+      ],
     );
   }
 

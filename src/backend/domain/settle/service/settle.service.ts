@@ -1116,34 +1116,12 @@ export class SettleService {
       items,
       members.map((m) => m.userId),
     );
-    for (const share of result.shares)
-      await this.repository.saveFinalShare(
-        client,
-        share.expenseId,
-        share.userId,
-        share.amountMinor,
-        share.receivedRemainder,
-      );
-    for (const balance of result.balances)
-      await this.repository.insertBalance(
-        client,
-        roundId,
-        balance.userId,
-        balance.paidMinor,
-        balance.burdenMinor,
-        balance.balanceMinor,
-        balance.currency,
-      );
-    for (const transfer of result.transfers)
-      await this.repository.insertTransfer(
-        client,
-        roundId,
-        transfer.senderId,
-        transfer.receiverId,
-        transfer.amountMinor,
-        transfer.currency,
-      );
-    await this.repository.finalizeRound(client, roundId, nowSeconds());
+    await this.repository.saveFinalSettlement(
+      client,
+      roundId,
+      result,
+      nowSeconds(),
+    );
   }
 
   private validateRoundConfirmation(
