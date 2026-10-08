@@ -14,8 +14,6 @@ export {
   objectBody,
   mutationDigest,
   mutationResult,
-  replayMutation,
-  saveMutation,
 } from './mutations';
 export { ReceiptStorage } from './minio.util';
 export { RealtimePublisher, type RoundAudience } from './invalidationUtil';

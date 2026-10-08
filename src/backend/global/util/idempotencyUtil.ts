@@ -3,7 +3,8 @@ import { Inject, Injectable } from '@nestjs/common';
 import { AuthorizationService } from '../auth/service/authorization.service';
 import { PrismaService } from '../database/prisma.service';
 import { type Database } from '../database/db';
-import { replayMutation, saveMutation } from './mutations';
+import { mutationDigest, mutationResult } from './mutations';
+import { MutationRepository } from '../database/mutation.repository';
 import type { MutationResult } from '../../../shared/domainTypes';
 
 export type Identity = AccessToken | null;
@@ -14,6 +15,7 @@ export class MutationExecutor {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(AuthorizationService)
     private readonly authorization: AuthorizationService,
+    @Inject(MutationRepository) private readonly requests: MutationRepository,
   ) {}
   async execute(
     access: Identity,
@@ -24,21 +26,22 @@ export class MutationExecutor {
   ): Promise<MutationResult> {
     return this.prisma.withWriteTransaction(async (client) => {
       const account = await this.authorization.requireAccount(client, access);
-      const replay = await replayMutation<MutationResult>(
+      const digest = mutationDigest(key, payload);
+      const saved = await this.requests.findReplay(
         client,
         account.id,
         operation,
         key,
-        payload,
       );
-      if (replay.result) return replay.result;
+      const replay = mutationResult<MutationResult>(saved ?? undefined, digest);
+      if (replay) return replay;
       const result = await work(client, account.id);
-      await saveMutation(
+      await this.requests.save(
         client,
         account.id,
         operation,
         key,
-        replay.digest,
+        digest,
         result.id,
         result,
       );

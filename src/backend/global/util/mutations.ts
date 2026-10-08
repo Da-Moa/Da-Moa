@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto'
 import { isUUID } from 'class-validator'
-import type { Database } from '../database/db'
 import { AppError } from '../apiPayload/errors'
 
 export function objectBody(value: unknown): Record<string, unknown> {
@@ -24,14 +23,4 @@ export function mutationDigest(key: string, payload: unknown): string {
 export function mutationResult<T>(row: { request_digest: string | null; response_metadata: unknown } | undefined, digest: string): T | null {
   if (row?.request_digest && row.request_digest !== digest) throw new AppError(409, 'idempotency_conflict', '같은 요청 키로 다른 내용을 저장할 수 없어요')
   return row?.response_metadata as T ?? null
-}
-
-export async function replayMutation<T>(client: Database, actorId: string, operation: string, key: string, payload: unknown): Promise<{ digest: string; result: T | null }> {
-  const digest = mutationDigest(key, payload)
-  const { rows } = await client.query('SELECT request_digest, response_metadata FROM mutation_requests WHERE actor_id=$1 AND operation=$2 AND request_key=$3', [actorId, operation, key])
-  return { digest, result: mutationResult<T>(rows[0], digest) }
-}
-
-export async function saveMutation(client: Database, actorId: string, operation: string, key: string, digest: string, resourceId: string, result: unknown) {
-  await client.query('INSERT INTO mutation_requests(actor_id,operation,request_key,request_digest,resource_id,response_metadata,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)', [actorId, operation, key, digest, resourceId, JSON.stringify(result), Math.floor(Date.now() / 1000)])
 }

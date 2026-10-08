@@ -3,6 +3,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient, Prisma } from '../../generated/prisma/client';
 import { createDatabasePool } from './dbClient.mjs';
 import type { Database } from './databaseConnection';
+import { rethrowDatabaseError } from './databaseError';
 
 function url() {
   const value = process.env.DATABASE_URL || process.env.POSTGRES_URL;
@@ -119,28 +120,7 @@ export class PrismaService {
         rowCount: await context.prisma.$executeRawUnsafe(sql, ...parameters),
       };
     } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2010'
-      ) {
-        const meta = error.meta as
-          | {
-              code?: string;
-              message?: string;
-              driverAdapterError?: {
-                cause?: { originalCode?: string; originalMessage?: string };
-              };
-            }
-          | undefined;
-        const cause = meta?.driverAdapterError?.cause;
-        const message =
-          cause?.originalMessage ?? meta?.message ?? 'Database query failed';
-        throw Object.assign(new Error(message), {
-          code: cause?.originalCode ?? meta?.code,
-          constraint: message.match(/constraint "([^"]+)"/)?.[1],
-        });
-      }
-      throw error;
+      rethrowDatabaseError(error);
     }
   }
 

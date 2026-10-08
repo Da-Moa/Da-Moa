@@ -525,13 +525,14 @@ test('authenticated WebSocket receives only its own committed invalidations', as
     assert.equal((await requestWithRateLimit(`${origin}/api/me`, { headers: { authorization: `Bearer ${other.accessToken}` } })).status, 401, 'soft deletion rejects the withdrawn member\'s existing JWT')
 
     const limitedUser = randomUUID()
-    const limitedToken = createAccessToken(limitedUser, 'first-device', secret)
-    const reads = await Promise.all(Array.from({ length: 40 }, (_, i) => globalThis.fetch(`${origin}/api/openapi.json?read=${i}`, { headers: { authorization: `Bearer ${limitedToken}` } })))
+    const limitedTokens = ['first-device', 'second-device'].map(device => createAccessToken(limitedUser, device, secret))
+    // Each JWT makes fewer than the 30-token capacity; only a shared user bucket
+    // can reject this combined burst. Do not wait for response bodies to drain
+    // before probing another device, since that delay legitimately refills tokens.
+    const reads = await Promise.all(Array.from({ length: 40 }, (_, i) => globalThis.fetch(`${origin}/api/openapi.json?read=${i}`, { headers: { authorization: `Bearer ${limitedTokens[i % 2]}` } })))
     assert.ok(reads.some(response => response.status === 200))
-    assert.ok(reads.some(response => response.status === 429), 'real Node/Next requests must share a user bucket')
+    assert.ok(reads.some(response => response.status === 429), 'different JWTs for the same user must share a bucket')
     await Promise.all(reads.map(response => response.arrayBuffer()))
-    const secondDevice = await globalThis.fetch(`${origin}/api/openapi.json`, { headers: { authorization: `Bearer ${createAccessToken(limitedUser, 'second-device', secret)}` } })
-    assert.equal(secondDevice.status, 429, 'another JWT for the same user must not reset tokens')
 
     const uploadToken = createAccessToken(randomUUID(), 'upload-limit', secret)
     const uploadInit = { method: 'POST', headers: { origin, authorization: `Bearer ${uploadToken}`, 'idempotency-key': randomUUID() }, body: '{invalid form' }

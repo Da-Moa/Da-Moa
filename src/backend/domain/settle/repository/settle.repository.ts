@@ -1,5 +1,6 @@
 import { Injectable, Inject } from '@nestjs/common';
 import { PrismaService } from '../../../global/database/prisma.service';
+import { rethrowDatabaseError } from '../../../global/database/databaseError';
 import type { Database } from '../../../global/util';
 import { roundCreationCandidatesSql } from '../../group/repository';
 import type {
@@ -149,12 +150,17 @@ export class SettleRepository {
     );
   }
 
-  bumpRound(client: Database, id: string, expectedVersion: number) {
-    return this.prisma.query<Pick<RoundRow, 'id' | 'status' | 'version'>>(
-      client,
-      'UPDATE rounds SET version=version+1 WHERE id=$1 AND version=$2 RETURNING id,status,version',
-      [id, expectedVersion],
-    );
+  async bumpRound(client: Database, id: string, expectedVersion: number) {
+    const [row] = await client.prisma.rounds
+      .updateManyAndReturn({
+        where: { id, version: expectedVersion },
+        data: { version: { increment: 1 } },
+        select: { id: true, status: true, version: true },
+      })
+      .catch(rethrowDatabaseError);
+    return row
+      ? { ...row, status: row.status as RoundRow['status'] }
+      : undefined;
   }
 
   findMembers(client: Database, roundId: string) {
@@ -796,19 +802,27 @@ export class SettleRepository {
     now: number,
     expectedVersion: number,
   ) {
-    return this.prisma.query(
-      client,
-      "UPDATE rounds SET status='LOCKED',locked_at=$2 WHERE id=$1 AND status='CONFIRMED' AND completed_at IS NULL AND version=$3",
-      [roundId, now, expectedVersion],
-    );
+    return client.prisma.rounds
+      .updateMany({
+        where: {
+          id: roundId,
+          status: 'CONFIRMED',
+          completed_at: null,
+          version: expectedVersion,
+        },
+        data: { status: 'LOCKED', locked_at: BigInt(now) },
+      })
+      .catch(rethrowDatabaseError);
   }
 
-  findRemainder(client: Database, roundId: string) {
-    return this.prisma.query(
-      client,
-      'SELECT 1 FROM expenses WHERE round_id=$1 AND remainder_units>0 LIMIT 1',
-      [roundId],
-    );
+  async hasRemainder(client: Database, roundId: string) {
+    const row = await client.prisma.expenses
+      .findFirst({
+        where: { round_id: roundId, remainder_units: { gt: 0 } },
+        select: { id: true },
+      })
+      .catch(rethrowDatabaseError);
+    return row !== null;
   }
 
   async completeCheckedRound(

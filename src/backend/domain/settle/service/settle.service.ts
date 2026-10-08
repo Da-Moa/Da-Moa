@@ -135,13 +135,9 @@ export class SettleService {
     id: string,
     expectedVersion: number,
   ): Promise<MutationResult> {
-    const { rows } = await this.repository.bumpRound(
-      client,
-      id,
-      expectedVersion,
-    );
-    if (!rows[0]) throw new SettleException(settleErrors.STALE_ROUND);
-    return { ...rows[0], roundId: id };
+    const saved = await this.repository.bumpRound(client, id, expectedVersion);
+    if (!saved) throw new SettleException(settleErrors.STALE_ROUND);
+    return { ...saved, roundId: id };
   }
 
   private memberDetails(row: MemberRow): RoundMember {
@@ -1462,15 +1458,15 @@ export class SettleService {
         if (action === 'send') {
           this.state(round, 'CONFIRMED');
           const expenses = await this.validatedExpenses(client, roundId);
-          const { rowCount } = await this.repository.lockRound(
+          const { count } = await this.repository.lockRound(
             client,
             roundId,
             now,
             round.version,
           );
-          if (!rowCount) throw new SettleException(settleErrors.STALE_ROUND);
-          const { rows } = await this.repository.findRemainder(client, roundId);
-          if (!rows.length) await this.finalize(client, roundId, expenses);
+          if (!count) throw new SettleException(settleErrors.STALE_ROUND);
+          if (!(await this.repository.hasRemainder(client, roundId)))
+            await this.finalize(client, roundId, expenses);
           captureAudience?.({
             groupId: round.group_id,
             userIds: expenses.members.map((member) => member.userId),
