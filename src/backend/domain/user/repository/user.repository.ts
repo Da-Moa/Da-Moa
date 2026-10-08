@@ -1,5 +1,5 @@
-import { Injectable, Inject } from '@nestjs/common';
-import { PrismaService } from '../../../global/database/prisma.service';
+import { rawRows, rawExecute } from '../../../global/database/rawSql';
+import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { Database } from '../../../global/util';
 import type { KakaoProfile } from '../../../global/auth';
@@ -11,18 +11,15 @@ import type { UnfinishedUserRound } from '../../../../shared/domain/settle';
 
 @Injectable()
 export class UserRepository {
-  constructor(
-    @Inject(PrismaService)
-    private readonly prisma: PrismaService,
-  ) {}
-
   async findOrCreateKakaoUser(
     client: Database,
     providerSubject: string,
     profile: KakaoProfile,
     now: number,
   ): Promise<SignInUserRow | undefined> {
-    const { rows } = await this.prisma.query<SignInUserRow>(
+    // One CTE resolves existing/inserted/conflicting identities without an
+    // additional read or widening the current login transaction boundary.
+    const rows = await rawRows<SignInUserRow>(
       client,
       `
     WITH existing AS MATERIALIZED (
@@ -138,7 +135,9 @@ export class UserRepository {
     bank: BankAccountInput,
     now: number,
   ) {
-    const { rowCount } = await this.prisma.query(
+    // Conditional CASE preserves verification only for identical bank details;
+    // a read followed by a model update would widen the version race window.
+    const count = await rawExecute(
       client,
       `UPDATE users SET bank_name = $2, account_number = $3, account_holder = $4,
       bank_updated_at = $5, updated_at = $5, bank_code = $6, account_number_formatted = $7,
@@ -157,11 +156,12 @@ export class UserRepository {
         bank.expectedBankVersion,
       ],
     );
-    return rowCount === 1;
+    return count === 1;
   }
 
   async softDeleteUser(client: Database, userId: string, now: number) {
-    const { rows } = await this.prisma.query<{
+    // Reject unfinished rounds and end memberships in the same withdrawal write.
+    const rows = await rawRows<{
       deleted: boolean;
       unfinishedRounds: UnfinishedUserRound[];
       groupIds: string[];

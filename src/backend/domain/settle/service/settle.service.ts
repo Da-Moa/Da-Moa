@@ -103,7 +103,7 @@ export class SettleService {
     id: string,
     userId: string,
   ): Promise<RoundRow> {
-    const { rows } = await this.repository.findRound(client, id, userId);
+    const rows = await this.repository.findRound(client, id, userId);
     if (!rows[0]) throw missing();
     return rows[0];
   }
@@ -153,7 +153,7 @@ export class SettleService {
     client: Database,
     roundId: string,
   ): Promise<RoundMember[]> {
-    const { rows } = await this.repository.findMembers(client, roundId);
+    const rows = await this.repository.findMembers(client, roundId);
     return rows.map(this.memberDetails);
   }
 
@@ -218,10 +218,7 @@ export class SettleService {
       >[];
     })[]
   > {
-    const { rows } = await this.repository.findSettlementExpenses(
-      client,
-      roundId,
-    );
+    const rows = await this.repository.findSettlementExpenses(client, roundId);
     return rows.map(this.settlementExpenseDetails);
   }
 
@@ -271,7 +268,7 @@ export class SettleService {
         )
       )
         badInput();
-      const { rows } = await this.repository.findRounds(
+      const rows = await this.repository.findRounds(
         client,
         account.id,
         groupId ?? null,
@@ -294,7 +291,7 @@ export class SettleService {
     return this.prisma.withDatabaseConnection(async (client) => {
       const account = await this.authorization.requireAccount(client, access);
       const { limit, cursor } = pagination(query);
-      const { rows } = await this.repository.findRoundDetail(
+      const rows = await this.repository.findRoundDetail(
         client,
         roundId,
         account.id,
@@ -777,7 +774,7 @@ export class SettleService {
           userId,
           key,
         )
-      ).rows[0];
+      )[0];
       const replay = mutationResult<MutationResult>(round, digest);
       if (replay) return replay;
       this.validateExpenseUpdate(round, userId, body.expectedVersion);
@@ -814,7 +811,7 @@ export class SettleService {
               userId,
               key,
             )
-          ).rows[0];
+          )[0];
           const replay = mutationResult<MutationResult>(current, digest);
           if (replay) return replay;
           this.validateExpenseUpdate(current, userId, body.expectedVersion);
@@ -908,7 +905,7 @@ export class SettleService {
             userId,
             key,
           )
-        ).rows[0];
+        )[0];
         replay = mutationResult<MutationResult>(round, digest);
         if (!replay)
           this.validateEditableExpense(round, userId, body.expectedVersion);
@@ -934,9 +931,11 @@ export class SettleService {
     round: RoundRow,
     targetId: string,
   ): Promise<ExclusionCheck> {
-    const {
-      rows: [member],
-    } = await this.repository.findExclusionExpenses(client, round.id, targetId);
+    const [member] = await this.repository.findExclusionExpenses(
+      client,
+      round.id,
+      targetId,
+    );
     if (!member) throw missing();
     return this.exclusionCheck(round, targetId, member);
   }
@@ -1002,9 +1001,7 @@ export class SettleService {
       const account = await this.authorization.requireAccount(client, access);
       onlyKeys(body, ['expectedVersion']);
       mutationDigest(key, { roundId, targetId, ...body });
-      const {
-        rows: [round],
-      } = await this.repository.findMemberExclusion(
+      const [round] = await this.repository.findMemberExclusion(
         client,
         roundId,
         targetId,
@@ -1171,9 +1168,7 @@ export class SettleService {
         return result;
       },
       async (client) => {
-        const {
-          rows: [current],
-        } = await this.repository.findRoundConfirmation(
+        const [current] = await this.repository.findRoundConfirmation(
           client,
           roundId,
           userId,
@@ -1210,9 +1205,7 @@ export class SettleService {
         const account = await this.authorization.requireAccount(client, access);
         onlyKeys(body, ['expectedVersion']);
         const digest = mutationDigest(key, { roundId, ...body });
-        const {
-          rows: [round],
-        } = await this.repository.findRoundForceCompletion(
+        const [round] = await this.repository.findRoundForceCompletion(
           client,
           roundId,
           account.id,
@@ -1311,9 +1304,7 @@ export class SettleService {
         const account = await this.authorization.requireAccount(client, access);
         onlyKeys(body, ['expectedVersion']);
         const digest = mutationDigest(key, { roundId, ...body });
-        const {
-          rows: [round],
-        } = await this.repository.findRoundConfirmation(
+        const [round] = await this.repository.findRoundConfirmation(
           client,
           roundId,
           account.id,
@@ -1371,9 +1362,7 @@ export class SettleService {
         const account = await this.authorization.requireAccount(client, access);
         onlyKeys(body, ['expectedVersion']);
         mutationDigest(key, { roundId, ...body });
-        const {
-          rows: [round],
-        } = await this.repository.findRoundReopening(
+        const [round] = await this.repository.findRoundReopening(
           client,
           roundId,
           account.id,
@@ -1398,9 +1387,7 @@ export class SettleService {
         async (client) => {
           onlyKeys(body, ['expectedVersion']);
           const digest = mutationDigest(key, { roundId, ...body });
-          const {
-            rows: [round],
-          } = await this.repository.findRoundCancellation(
+          const [round] = await this.repository.findRoundCancellation(
             client,
             roundId,
             userId,
@@ -1503,9 +1490,7 @@ export class SettleService {
       if (body.senderId !== undefined && !currency)
         throw new SettleException(settleErrors.TRANSFER_CURRENCY_REQUIRED);
       const senderId = body.senderId as string | undefined;
-      const {
-        rows: [round],
-      } = await this.repository.findSettlementCheck(
+      const [round] = await this.repository.findSettlementCheck(
         client,
         roundId,
         account.id,
@@ -1528,7 +1513,7 @@ export class SettleService {
         )
       )
         throw new SettleException(settleErrors.TRANSFER_NOT_FOUND);
-      const { rowCount } = await this.repository.setReceived(
+      const count = await this.repository.setReceived(
         client,
         roundId,
         account.id,
@@ -1538,7 +1523,7 @@ export class SettleService {
         round.version,
         currency ?? null,
       );
-      if (!rowCount) throw new SettleException(settleErrors.TRANSFER_NOT_FOUND);
+      if (!count) throw new SettleException(settleErrors.TRANSFER_NOT_FOUND);
       captureAudience?.({ groupId: round.group_id, userIds: round.user_ids });
       return {
         id: roundId,
@@ -1555,9 +1540,11 @@ export class SettleService {
   ): Promise<SettlementDTO> {
     return this.prisma.withDatabaseConnection(async (client) => {
       const account = await this.authorization.requireAccount(client, access);
-      const {
-        rows: [round],
-      } = await this.repository.findSettlement(client, roundId, account.id);
+      const [round] = await this.repository.findSettlement(
+        client,
+        roundId,
+        account.id,
+      );
       if (!round) throw missing();
       const checks = round.confirmations.map((row) => ({
         userId: row.user_id,
@@ -1744,7 +1731,7 @@ export class SettleService {
           account.id,
           key,
         )
-      ).rows[0];
+      )[0];
       const replay = mutationResult<MutationResult>(round, digest);
       if (replay) return replay;
       this.validateEditableExpense(round, account.id, body.expectedVersion);
@@ -1781,7 +1768,7 @@ export class SettleService {
             account.id,
             key,
           )
-        ).rows[0];
+        )[0];
         if (!latest.actor_active)
           throw new SettleException(settleErrors.UNAUTHORIZED);
         result = mutationResult<MutationResult>(latest, digest);
@@ -1809,7 +1796,7 @@ export class SettleService {
   async getReceipt(access: Identity, receiptId: string) {
     const receipt = await this.prisma.withDatabaseConnection(async (client) => {
       const account = await this.authorization.requireAccount(client, access);
-      const { rows } = await this.repository.findReceipt(
+      const rows = await this.repository.findReceipt(
         client,
         receiptId,
         account.id,

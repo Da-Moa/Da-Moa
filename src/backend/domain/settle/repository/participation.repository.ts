@@ -1,5 +1,6 @@
 import type { UnfinishedUserRound } from '../../../../shared/domain/settle';
 import type { Database } from '../../../global/util';
+import { rawRows } from '../../../global/database/rawSql';
 
 // Public SQL relation: a null user_id still represents an unfinished round for its group creator.
 export const unfinishedGroupParticipationSql = `SELECT r.group_id,m.user_id FROM rounds r
@@ -11,11 +12,12 @@ export async function hasUnfinishedGroupRounds(
 ): Promise<boolean> {
   return Boolean(
     (
-      await client.query(
+      await rawRows<Record<string, number>>(
+        client,
         `SELECT 1 FROM (${unfinishedGroupParticipationSql}) unfinished WHERE group_id=$1 LIMIT 1`,
         [groupId],
       )
-    ).rows.length,
+    ).length,
   );
 }
 
@@ -26,11 +28,12 @@ export async function hasUnfinishedGroupParticipation(
 ): Promise<boolean> {
   return Boolean(
     (
-      await client.query(
+      await rawRows<Record<string, number>>(
+        client,
         `SELECT 1 FROM (${unfinishedGroupParticipationSql}) unfinished WHERE group_id=$1 AND user_id=$2 LIMIT 1`,
         [groupId, userId],
       )
-    ).rows.length,
+    ).length,
   );
 }
 
@@ -45,7 +48,8 @@ export async function getUnfinishedUserRounds(
   client: Database,
   userId: string,
 ): Promise<UnfinishedUserRound[]> {
-  const { rows } = await client.query<UnfinishedUserRound>(
+  const rows = await rawRows<UnfinishedUserRound>(
+    client,
     unfinishedUserRoundsSql,
     [userId],
   );

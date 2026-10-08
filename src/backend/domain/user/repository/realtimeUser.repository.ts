@@ -1,8 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
-import {
-  PrismaService,
-  databaseRows,
-} from '../../../global/database/prisma.service';
+import { PrismaService } from '../../../global/database/prisma.service';
+import { databaseRows } from '../../../global/database/rowMapping';
 @Injectable()
 export class RealtimeUserRepository {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}

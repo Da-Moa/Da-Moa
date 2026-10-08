@@ -1,5 +1,5 @@
-import { Injectable, Inject } from '@nestjs/common';
-import { PrismaService } from '../../../global/database/prisma.service';
+import { rawRows, rawExecute } from '../../../global/database/rawSql';
+import { Injectable } from '@nestjs/common';
 import { rethrowDatabaseError } from '../../../global/database/databaseError';
 import type { Database } from '../../../global/util';
 import { roundCreationCandidatesSql } from '../../group/repository';
@@ -84,13 +84,11 @@ const receiptDeletionContextSql = `context AS MATERIALIZED (
 
 @Injectable()
 export class SettleRepository {
-  constructor(
-    @Inject(PrismaService)
-    private readonly prisma: PrismaService,
-  ) {}
-
+  // Read-model joins/aggregations preserve one authorized query; mutation CTEs
+  // atomically recheck state, version and replay. Bulk finalization keeps its
+  // statement count independent of expenses, members and currencies.
   findRound(client: Database, id: string, userId: string) {
-    return this.prisma.query<RoundRow>(
+    return rawRows<RoundRow>(
       client,
       `SELECT r.*,g.name AS group_name,g.creator_id AS group_creator_id,
     (r.creator_id=$2) AS is_creator
@@ -107,7 +105,7 @@ export class SettleRepository {
     cursorId: string | null,
     limit: number,
   ) {
-    return this.prisma.query<RoundDetailRow>(
+    return rawRows<RoundDetailRow>(
       client,
       `SELECT r.*,g.name AS group_name,g.creator_id AS group_creator_id,
     (r.creator_id=$2) AS is_creator,
@@ -164,7 +162,8 @@ export class SettleRepository {
   }
 
   findMembers(client: Database, roundId: string) {
-    return this.prisma.query<MemberRow>(
+    // Prisma relation loading emits two SELECTs here; this projection needs one.
+    return rawRows<MemberRow>(
       client,
       `SELECT rm.user_id,rm.display_name_snapshot,rm.excluded_at,
     CASE WHEN u.deleted_at IS NULL THEN u.profile_image_url ELSE NULL END AS profile_image_url
@@ -174,7 +173,7 @@ export class SettleRepository {
   }
 
   findSettlementExpenses(client: Database, roundId: string) {
-    return this.prisma.query<SettlementExpenseRow>(
+    return rawRows<SettlementExpenseRow>(
       client,
       `SELECT e.id,e.currency,e.payer_id,e.amount_minor,e.split_mode,
     ARRAY(SELECT s.user_id FROM expense_shares s WHERE s.expense_id=e.id ORDER BY s.user_id) AS participant_ids,
@@ -195,7 +194,7 @@ export class SettleRepository {
     cursorId: string | null,
     limit: number,
   ) {
-    return this.prisma.query<RoundRow>(
+    return rawRows<RoundRow>(
       client,
       `SELECT r.*,g.name AS group_name,
       COALESCE((SELECT jsonb_agg(jsonb_build_object('currency',totals.currency,'totalMinor',totals.amount::text,
@@ -220,7 +219,7 @@ export class SettleRepository {
     ids: string[],
   ) {
     return (
-      await this.prisma.query<{
+      await rawRows<{
         actor_active: boolean;
         is_member: boolean;
         created: boolean;
@@ -240,7 +239,7 @@ export class SettleRepository {
     EXISTS(SELECT 1 FROM members) AS created`,
         [groupId, ids, id, userId, name, now],
       )
-    ).rows[0];
+    )[0];
   }
 
   findExpenseUpdate(
@@ -250,7 +249,7 @@ export class SettleRepository {
     userId: string,
     key: string,
   ) {
-    return this.prisma.query<ExpenseUpdateRow>(
+    return rawRows<ExpenseUpdateRow>(
       client,
       `WITH context AS (
     SELECT r.*,(r.creator_id=$3) AS is_creator,
@@ -292,7 +291,7 @@ export class SettleRepository {
     maximumTotal: string,
     now: number,
   ) {
-    const { rows } = await this.prisma.query<{
+    const rows = await rawRows<{
       response_metadata: MutationResult;
     }>(
       client,
@@ -364,7 +363,7 @@ export class SettleRepository {
     now: number,
   ) {
     return (
-      await this.prisma.query<
+      await rawRows<
         RoundRow & {
           actor_active: boolean;
           active_ids: string[];
@@ -415,7 +414,7 @@ export class SettleRepository {
           now,
         ],
       )
-    ).rows[0];
+    )[0];
   }
 
   async finishExpenseCreation(
@@ -432,7 +431,7 @@ export class SettleRepository {
   ) {
     return (
       (
-        await this.prisma.query<{ response_metadata: MutationResult }>(
+        await rawRows<{ response_metadata: MutationResult }>(
           client,
           `WITH shares AS (
     INSERT INTO expense_shares(expense_id,round_id,user_id,assigned_amount_minor)
@@ -454,7 +453,7 @@ export class SettleRepository {
             expectedVersion,
           ],
         )
-      ).rows[0]?.response_metadata ?? null
+      )[0]?.response_metadata ?? null
     );
   }
 
@@ -465,7 +464,7 @@ export class SettleRepository {
     userId: string,
     key: string,
   ) {
-    return this.prisma.query<ExpenseDeletionRow>(
+    return rawRows<ExpenseDeletionRow>(
       client,
       `WITH ${expenseDeletionContextSql}
     SELECT context.*,actor.active AS actor_active,saved.request_digest,saved.response_metadata FROM actor
@@ -485,7 +484,7 @@ export class SettleRepository {
     now: number,
   ) {
     return (
-      await this.prisma.query<ExpenseDeletionRow>(
+      await rawRows<ExpenseDeletionRow>(
         client,
         `WITH ${expenseDeletionContextSql}, bumped AS (
     UPDATE rounds SET version=version+1 WHERE id=$1 AND version=$6 AND status='RECORDING' AND completed_at IS NULL
@@ -503,11 +502,11 @@ export class SettleRepository {
     FROM actor LEFT JOIN context ON true LEFT JOIN saved ON true LEFT JOIN recorded ON true`,
         [roundId, expenseId, userId, key, digest, expectedVersion, now],
       )
-    ).rows[0];
+    )[0];
   }
 
   findExclusionExpenses(client: Database, roundId: string, targetId: string) {
-    return this.prisma.query<
+    return rawRows<
       Pick<MemberExclusionRow, 'excluded_at' | 'member_count' | 'expenses'>
     >(
       client,
@@ -523,7 +522,7 @@ export class SettleRepository {
     targetId: string,
     userId: string,
   ) {
-    return this.prisma.query<MemberExclusionRow>(
+    return rawRows<MemberExclusionRow>(
       client,
       `SELECT r.*,g.name AS group_name,g.creator_id AS group_creator_id,
     (r.creator_id=$3) AS is_creator,m.user_id AS target_id,${exclusionFields},
@@ -545,7 +544,7 @@ export class SettleRepository {
     now: number,
   ) {
     return (
-      await this.prisma.query<MutationResult>(
+      await rawRows<MutationResult>(
         client,
         `WITH bumped AS (
     UPDATE rounds r SET version=version+1 WHERE r.id=$1 AND r.creator_id=$3 AND r.creator_id<>$2
@@ -565,7 +564,7 @@ export class SettleRepository {
   ) SELECT * FROM bumped WHERE EXISTS(SELECT 1 FROM excluded)`,
         [roundId, targetId, userId, expectedVersion, now],
       )
-    ).rows[0];
+    )[0];
   }
 
   saveFinalSettlement(
@@ -574,7 +573,7 @@ export class SettleRepository {
     result: ReturnType<typeof finalizeCurrencySettlement>,
     now: number,
   ) {
-    return this.prisma.query(
+    return rawExecute(
       client,
       `WITH shares AS (
     UPDATE expense_shares s SET final_amount_minor=data.amount_minor,received_remainder=data.received_remainder
@@ -628,7 +627,7 @@ export class SettleRepository {
     key: string,
     operation: 'confirm' | 'draw' = 'confirm',
   ) {
-    return this.prisma.query<RoundConfirmationRow>(
+    return rawRows<RoundConfirmationRow>(
       client,
       `WITH ${roundSettlementContextSql(operation)}
     SELECT context.*,actor.active AS actor_active,saved.request_digest,saved.response_metadata FROM actor
@@ -647,7 +646,7 @@ export class SettleRepository {
     now: number,
   ) {
     return (
-      await this.prisma.query<RoundConfirmationRow>(
+      await rawRows<RoundConfirmationRow>(
         client,
         `WITH ${roundSettlementContextSql('confirm')}, confirmed AS (
     UPDATE rounds SET status='CONFIRMED',confirmed_at=$6,version=version+1
@@ -668,7 +667,7 @@ export class SettleRepository {
     FROM actor LEFT JOIN context ON true LEFT JOIN saved ON true LEFT JOIN recorded ON true`,
         [roundId, userId, key, digest, expectedVersion, now],
       )
-    ).rows[0];
+    )[0];
   }
 
   async drawRound(
@@ -682,7 +681,7 @@ export class SettleRepository {
     result: ReturnType<typeof finalizeCurrencySettlement> | null,
   ) {
     return (
-      await this.prisma.query<
+      await rawRows<
         RoundRow & {
           actor_active: boolean;
           request_digest: string | null;
@@ -759,11 +758,11 @@ export class SettleRepository {
           ),
         ],
       )
-    ).rows[0];
+    )[0];
   }
 
   findRoundReopening(client: Database, roundId: string, userId: string) {
-    return this.prisma.query<RoundRow & { user_ids: string[] }>(
+    return rawRows<RoundRow & { user_ids: string[] }>(
       client,
       `SELECT r.*,g.name AS group_name,g.creator_id AS group_creator_id,
     (r.creator_id=$2) AS is_creator,ARRAY(SELECT user_id FROM round_members WHERE round_id=r.id) AS user_ids
@@ -780,7 +779,7 @@ export class SettleRepository {
     expectedVersion: number,
   ) {
     return (
-      await this.prisma.query<MutationResult>(
+      await rawRows<MutationResult>(
         client,
         `WITH changed AS (
     UPDATE rounds SET status='RECORDING',confirmed_at=NULL,version=version+1
@@ -793,7 +792,7 @@ export class SettleRepository {
   ) SELECT id,id AS "roundId",status,version FROM changed`,
         [roundId, userId, expectedVersion],
       )
-    ).rows[0];
+    )[0];
   }
 
   lockRound(
@@ -835,7 +834,7 @@ export class SettleRepository {
     now: number,
   ) {
     return (
-      await this.prisma.query<RoundCompletionRow>(
+      await rawRows<RoundCompletionRow>(
         client,
         `WITH actor AS (
     SELECT EXISTS(SELECT 1 FROM users WHERE id=$2 AND deleted_at IS NULL AND onboarding_completed_at IS NOT NULL) AS active
@@ -862,7 +861,7 @@ export class SettleRepository {
     FROM actor LEFT JOIN context ON true LEFT JOIN saved ON true LEFT JOIN recorded ON true`,
         [roundId, userId, key, digest, expectedVersion, now],
       )
-    ).rows[0];
+    )[0];
   }
 
   findRoundForceCompletion(
@@ -871,7 +870,7 @@ export class SettleRepository {
     userId: string,
     key: string,
   ) {
-    return this.prisma.query<RoundForceCompletionRow>(
+    return rawRows<RoundForceCompletionRow>(
       client,
       `SELECT r.*,(r.creator_id=$2) AS is_creator,
     ARRAY(SELECT DISTINCT receiver_id FROM settlement_transfers WHERE round_id=r.id AND received_at IS NULL ORDER BY receiver_id) AS pending_user_ids,
@@ -894,7 +893,7 @@ export class SettleRepository {
     now: number,
   ) {
     return (
-      await this.prisma.query<
+      await rawRows<
         RoundRow & {
           actor_active: boolean;
           completed: boolean;
@@ -925,7 +924,7 @@ export class SettleRepository {
     FROM actor LEFT JOIN context ON true LEFT JOIN saved ON true LEFT JOIN recorded ON true`,
         [roundId, userId, key, digest, expectedVersion, now],
       )
-    ).rows[0];
+    )[0];
   }
 
   findRoundCancellation(
@@ -934,7 +933,7 @@ export class SettleRepository {
     userId: string,
     key: string,
   ) {
-    return this.prisma.query<
+    return rawRows<
       RoundRow & {
         has_expenses: boolean;
         user_ids: string[];
@@ -965,7 +964,7 @@ export class SettleRepository {
     result: unknown,
     now: number,
   ) {
-    return this.prisma.query(
+    return rawExecute(
       client,
       `WITH deleted AS (DELETE FROM rounds WHERE id=$1 RETURNING id)
     INSERT INTO mutation_requests(actor_id,operation,request_key,request_digest,resource_id,response_metadata,created_at)
@@ -975,7 +974,7 @@ export class SettleRepository {
   }
 
   findSettlementCheck(client: Database, roundId: string, userId: string) {
-    return this.prisma.query<SettlementCheckRow>(
+    return rawRows<SettlementCheckRow>(
       client,
       `SELECT r.*,g.name AS group_name,g.creator_id AS group_creator_id,(r.creator_id=$2) AS is_creator,
     COALESCE((SELECT jsonb_agg(jsonb_build_object('currency',t.currency,'sender_id',t.sender_id,'received_at',t.received_at::text) ORDER BY t.sender_id)
@@ -997,8 +996,10 @@ export class SettleRepository {
     expectedVersion: number,
     currency: Currency | null,
   ) {
+    // Outside a transaction, Prisma updateMany emits BEGIN/UPDATE/COMMIT.
+    // Keep this atomic multi-row update as one statement with both state checks.
     // ponytail: receipt changes and round completion are not serialized; use a shared lock if they must overlap safely.
-    return this.prisma.query(
+    return rawExecute(
       client,
       `UPDATE settlement_transfers SET received_at=CASE
       WHEN $4 THEN $5::bigint ELSE NULL END
@@ -1011,7 +1012,7 @@ export class SettleRepository {
   }
 
   findSettlement(client: Database, roundId: string, userId: string) {
-    return this.prisma.query<SettlementRow>(
+    return rawRows<SettlementRow>(
       client,
       `SELECT r.*,g.name AS group_name,(r.creator_id=$2) AS is_creator,
     COALESCE(balances.items,'[]'::jsonb) AS balances,COALESCE(checks.items,'[]'::jsonb) AS confirmations,
@@ -1069,7 +1070,7 @@ export class SettleRepository {
     now: number,
   ) {
     return (
-      await this.prisma.query<ReceiptCreationRow>(
+      await rawRows<ReceiptCreationRow>(
         client,
         `WITH actor AS (
     SELECT EXISTS(SELECT 1 FROM users WHERE id=$3 AND deleted_at IS NULL AND onboarding_completed_at IS NOT NULL) AS active
@@ -1117,7 +1118,7 @@ export class SettleRepository {
           now,
         ],
       )
-    ).rows[0];
+    )[0];
   }
 
   async finishReceiptStorage(
@@ -1126,7 +1127,7 @@ export class SettleRepository {
     objectKey: string | null,
   ) {
     return (
-      await this.prisma.query<{
+      await rawRows<{
         round_id: string;
         group_id: string;
         user_ids: string[];
@@ -1139,7 +1140,7 @@ export class SettleRepository {
     FROM saved JOIN expenses e ON e.id=saved.expense_id JOIN rounds r ON r.id=e.round_id`,
         [id, objectKey],
       )
-    ).rows[0];
+    )[0];
   }
 
   findReceiptDeletion(
@@ -1150,7 +1151,7 @@ export class SettleRepository {
     userId: string,
     key: string,
   ) {
-    return this.prisma.query<ReceiptDeletionRow>(
+    return rawRows<ReceiptDeletionRow>(
       client,
       `WITH ${receiptDeletionContextSql}
     SELECT context.*,actor.active AS actor_active,saved.request_digest,saved.response_metadata FROM actor
@@ -1171,7 +1172,7 @@ export class SettleRepository {
     now: number,
   ) {
     return (
-      await this.prisma.query<ReceiptDeletionRow>(
+      await rawRows<ReceiptDeletionRow>(
         client,
         `WITH ${receiptDeletionContextSql}, bumped AS (
     UPDATE rounds r SET version=r.version+1 WHERE r.id=$1 AND r.version=$7 AND r.status='RECORDING' AND r.completed_at IS NULL
@@ -1202,12 +1203,12 @@ export class SettleRepository {
           now,
         ],
       )
-    ).rows[0];
+    )[0];
   }
 
   findReceipt(client: Database, receiptId: string, userId: string) {
     // Upgraded databases retain BYTEA content; fresh databases have only object_key.
-    return this.prisma.query<ReceiptContentRow>(
+    return rawRows<ReceiptContentRow>(
       client,
       `SELECT rc.* FROM expense_receipts rc JOIN expenses e ON e.id=rc.expense_id
     JOIN rounds r ON r.id=e.round_id JOIN round_members viewer ON viewer.round_id=r.id AND viewer.user_id=$2
@@ -1217,14 +1218,12 @@ export class SettleRepository {
   }
 
   async findBankSettlementAudience(client: Database, userId: string) {
-    return (
-      await this.prisma.query<{ sender_id: string; round_id: string }>(
-        client,
-        `SELECT DISTINCT t.sender_id,t.round_id
+    return await rawRows<{ sender_id: string; round_id: string }>(
+      client,
+      `SELECT DISTINCT t.sender_id,t.round_id
     FROM settlement_transfers t JOIN rounds r ON r.id=t.round_id
     WHERE t.receiver_id=$1 AND t.received_at IS NULL AND t.currency='KRW'`,
-        [userId],
-      )
-    ).rows;
+      [userId],
+    );
   }
 }

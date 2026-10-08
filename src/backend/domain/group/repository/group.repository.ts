@@ -1,8 +1,6 @@
-import { Injectable, Inject } from '@nestjs/common';
-import {
-  PrismaService,
-  databaseRows,
-} from '../../../global/database/prisma.service';
+import { rawRows, rawExecute } from '../../../global/database/rawSql';
+import { Injectable } from '@nestjs/common';
+import { databaseRows } from '../../../global/database/rowMapping';
 import { unfinishedGroupParticipationSql } from '../../settle/repository';
 import type { Database } from '../../../global/util';
 import type {
@@ -39,11 +37,8 @@ export const roundCreationCandidatesSql = `WITH actor AS (
 
 @Injectable()
 export class GroupRepository {
-  constructor(
-    @Inject(PrismaService)
-    private readonly prisma: PrismaService,
-  ) {}
-
+  // Joined/aggregated read models stay in one authorized query. Mutation CTEs
+  // couple membership, limits and replay to one statement under contention.
   async findGroups(
     client: Database,
     userId: string,
@@ -53,10 +48,9 @@ export class GroupRepository {
   ) {
     const pattern =
       search === null ? null : `%${search.replace(/[\\%_]/g, '\\$&')}%`;
-    return (
-      await this.prisma.query<GroupListRow>(
-        client,
-        `SELECT g.id,g.creator_id,g.name,g.created_at,
+    return await rawRows<GroupListRow>(
+      client,
+      `SELECT g.id,g.creator_id,g.name,g.created_at,
     array_agg(member.user_id ORDER BY CASE WHEN member.user_id=g.creator_id THEN 0 ELSE 1 END,member.user_id) AS member_ids
     FROM (
       SELECT g.* FROM groups g
@@ -67,34 +61,31 @@ export class GroupRepository {
     ) g
     JOIN group_members member ON member.group_id=g.id AND member.left_at IS NULL
     GROUP BY g.id,g.creator_id,g.name,g.created_at ORDER BY g.id DESC`,
-        [userId, pattern, cursor?.id ?? null, limit + 1],
-      )
-    ).rows;
+      [userId, pattern, cursor?.id ?? null, limit + 1],
+    );
   }
 
   async findMemberGroup(client: Database, groupId: string, userId: string) {
     return (
-      await this.prisma.query<GroupRow>(
+      await rawRows<GroupRow>(
         client,
         `SELECT g.* FROM groups g JOIN group_members m ON m.group_id=g.id AND m.user_id=$2 AND m.left_at IS NULL WHERE g.id=$1`,
         [groupId, userId],
       )
-    ).rows[0];
+    )[0];
   }
 
   async findGroupWithMembers(client: Database, groupId: string) {
-    return (
-      await this.prisma.query<GroupMemberRow>(
-        client,
-        `SELECT g.id,g.creator_id,g.name,g.created_at,m.user_id,COALESCE(u.display_name,'카카오 사용자') AS display_name
+    return await rawRows<GroupMemberRow>(
+      client,
+      `SELECT g.id,g.creator_id,g.name,g.created_at,m.user_id,COALESCE(u.display_name,'카카오 사용자') AS display_name
     FROM groups g
     JOIN group_members m ON m.group_id=g.id AND m.left_at IS NULL
     JOIN users u ON u.id=m.user_id AND u.deleted_at IS NULL AND u.onboarding_completed_at IS NOT NULL
     WHERE g.id=$1
     ORDER BY CASE WHEN m.user_id=g.creator_id THEN 0 ELSE 1 END,m.user_id`,
-        [groupId],
-      )
-    ).rows;
+      [groupId],
+    );
   }
 
   async findActiveInvites(client: Database, groupId: string, now: number) {
@@ -118,7 +109,7 @@ export class GroupRepository {
     name: string,
     now: number,
   ) {
-    await this.prisma.query(
+    await rawExecute(
       client,
       `WITH created_group AS (
       INSERT INTO groups(id,creator_id,name,created_at) VALUES($1,$2,$3,$4)
@@ -136,7 +127,7 @@ export class GroupRepository {
     key: string,
   ) {
     return (
-      await this.prisma.query<GroupDepartureRow>(
+      await rawRows<GroupDepartureRow>(
         client,
         `SELECT g.creator_id,viewer.user_id,
     EXISTS(SELECT 1 FROM (${unfinishedGroupParticipationSql}) unfinished WHERE unfinished.group_id=$1
@@ -149,7 +140,7 @@ export class GroupRepository {
     LEFT JOIN mutation_requests previous ON previous.actor_id=$2 AND previous.operation='group.leave' AND previous.request_key=$3`,
         [groupId, userId, key],
       )
-    ).rows[0];
+    )[0];
   }
 
   async leaveGroup(
@@ -161,7 +152,7 @@ export class GroupRepository {
     key: string,
     digest: string,
   ) {
-    await this.prisma.query(
+    await rawExecute(
       client,
       `WITH departed AS (
     UPDATE group_members SET left_at=$3
@@ -187,18 +178,16 @@ export class GroupRepository {
     key: string,
     digest: string,
   ) {
-    return (
-      await this.prisma.query(
-        client,
-        `WITH revoked AS (
+    return await rawExecute(
+      client,
+      `WITH revoked AS (
     UPDATE group_invites SET revoked_at=COALESCE(revoked_at,$3)
     WHERE id=$1 AND group_id=$2
     RETURNING id
   ) INSERT INTO mutation_requests(actor_id,operation,request_key,request_digest,resource_id,response_metadata,created_at)
     SELECT $4,'invite.revoke',$5,$6,id,jsonb_build_object('id',id),$3 FROM revoked`,
-        [inviteId, groupId, now, userId, key, digest],
-      )
-    ).rowCount;
+      [inviteId, groupId, now, userId, key, digest],
+    );
   }
 
   async findInviteMutation(
@@ -209,7 +198,7 @@ export class GroupRepository {
     operation: 'invite.create' | 'invite.revoke',
   ) {
     return (
-      await this.prisma.query<InviteMutationRow>(
+      await rawRows<InviteMutationRow>(
         client,
         `SELECT g.creator_id,m.user_id,previous.request_digest,previous.response_metadata
     FROM (SELECT $1::text AS id) requested
@@ -218,7 +207,7 @@ export class GroupRepository {
     LEFT JOIN mutation_requests previous ON previous.actor_id=$2 AND previous.operation=$4 AND previous.request_key=$3`,
         [groupId, userId, key, operation],
       )
-    ).rows[0];
+    )[0];
   }
 
   async insertInvite(
@@ -233,10 +222,9 @@ export class GroupRepository {
     digest: string,
     replaceInviteId: string | null,
   ) {
-    return (
-      await this.prisma.query(
-        client,
-        `WITH created AS (
+    return await rawExecute(
+      client,
+      `WITH created AS (
     INSERT INTO group_invites(id,group_id,created_by,token_hash,created_at,expires_at)
     SELECT $1,$2,$3,$4,$5,$6 FROM groups g
     JOIN group_members m ON m.group_id=g.id AND m.user_id=$3 AND m.left_at IS NULL
@@ -251,19 +239,18 @@ export class GroupRepository {
   ) INSERT INTO mutation_requests(actor_id,operation,request_key,request_digest,resource_id,response_metadata,created_at)
     SELECT $3,'invite.create',$7,$8,id,jsonb_build_object('id',id,'inviteId',id,'linkUnavailable',true),$5
     FROM created`,
-        [
-          id,
-          groupId,
-          userId,
-          tokenHash,
-          now,
-          expiresAt,
-          key,
-          digest,
-          replaceInviteId,
-        ],
-      )
-    ).rowCount;
+      [
+        id,
+        groupId,
+        userId,
+        tokenHash,
+        now,
+        expiresAt,
+        key,
+        digest,
+        replaceInviteId,
+      ],
+    );
   }
 
   async findValidInvite(
@@ -273,7 +260,7 @@ export class GroupRepository {
     now: number,
   ) {
     return (
-      await this.prisma.query<InviteRow>(
+      await rawRows<InviteRow>(
         client,
         `SELECT i.id,i.group_id,i.expires_at,g.name,g.creator_id,
     viewer.user_id IS NOT NULL AS is_member
@@ -284,7 +271,7 @@ export class GroupRepository {
     WHERE i.token_hash=$1 AND i.revoked_at IS NULL AND i.expires_at>$2`,
         [tokenHash, now, userId],
       )
-    ).rows[0];
+    )[0];
   }
 
   async findInviteAcceptance(
@@ -295,7 +282,7 @@ export class GroupRepository {
     key: string,
   ) {
     return (
-      await this.prisma.query<InviteAcceptanceRow>(
+      await rawRows<InviteAcceptanceRow>(
         client,
         `SELECT CASE WHEN u.id IS NOT NULL THEN g.id END AS group_id,
     viewer.user_id IS NOT NULL AS is_member,
@@ -309,7 +296,7 @@ export class GroupRepository {
     LEFT JOIN mutation_requests previous ON previous.actor_id=$2 AND previous.operation='invite.accept' AND previous.request_key=$4`,
         [tokenHash, userId, now, key],
       )
-    ).rows[0];
+    )[0];
   }
 
   async joinGroup(
@@ -322,7 +309,7 @@ export class GroupRepository {
     memberLimit: number,
   ) {
     return (
-      await this.prisma.query<{
+      await rawRows<{
         actor_active: boolean;
         group_id: string | null;
         is_member: boolean;
@@ -362,17 +349,15 @@ export class GroupRepository {
     EXISTS(SELECT 1 FROM saved) AS joined`,
         [tokenHash, userId, now, key, digest, memberLimit],
       )
-    ).rows[0];
+    )[0];
   }
 
   async findDepartureAudience(client: Database, groupIds: string[]) {
-    return (
-      await this.prisma.query<{ group_id: string; user_id: string }>(
-        client,
-        `SELECT m.group_id,m.user_id FROM group_members m JOIN users u ON u.id=m.user_id
+    return await rawRows<{ group_id: string; user_id: string }>(
+      client,
+      `SELECT m.group_id,m.user_id FROM group_members m JOIN users u ON u.id=m.user_id
     WHERE m.group_id=ANY($1::text[]) AND m.left_at IS NULL AND u.deleted_at IS NULL`,
-        [groupIds],
-      )
-    ).rows;
+      [groupIds],
+    );
   }
 }

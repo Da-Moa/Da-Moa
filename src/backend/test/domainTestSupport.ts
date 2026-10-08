@@ -2,7 +2,12 @@ import { RuntimeModule } from '../global/runtime/runtime.module';
 import type { Database } from '../global/database/db';
 import { GroupModule } from '../domain/group/module/group.module';
 import { SettleModule } from '../domain/settle/module/settle.module';
-import { databaseRows, PrismaService } from '../global/database/prisma.service';
+import { PrismaService } from '../global/database/prisma.service';
+import { databaseRows } from '../global/database/rowMapping';
+import {
+  inspectionDatabase,
+  type InspectionDatabase,
+} from './inspectionDatabase';
 import 'reflect-metadata';
 import { after } from 'node:test';
 import { NestFactory } from '@nestjs/core';
@@ -289,22 +294,26 @@ export async function getRefreshResponse(
 }
 
 export async function withDatabaseConnection<T>(
-  work: (client: Database) => Promise<T>,
+  work: (client: InspectionDatabase) => Promise<T>,
 ): Promise<T> {
-  return (await testProvider(PrismaService)).withDatabaseConnection(work);
+  return (await testProvider(PrismaService)).withDatabaseConnection((client) =>
+    work(inspectionDatabase(client)),
+  );
 }
 export async function withReadTransaction<T>(
-  work: (client: Database) => Promise<T>,
+  work: (client: InspectionDatabase) => Promise<T>,
 ): Promise<T> {
-  return (await testProvider(PrismaService)).withReadTransaction(work);
+  return (await testProvider(PrismaService)).withReadTransaction((client) =>
+    work(inspectionDatabase(client)),
+  );
 }
 export async function withWriteTransaction<T>(
-  work: (client: Database) => Promise<T>,
+  work: (client: InspectionDatabase) => Promise<T>,
   beforeLock?: (client: Database) => Promise<void>,
   beforeBegin?: (client: Database) => Promise<void>,
 ): Promise<T> {
   return (await testProvider(PrismaService)).withWriteTransaction(
-    work,
+    (client) => work(inspectionDatabase(client)),
     beforeLock,
     beforeBegin,
   );

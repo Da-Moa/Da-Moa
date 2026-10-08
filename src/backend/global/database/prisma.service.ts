@@ -3,30 +3,11 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient, Prisma } from '../../generated/prisma/client';
 import { createDatabasePool } from './dbClient.mjs';
 import type { Database } from './databaseConnection';
-import { rethrowDatabaseError } from './databaseError';
 
 function url() {
   const value = process.env.DATABASE_URL || process.env.POSTGRES_URL;
   if (!value) throw new Error('DATABASE_URL is required');
   return value;
-}
-
-// Preserve PostgreSQL numeric/string DTOs; Prisma uses bigint and Decimal internally.
-export function databaseRows<T>(value: unknown): T {
-  if (typeof value === 'bigint' || Prisma.Decimal.isDecimal(value))
-    return String(value) as T;
-  if (Array.isArray(value)) return value.map((item) => databaseRows(item)) as T;
-  if (
-    value &&
-    typeof value === 'object' &&
-    !(value instanceof Date) &&
-    !(value instanceof Uint8Array)
-  ) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, databaseRows(item)]),
-    ) as T;
-  }
-  return value as T;
 }
 
 @Injectable()
@@ -90,38 +71,7 @@ export class PrismaService {
     return this.closing;
   }
   connection(prisma: Database['prisma'] = this.client): Database {
-    return {
-      prisma,
-      query: (sql, parameters) =>
-        this.query({ prisma } as Database, sql, parameters),
-    };
-  }
-
-  async query<R = any>(
-    context: Database,
-    sql: string,
-    parameters: unknown[] = [],
-  ): Promise<{ rows: R[]; rowCount: number }> {
-    // SQL is a repository-owned constant; all user values remain bound parameters.
-    const command = sqlCommand(sql);
-    try {
-      if (
-        command === 'SELECT' ||
-        command === 'SHOW' ||
-        /\bRETURNING\b/i.test(topLevelSql(sql))
-      ) {
-        const rows = databaseRows<R[]>(
-          await context.prisma.$queryRawUnsafe(sql, ...parameters),
-        );
-        return { rows, rowCount: rows.length };
-      }
-      return {
-        rows: [],
-        rowCount: await context.prisma.$executeRawUnsafe(sql, ...parameters),
-      };
-    } catch (error) {
-      rethrowDatabaseError(error);
-    }
+    return { prisma };
   }
 
   async withDatabaseConnection<T>(work: (client: Database) => Promise<T>) {
@@ -152,28 +102,4 @@ export class PrismaService {
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
   }
-}
-
-function topLevelSql(sql: string) {
-  let depth = 0,
-    quote = '',
-    result = '';
-  for (let i = 0; i < sql.length; i++) {
-    const char = sql[i];
-    if (quote) {
-      if (char === quote) {
-        if (sql[i + 1] === quote) i++;
-        else quote = '';
-      }
-    } else if (char === "'" || char === '"') quote = char;
-    else if (char === '(') depth++;
-    else if (char === ')') depth--;
-    else if (!depth) result += char;
-  }
-  return result;
-}
-function sqlCommand(sql: string) {
-  return topLevelSql(sql)
-    .match(/\b(SELECT|SHOW|INSERT|UPDATE|DELETE|SET)\b/i)?.[1]
-    ?.toUpperCase();
 }
