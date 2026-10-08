@@ -1,34 +1,12 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { registerInvalidationPublisher } from '../../util/invalidationUtil.ts'
 import { authenticateWebsocketToken, getKakaoRedirectUris } from '../../auth/native.ts'
 import { createWebsocketUtil } from '../websocketUtil.mjs'
 
-export function createWsController(port, rateLimit) {
-  process.env.REALTIME_INTERNAL_PORT = String(port)
-  process.env.REALTIME_INTERNAL_SECRET = randomBytes(32).toString('hex')
+export function createWsController(rateLimit) {
   const websocket = createWebsocketUtil()
-  function handleRequest(request, response) {
-    if (request.url !== '/internal/realtime') return false
-    if (request.method !== 'POST' || request.socket.remoteAddress !== '127.0.0.1' && request.socket.remoteAddress !== '::ffff:127.0.0.1' && request.socket.remoteAddress !== '::1') {
-      response.writeHead(403).end(); return true
-    }
-    const received = Buffer.from(request.headers.authorization?.replace(/^Bearer /, '') ?? '')
-    const expected = Buffer.from(process.env.REALTIME_INTERNAL_SECRET)
-    if (received.length !== expected.length || !timingSafeEqual(received, expected)) { response.writeHead(403).end(); return true }
-    let body = ''
-    request.on('data', chunk => { body += chunk; if (body.length > 1048576) request.destroy() })
-    request.on('end', () => {
-      try {
-        const targets = JSON.parse(body)
-        if (!Array.isArray(targets) || targets.length > 10000 || !targets.every(target =>
-          typeof target.userId === 'string' && /^[\w-]{1,128}$/.test(target.userId)
-          && Array.isArray(target.keys) && target.keys.length > 0 && target.keys.length <= 20
-          && target.keys.every(key => typeof key === 'string' && /^(me|groups|rounds|settlements|(group|group-rounds|round|settlement):[\w-]{1,128})$/.test(key)))) throw new Error('Invalid invalidation')
-        for (const { userId, keys } of targets) websocket.publish(`user:${userId}`, { type: 'invalidate', keys })
-        response.writeHead(204).end()
-      } catch { response.writeHead(400).end() }
-    })
-    return true
-  }
+  const unregister = registerInvalidationPublisher((userId, keys) => {
+    websocket.publish(`user:${userId}`, { type: 'invalidate', keys })
+  })
 
   function handleUpgrade(request, socket, head) {
     if (request.url !== '/realtime') return
@@ -69,5 +47,9 @@ export function createWsController(port, rateLimit) {
       })
     }).catch(() => socket.destroy())
   }
-  return { handleRequest, handleUpgrade, close: websocket.close }
+  function close() {
+    unregister()
+    websocket.close()
+  }
+  return { handleUpgrade, close }
 }

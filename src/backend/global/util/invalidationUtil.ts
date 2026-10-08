@@ -1,6 +1,17 @@
 import type { ResourceKey } from '../../../shared/global/websocket/realtime';
 
 type Publication = { userIds: string[]; keys: ResourceKey[] };
+type InvalidationPublisher = (userId: string, keys: ResourceKey[]) => void;
+let publisher: { publish: InvalidationPublisher } | undefined;
+
+export function registerInvalidationPublisher(publish: InvalidationPublisher) {
+  const registration = { publish };
+  publisher = registration;
+  return () => {
+    if (publisher === registration) publisher = undefined;
+  };
+}
+
 export type RoundAudience = {
   groupId: string;
   userIds: string[];
@@ -8,13 +19,12 @@ export type RoundAudience = {
 };
 
 export function realtimeEnabled() {
-  return Boolean(
-    process.env.REALTIME_INTERNAL_SECRET && process.env.REALTIME_INTERNAL_PORT,
-  );
+  return publisher !== undefined;
 }
 
 export async function publishInvalidations(publications: Publication[]) {
-  if (!realtimeEnabled()) return;
+  const currentPublisher = publisher;
+  if (!currentPublisher) return;
   try {
     const byUser = new Map<string, Set<ResourceKey>>();
     for (const { userIds, keys } of publications)
@@ -23,22 +33,8 @@ export async function publishInvalidations(publications: Publication[]) {
         keys.forEach((key) => current.add(key));
         byUser.set(userId, current);
       }
-    if (!byUser.size) return;
-    const response = await fetch(
-      `http://127.0.0.1:${process.env.REALTIME_INTERNAL_PORT}/internal/realtime`,
-      {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${process.env.REALTIME_INTERNAL_SECRET}`,
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify(
-          [...byUser].map(([userId, keys]) => ({ userId, keys: [...keys] })),
-        ),
-        signal: AbortSignal.timeout(5000),
-      },
-    );
-    if (!response.ok) throw new Error('Realtime invalidation failed');
+    for (const [userId, keys] of byUser)
+      currentPublisher.publish(userId, [...keys]);
   } catch {
     console.error('Realtime invalidation failed');
   }

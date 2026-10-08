@@ -33,7 +33,7 @@ export async function bootstrap() {
     throw new Error('METRICS_PORT must differ from PORT');
   const host = process.env.HOST || (development ? '0.0.0.0' : '127.0.0.1');
   const rateLimit = createRateLimitController();
-  const websocket = createWsController(port, rateLimit);
+  const websocket = createWsController(rateLimit);
   let frontend!: ReturnType<typeof next>;
 
   const backend = await createBackend(async (app) => {
@@ -44,7 +44,6 @@ export async function bootstrap() {
     const handlePage = frontend.getRequestHandler();
     server.on('upgrade', websocket.handleUpgrade);
     app.use((request: Request, response: Response, nextRoute: NextFunction) => {
-      if (websocket.handleRequest(request, response)) return;
       if (metricsPort !== null) trackHttpResponse(request, response);
       if (rateLimit.handleRequest(request, response)) return;
       const url = new URL(request.url || '/', 'http://localhost');

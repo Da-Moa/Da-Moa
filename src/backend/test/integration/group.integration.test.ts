@@ -13,7 +13,7 @@ import { acceptInvite, createGroup, createInvite, getGroup, getInvite, leaveGrou
 import { applyMigrations } from '../../../../scripts/migrations.mjs'
 import { completeTestOnboarding } from './bankTestSupport.ts'
 import { createRound, getRound, roundCommand } from '../../domain/settle/index.ts'
-import { publishGroupInvalidation } from '../../global/util/invalidationUtil.ts'
+import { publishGroupInvalidation, registerInvalidationPublisher } from '../../global/util/invalidationUtil.ts'
 
 const database = process.env.TEST_DATABASE_URL
 if (!database || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(database).hostname) || !new URL(database).pathname.toLowerCase().includes('test')) throw new Error('TEST_DATABASE_URL must name an isolated local test database')
@@ -320,21 +320,13 @@ test('Group autocommit reads, group/invite creation/revocation and atomic replay
       assert.equal((await trace(2, null, () => listGroups(owner, new URLSearchParams({ q: body.name })))).items.length, 0)
       assert.equal((await client.query('SELECT COUNT(*)::int AS count FROM group_members WHERE group_id=$1 AND left_at IS NULL', [group.id])).rows[0].count, 0)
       assert.equal((await getRound(participant, unfinished.id, new URLSearchParams())).id, unfinished.id, 'past rounds survive departure')
-      const previousPort = process.env.REALTIME_INTERNAL_PORT, previousSecret = process.env.REALTIME_INTERNAL_SECRET
-      process.env.REALTIME_INTERNAL_PORT = '12345'
-      process.env.REALTIME_INTERNAL_SECRET = 'group-invalidation-test'
-      const publisher = t.mock.method(globalThis, 'fetch', async (_url: unknown, options?: RequestInit) => {
-        assert.deepEqual(JSON.parse(options!.body as string), audience.map(userId => ({ userId, keys: ['groups', `group:${group.id}`] })))
-        return new Response(null, { status: 204 })
-      })
-      try { await trace(0, null, () => publishGroupInvalidation(group.id, audience)) }
-      finally {
-        publisher.mock.restore()
-        if (previousPort === undefined) delete process.env.REALTIME_INTERNAL_PORT
-        else process.env.REALTIME_INTERNAL_PORT = previousPort
-        if (previousSecret === undefined) delete process.env.REALTIME_INTERNAL_SECRET
-        else process.env.REALTIME_INTERNAL_SECRET = previousSecret
-      }
+      const publisher = t.mock.fn((userId: string, keys: string[]) => {})
+      const unregister = registerInvalidationPublisher(publisher)
+      try {
+        await trace(0, null, () => publishGroupInvalidation(group.id, audience))
+        assert.deepEqual(publisher.mock.calls.map(({ arguments: [userId, keys] }) => ({ userId, keys })),
+          audience.map(userId => ({ userId, keys: ['groups', `group:${group.id}`] })))
+      } finally { unregister() }
       const otherRounds = await createGroup(owner, uuidV7(), { name: '본인이 참여하지 않은 회차' })
       const otherInvite = await createInvite(owner, randomUUID(), otherRounds.id, {})
       for (const actor of [participant, outsider]) await acceptInvite(actor, randomUUID(), otherInvite.sharePath!.split('/').at(-1)!)
