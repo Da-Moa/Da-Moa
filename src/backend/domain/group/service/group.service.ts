@@ -401,51 +401,45 @@ export class GroupService {
     token: string,
     captureAudience?: (userIds: string[]) => void,
   ): Promise<GroupMutationResult> {
-    return this.prisma.withDatabaseConnection(
-      async (client, discardConnection) => {
-        const account = await this.authorization.requireAccount(client, access);
-        if (!isInviteToken(token)) throw missing();
-        const tokenHash = createHash('sha256').update(token).digest('hex');
-        const digest = mutationDigest(key, { tokenHash });
-        const row = await this.repository.findInviteAcceptance(
+    return this.prisma.withDatabaseConnection(async (client) => {
+      const account = await this.authorization.requireAccount(client, access);
+      if (!isInviteToken(token)) throw missing();
+      const tokenHash = createHash('sha256').update(token).digest('hex');
+      const digest = mutationDigest(key, { tokenHash });
+      const row = await this.repository.findInviteAcceptance(
+        client,
+        tokenHash,
+        account.id,
+        nowSeconds(),
+        key,
+      );
+      const replay = mutationResult<GroupMutationResult>(row, digest);
+      if (replay) {
+        captureAudience?.([]);
+        return replay;
+      }
+      if (!row.group_id) throw missing();
+      if (row.is_member) throw alreadyMember();
+      return this.prisma.withWriteTransaction(async (client) => {
+        const joined = await this.repository.joinGroup(
           client,
           tokenHash,
           account.id,
           nowSeconds(),
           key,
+          digest,
+          MAX_GROUP_MEMBERS,
         );
-        const replay = mutationResult<GroupMutationResult>(row, digest);
-        if (replay) {
-          captureAudience?.([]);
-          return replay;
-        }
-        if (!row.group_id) throw missing();
-        if (row.is_member) throw alreadyMember();
-        return this.prisma.withWriteLock(
-          client,
-          discardConnection,
-          async (client) => {
-            const joined = await this.repository.joinGroup(
-              client,
-              tokenHash,
-              account.id,
-              nowSeconds(),
-              key,
-              digest,
-              MAX_GROUP_MEMBERS,
-            );
-            if (!joined.actor_active)
-              throw new GroupException(groupErrors.UNAUTHORIZED);
-            if (!joined.group_id) throw missing();
-            if (joined.is_member) throw alreadyMember();
-            if (joined.member_count >= MAX_GROUP_MEMBERS)
-              throw memberLimitExceeded();
-            if (!joined.joined) throw alreadyMember();
-            captureAudience?.([...joined.member_ids, account.id]);
-            return { id: joined.group_id };
-          },
-        );
-      },
-    );
+        if (!joined.actor_active)
+          throw new GroupException(groupErrors.UNAUTHORIZED);
+        if (!joined.group_id) throw missing();
+        if (joined.is_member) throw alreadyMember();
+        if (joined.member_count >= MAX_GROUP_MEMBERS)
+          throw memberLimitExceeded();
+        if (!joined.joined) throw alreadyMember();
+        captureAudience?.([...joined.member_ids, account.id]);
+        return { id: joined.group_id };
+      });
+    });
   }
 }

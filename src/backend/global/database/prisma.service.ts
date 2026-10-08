@@ -124,18 +124,8 @@ export class PrismaService {
     }
   }
 
-  async withDatabaseConnection<T>(
-    work: (client: Database, discard: () => void) => Promise<T>,
-  ) {
-    return work(this.connection(), () => {});
-  }
-
-  async withWriteLock<T>(
-    _client: Database,
-    _discard: () => void,
-    work: (client: Database) => Promise<T>,
-  ) {
-    return this.withWriteTransaction(work);
+  async withDatabaseConnection<T>(work: (client: Database) => Promise<T>) {
+    return work(this.connection());
   }
 
   async withWriteTransaction<T>(

@@ -289,7 +289,7 @@ export async function getRefreshResponse(
 }
 
 export async function withDatabaseConnection<T>(
-  work: (client: Database, discard: () => void) => Promise<T>,
+  work: (client: Database) => Promise<T>,
 ): Promise<T> {
   return (await testProvider(PrismaService)).withDatabaseConnection(work);
 }

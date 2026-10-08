@@ -360,48 +360,46 @@ export class SettleService {
     body: CreateRoundRequestDTO | Record<string, unknown>,
     captureAudience?: (userIds: string[]) => void,
   ) {
-    return this.prisma.withDatabaseConnection((client, discardConnection) =>
-      this.prisma.withWriteLock(client, discardConnection, async (client) => {
-        const account = await this.authorization.requireAccount(client, access);
-        onlyKeys(body, ['name', 'participantIds']);
-        const name = textInput(body.name, 100),
-          ids = idsInput(body.participantIds);
-        if (!isUUID(key, '7'))
-          throw new SettleException(settleErrors.ROUND_CREATION_KEY_REQUIRED);
-        if (ids.length < 2 || !ids.includes(account.id))
-          throw new SettleException(settleErrors.MINIMUM_PARTICIPANTS);
-        const id = key.toLowerCase();
-        try {
-          const result = await this.repository.insertRound(
-            client,
-            id,
-            groupId,
-            account.id,
-            name,
-            nowSeconds(),
-            ids,
-          );
-          if (!result.actor_active)
-            throw new SettleException(settleErrors.UNAUTHORIZED);
-          if (!result.is_member) throw missing();
-          if (!result.created)
-            throw new SettleException(settleErrors.GROUP_MEMBERS_REQUIRED);
-        } catch (error) {
-          if (
-            error &&
-            typeof error === 'object' &&
-            'code' in error &&
-            error.code === '23505' &&
-            'constraint' in error &&
-            error.constraint === 'rounds_pkey'
-          )
-            throw duplicateRound();
-          throw error;
-        }
-        captureAudience?.(ids);
-        return { id, roundId: id, status: 'RECORDING' as const, version: 1 };
-      }),
-    );
+    return this.prisma.withWriteTransaction(async (client) => {
+      const account = await this.authorization.requireAccount(client, access);
+      onlyKeys(body, ['name', 'participantIds']);
+      const name = textInput(body.name, 100),
+        ids = idsInput(body.participantIds);
+      if (!isUUID(key, '7'))
+        throw new SettleException(settleErrors.ROUND_CREATION_KEY_REQUIRED);
+      if (ids.length < 2 || !ids.includes(account.id))
+        throw new SettleException(settleErrors.MINIMUM_PARTICIPANTS);
+      const id = key.toLowerCase();
+      try {
+        const result = await this.repository.insertRound(
+          client,
+          id,
+          groupId,
+          account.id,
+          name,
+          nowSeconds(),
+          ids,
+        );
+        if (!result.actor_active)
+          throw new SettleException(settleErrors.UNAUTHORIZED);
+        if (!result.is_member) throw missing();
+        if (!result.created)
+          throw new SettleException(settleErrors.GROUP_MEMBERS_REQUIRED);
+      } catch (error) {
+        if (
+          error &&
+          typeof error === 'object' &&
+          'code' in error &&
+          error.code === '23505' &&
+          'constraint' in error &&
+          error.constraint === 'rounds_pkey'
+        )
+          throw duplicateRound();
+        throw error;
+      }
+      captureAudience?.(ids);
+      return { id, roundId: id, status: 'RECORDING' as const, version: 1 };
+    });
   }
 
   private expenseFields(
@@ -767,74 +765,68 @@ export class SettleService {
   ) {
     if (!expenseId)
       return this.createExpense(access, key, roundId, body, captureAudience);
-    return this.prisma.withDatabaseConnection(
-      async (client, discardConnection) => {
-        const userId = (await this.authorization.requireAccount(client, access))
-          .id;
-        const digest = mutationDigest(key, { roundId, expenseId, ...body });
-        const round = (
-          await this.repository.findExpenseUpdate(
-            client,
-            roundId,
-            expenseId,
-            userId,
-            key,
-          )
-        ).rows[0];
-        const replay = mutationResult<MutationResult>(round, digest);
-        if (replay) return replay;
-        this.validateExpenseUpdate(round, userId, body.expectedVersion);
-        const previous = round.expense!;
-        const input = this.expenseInput(round, body, previous);
-        this.validateCurrencyTotals(round.totals, input, previous);
-        const maximum = minorLimit(MAX_ROUND_TOTAL_MAJOR, input.currency);
-        const amounts = input.participantIds.map(
-          (id) =>
-            input.assignedShares.find((share) => share.userId === id)
-              ?.assignedAmountMinor ?? null,
-        );
-        return this.prisma.withWriteLock(
+    return this.prisma.withDatabaseConnection(async (client) => {
+      const userId = (await this.authorization.requireAccount(client, access))
+        .id;
+      const digest = mutationDigest(key, { roundId, expenseId, ...body });
+      const round = (
+        await this.repository.findExpenseUpdate(
           client,
-          discardConnection,
-          async (client) => {
-            const result = await this.repository.updateExpense(
+          roundId,
+          expenseId,
+          userId,
+          key,
+        )
+      ).rows[0];
+      const replay = mutationResult<MutationResult>(round, digest);
+      if (replay) return replay;
+      this.validateExpenseUpdate(round, userId, body.expectedVersion);
+      const previous = round.expense!;
+      const input = this.expenseInput(round, body, previous);
+      this.validateCurrencyTotals(round.totals, input, previous);
+      const maximum = minorLimit(MAX_ROUND_TOTAL_MAJOR, input.currency);
+      const amounts = input.participantIds.map(
+        (id) =>
+          input.assignedShares.find((share) => share.userId === id)
+            ?.assignedAmountMinor ?? null,
+      );
+      return this.prisma.withWriteTransaction(async (client) => {
+        const result = await this.repository.updateExpense(
+          client,
+          expenseId,
+          roundId,
+          userId,
+          key,
+          digest,
+          input,
+          amounts,
+          round.version,
+          maximum.toString(),
+          nowSeconds(),
+        );
+        if (!result) {
+          // A concurrent winner may have committed this same key after our SELECT.
+          const current = (
+            await this.repository.findExpenseUpdate(
               client,
-              expenseId,
               roundId,
+              expenseId,
               userId,
               key,
-              digest,
-              input,
-              amounts,
-              round.version,
-              maximum.toString(),
-              nowSeconds(),
-            );
-            if (!result) {
-              // A concurrent winner may have committed this same key after our SELECT.
-              const current = (
-                await this.repository.findExpenseUpdate(
-                  client,
-                  roundId,
-                  expenseId,
-                  userId,
-                  key,
-                )
-              ).rows[0];
-              const replay = mutationResult<MutationResult>(current, digest);
-              if (replay) return replay;
-              this.validateExpenseUpdate(current, userId, body.expectedVersion);
-              throw new SettleException(settleErrors.STALE_ROUND);
-            }
-            captureAudience?.({
-              groupId: round.group_id,
-              userIds: round.user_ids,
-            });
-            return result;
-          },
-        );
-      },
-    );
+            )
+          ).rows[0];
+          const replay = mutationResult<MutationResult>(current, digest);
+          if (replay) return replay;
+          this.validateExpenseUpdate(current, userId, body.expectedVersion);
+          throw new SettleException(settleErrors.STALE_ROUND);
+        }
+        captureAudience?.({
+          groupId: round.group_id,
+          userIds: round.user_ids,
+        });
+        return result;
+      });
+    });
   }
 
   private validateEditableExpense(
