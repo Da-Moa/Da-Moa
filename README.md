@@ -7,7 +7,8 @@
   <p>
     <a href="#주요-기능">주요 기능</a> ·
     <a href=".github/INSTALL.md">Install</a> ·
-    <a href=".github/STACK.md">Stack</a>
+    <a href=".github/STACK.md">Stack</a> ·
+    <a href=".github/STRUCTURE.md">Structure</a>
   </p>
 </div>
 

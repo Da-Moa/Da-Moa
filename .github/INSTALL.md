@@ -23,6 +23,8 @@ cp .env.example .env.local
 
 이미 저장소가 있다면 해당 디렉터리에서 `npm ci`부터 실행합니다.
 
+의존성 보안 검사에는 `npm audit`를 사용합니다. `npm audit fix --force`는 NestJS·Prisma의 주요 버전을 서로 다르게 바꿀 수 있으므로 사용하지 않습니다. 호환 버전과 설치 스크립트 정책은 [의존성 관리](DEPENDENCIES.md)에 정리했습니다.
+
 ## 3. 환경 변수 설정
 
 [.env.example](../.env.example)을 기준으로 `.env.local`을 설정합니다.
@@ -81,6 +83,8 @@ MinIO 콘솔의 로컬 계정은 `da_moa_local` / `da_moa_minio_local`입니다.
 ```bash
 npm run dev
 ```
+
+`npm run dev`는 `nest start --watch`를 실행합니다. Nest가 같은 포트에서 API·Next 화면·WebSocket을 제공하며 백엔드 변경 시 자동으로 재시작합니다.
 
 [http://localhost:3000](http://localhost:3000)에 접속합니다. 카카오 로그인 후 계좌를 등록하고 모임과 회차를 만들어 지출을 기록할 수 있습니다. 영수증 워커는 서버 시작 시 자동으로 실행됩니다.
 
@@ -154,7 +158,7 @@ npm run test:integration
 ```bash
 export DATABASE_URL="$TEST_DATABASE_URL"
 npm run db:migrate
-npm run dev -- --port 3087
+PORT=3087 npm run dev
 ```
 
 Chrome을 별도 테스트 프로필로 실행합니다. macOS 예시는 다음과 같습니다.
@@ -168,9 +172,9 @@ Chrome을 별도 테스트 프로필로 실행합니다. macOS 예시는 다음�
 다른 터미널에서도 **같은** `TEST_DATABASE_URL`·`AUTH_JWT_SECRET`·`MINIO_*`를 설정한 뒤 실행합니다.
 
 ```bash
-node --import ./scripts/test-server-only.mjs --import tsx scripts/browser-check.mjs
+node --import tsx src/frontend/test/integration/browserCheck.mjs
 ```
 
-[검증 스크립트](../scripts/browser-check.mjs)는 기본 앱 주소 `http://localhost:3087`과 Chrome 디버깅 주소 `http://127.0.0.1:9223`을 사용합니다. `BROWSER_APP_ORIGIN`·`CHROME_DEBUG_ORIGIN`으로 변경할 수 있으며 결과 이미지는 시스템 임시 디렉터리의 `da-moa-browser-artifacts`에 저장합니다. 실제 카카오 로그인은 별도로 확인합니다.
+[검증 스크립트](../src/frontend/test/integration/browserCheck.mjs)는 기본 앱 주소 `http://localhost:3087`과 Chrome 디버깅 주소 `http://127.0.0.1:9223`을 사용합니다. `BROWSER_APP_ORIGIN`·`CHROME_DEBUG_ORIGIN`으로 변경할 수 있으며 결과 이미지는 시스템 임시 디렉터리의 `da-moa-browser-artifacts`에 저장합니다. 실제 카카오 로그인은 별도로 확인합니다.
 
 Next.js 개발 서버가 시작되면 `AGENTS.md`·`CLAUDE.md`를 자동 생성할 수 있습니다.
