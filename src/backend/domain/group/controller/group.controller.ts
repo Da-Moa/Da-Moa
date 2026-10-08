@@ -21,8 +21,7 @@ import {
 } from '../dto/req/group.request.dto';
 import { groupSuccess } from '../code/group.success.code';
 import { ApiSuccess } from '../../../global/apiPayload/apiResponse.interceptor';
-import { realtimeEnabled } from '../../../global/websocket';
-import { publishGroupInvalidation } from './group.invalidation';
+import { realtimeEnabled, publishGroupInvalidation } from '../../../global/util';
 @ApiSuccess(groupSuccess)
 @Controller()
 export class GroupController {

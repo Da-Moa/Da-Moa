@@ -55,19 +55,3 @@ export function createWebsocketUtil() {
   }
   return { upgrade, subscribe, publish, ping, close }
 }
-
-export async function publishInvalidations(publications) {
-  const byUser = new Map()
-  for (const { userIds, keys } of publications) for (const userId of userIds) {
-    const current = byUser.get(userId) ?? new Set()
-    keys.forEach(key => current.add(key)); byUser.set(userId, current)
-  }
-  if (!byUser.size) return
-  const response = await fetch(`http://127.0.0.1:${process.env.REALTIME_INTERNAL_PORT}/internal/realtime`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${process.env.REALTIME_INTERNAL_SECRET}`, 'content-type': 'application/json' },
-    body: JSON.stringify([...byUser].map(([userId, keys]) => ({ userId, keys: [...keys] }))),
-    signal: AbortSignal.timeout(5000),
-  })
-  if (!response.ok) throw new Error('Realtime invalidation failed')
-}

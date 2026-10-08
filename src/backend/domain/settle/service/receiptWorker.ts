@@ -6,9 +6,9 @@ import {
   withDatabaseConnection,
   putReceipt,
   deleteReceiptObject,
+  publishRoundInvalidation,
 } from '../../../global/util';
 import { MAX_RECEIPT_BYTES } from '../../../../shared/domain/settle/receipt';
-import { publishRoundInvalidation } from '../controller/settleInvalidation';
 import { finishReceiptStorage } from '../repository/settle.repository';
 
 export const receiptTasks: TaskList = {

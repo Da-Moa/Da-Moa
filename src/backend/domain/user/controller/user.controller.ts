@@ -33,8 +33,12 @@ import {
   CurrentUser,
   type AuthenticatedUser,
 } from '../../../global/auth';
-import { publishBankInvalidation } from './userInvalidation';
-import { publishDepartureInvalidation } from '../../group';
+import {
+  publishBankInvalidation,
+  publishDepartureInvalidation,
+} from '../../../global/util';
+import { getDepartureAudience } from '../../group';
+import { getBankSettlementAudience } from '../../settle';
 import { UserService } from '../service/user.service';
 
 @RequestBodyLimit(16384)
@@ -62,7 +66,9 @@ export class UserController {
       web.cookies.get(RETURN_TO_COOKIE_NAME)?.value,
     );
     const session = await this.operations.completeOnboarding(user, body);
-    after(() => publishBankInvalidation(session.userId));
+    after(() =>
+      publishBankInvalidation(session.userId, getBankSettlementAudience),
+    );
     const cookies = new HttpResponse(null);
     setAuthCookies(cookies, session);
     clearReturnToCookie(cookies);
@@ -82,7 +88,7 @@ export class UserController {
       idempotencyKey,
       body,
     );
-    after(() => publishBankInvalidation(result.id));
+    after(() => publishBankInvalidation(result.id, getBankSettlementAudience));
     return result;
   }
 
@@ -93,7 +99,9 @@ export class UserController {
     @Res({ passthrough: true }) response: ServerResponse,
   ) {
     const result = await this.operations.withdrawAccount(user);
-    after(() => publishDepartureInvalidation(result.groupIds));
+    after(() =>
+      publishDepartureInvalidation(result.groupIds, getDepartureAudience),
+    );
     const cookies = new HttpResponse(null);
     clearAuthCookies(cookies, { returnTo: true, oidc: true });
     copyResponseCookies(response, cookies);

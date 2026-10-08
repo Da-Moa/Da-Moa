@@ -39,11 +39,11 @@ import {
 } from '../../../global/apiPayload/apiResponse.interceptor';
 import { settleErrors } from '../code/settle.error.code';
 import { SettleException } from '../exception/settle.exception';
-import { realtimeEnabled } from '../../../global/websocket';
 import {
+  realtimeEnabled,
   publishRoundInvalidation,
   type RoundAudience,
-} from './settleInvalidation';
+} from '../../../global/util';
 import { readBytes } from '../../../global/util';
 import { MAX_RECEIPT_REQUEST_BYTES } from '../../../../shared/domain/settle';
 @ApiSuccess(settleSuccess)

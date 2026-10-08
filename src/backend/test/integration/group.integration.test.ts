@@ -13,7 +13,7 @@ import { acceptInvite, createGroup, createInvite, getGroup, getInvite, leaveGrou
 import { applyMigrations } from '../../../../scripts/migrations.mjs'
 import { completeTestOnboarding } from './bankTestSupport.ts'
 import { createRound, getRound, roundCommand } from '../../domain/settle/index.ts'
-import { publishGroupInvalidation } from '../../domain/group/index.ts'
+import { publishGroupInvalidation } from '../../global/util/invalidationUtil.ts'
 
 const database = process.env.TEST_DATABASE_URL
 if (!database || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(database).hostname) || !new URL(database).pathname.toLowerCase().includes('test')) throw new Error('TEST_DATABASE_URL must name an isolated local test database')

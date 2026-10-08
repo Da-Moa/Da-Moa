@@ -5,5 +5,4 @@ export { getUnfinishedUserRounds, unfinishedUserRoundsSql } from './repository/p
 
 export { addReceipt, checkExclusion, createRound, deleteExpense, excludeMember, getReceipt, getRound, getSettlement, listRounds, removeReceipt, roundCommand, saveExpense, setSettlementCheck } from './service/settle.service'
 export { unfinishedGroupParticipationSql } from './repository/participation.repository'
-export { publishRoundInvalidation } from './controller/settleInvalidation'
 export { getBankSettlementAudience } from './service/settle.service'

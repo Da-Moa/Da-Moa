@@ -70,8 +70,11 @@ test('domain controllers/services delegate SQL to repositories and Prisma owns b
 test('Nest owns backend routes and guards; transport/common UI retain their responsibilities', () => {
   assert.ok(!files.some(file => file.includes('/app/') && file.endsWith('/route.ts')))
   assert.match(readFileSync('src/backend/domain/app.module.ts', 'utf8'), /provide: APP_GUARD, useClass: JwtGuard/)
-  for (const file of ['src/backend/global/websocket/controller/wsInvalidationController.ts', 'src/backend/global/websocket/controller/wsController.mjs']) {
+  for (const file of ['src/backend/global/util/invalidationUtil.ts', 'src/backend/global/websocket/controller/wsController.mjs']) {
     assert.doesNotMatch(readFileSync(file, 'utf8'), /\.query\s*\(|FROM (users|rounds|group_members|settlement_transfers)/)
+  }
+  for (const target of reachable(resolve(root, 'backend/global/util/invalidationUtil.ts'))) {
+    assert.ok(!target.includes('/backend/domain/'), `Invalidation utility reaches domain: ${target}`)
   }
   assert.doesNotMatch(readFileSync('src/frontend/global/util/apiClient.ts', 'utf8'), /uuidV7|\/api\/groups|stale_round|bank_account_conflict/)
   for (const file of ['ui.tsx', 'hooks.ts']) assert.doesNotMatch(readFileSync(`src/frontend/global/util/${file}`, 'utf8'), /stale_round|bank_account_conflict|RoundStatus|onboardingCompletedAt/)
