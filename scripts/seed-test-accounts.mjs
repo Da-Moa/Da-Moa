@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import nextEnv from '@next/env'
-import { createDatabaseClient } from '../src/lib/db.ts'
-import { TEST_ACCOUNTS as accounts } from '../src/lib/test-accounts.ts'
+import { createDatabaseClient } from '../src/backend/global/database/db.ts'
+import { TEST_ACCOUNTS as accounts } from '../src/shared/testAccounts.ts'
 import { applyMigrations } from './migrations.mjs'
 
 nextEnv.loadEnvConfig(process.cwd())

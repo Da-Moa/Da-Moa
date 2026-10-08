@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import { connection } from 'next/server'
 import localFont from 'next/font/local'
-import { getKakaoRedirectUris } from '../Global/Auth/Backend'
+import { getKakaoRedirectUris } from '../shared/authUrls'
 import './globals.css'
 
 const presentationUI = localFont({

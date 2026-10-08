@@ -32,3 +32,6 @@ perf
 *.sln
 *.sw?
 test-account.txt
+
+# Generated Prisma client
+src/backend/generated/prisma/

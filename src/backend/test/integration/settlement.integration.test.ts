@@ -1,0 +1,695 @@
+import { before } from 'node:test'
+import { getPrismaClient } from '../../global/database/prisma.service.ts'
+import { addStoredReceipt as addReceipt } from './receiptWorkerTestSupport'
+import { uuidV7 } from '../../../shared/uuid.ts'
+import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
+import test from 'node:test'
+import sharp from 'sharp'
+import { readAccessToken, type AccessToken } from '../../global/auth/native.ts'
+import { updateBankAccount as saveBankAccount, withdrawAccount } from '../../domain/user/index.ts'
+import { signInKakao } from '../../global/auth/index.ts'
+import { getAccount } from '../../global/auth/service/authorization.service.ts'
+import { createDatabaseClient } from '../../global/database/db.ts'
+import { acceptInvite, createGroup, createInvite, getGroup, getInvite, leaveGroup, listGroups } from '../../domain/group/index.ts'
+import { checkExclusion, createRound, deleteExpense, excludeMember, getReceipt, getRound, getSettlement, listRounds, removeReceipt, roundCommand, saveExpense, setSettlementCheck } from '../../domain/settle/index.ts'
+import type { MutationResult } from '../../../shared/domainTypes.ts'
+import { CURRENCY_CODES } from '../../../shared/domain/settle/money.ts'
+import { applyMigrations } from '../../../../scripts/migrations.mjs'
+import { completeTestOnboarding as completeOnboarding, updateTestBankAccount as updateBankAccount } from './bankTestSupport.ts'
+
+const testUrl = process.env.TEST_DATABASE_URL
+if (!testUrl || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(testUrl).hostname) || !new URL(testUrl).pathname.toLowerCase().includes('test')) throw new Error('TEST_DATABASE_URL must name an isolated local test database')
+process.env.DATABASE_URL = testUrl
+process.env.AUTH_JWT_SECRET ||= 'integration-only-not-a-production-secret-0123456789'
+const key = () => randomUUID()
+const query = () => new URLSearchParams()
+const code = (expected: string) => (error: unknown) => (error as { code?: string }).code === expected
+
+async function member(name: string): Promise<AccessToken> {
+  const session = await signInKakao(`settlement-test:${key()}`, { displayName: name, email: null, profileImageUrl: null })
+  const full = await completeOnboarding(readAccessToken(session.accessToken), { bankName: `${name}은행`, accountHolder: name, accountNumber: '12340312345678' })
+  return readAccessToken(full.accessToken)!
+}
+
+test('settlement lifecycle, permissions, privacy, exact money, idempotency and database races', async t => {
+  const client = createDatabaseClient(testUrl)
+  await client.connect()
+  try {
+    await applyMigrations(client)
+    const a = await member('A'), b = await member('B'), c = await member('C'), d = await member('D'), outsider = await member('외부인')
+    const people = [a, b, c, d]
+    const g = await createGroup(a, uuidV7(), { name: '정산 통합 검증' })
+    const inviteKey = key()
+    const invite = await createInvite(a, inviteKey, g.id, {})
+    const token = invite.sharePath!.split('/').at(-1)!
+    for (const person of people.slice(1)) await acceptInvite(person, key(), token)
+    const get = (id: string, actor = a) => getRound(actor, id, query())
+    const command = async (id: string, action: string, actor = a) => roundCommand(actor, key(), id, action, { expectedVersion: (await get(id, actor)).version })
+    const expense = async (id: string, actor: AccessToken, payerId: string, amount: string, participantIds?: string[], currency: typeof CURRENCY_CODES[number] = 'KRW') => saveExpense(actor, key(), id, { currency,
+      description: '검증 지출', amount, payerId, splitMode: participantIds ? 'SELECTED' : 'ALL',
+      ...(participantIds ? { participantIds } : {}), expectedVersion: (await get(id, actor)).version,
+    })
+    const clearExpenses = async (id: string, actor = a) => {
+      for (const item of (await get(id, actor)).expenses) await deleteExpense(actor, key(), id, item.id, { expectedVersion: (await get(id, actor)).version })
+    }
+    const round = async (members = [a, b, c]) => createRound(a, uuidV7(), g.id, { name: '검증 회차', participantIds: members.map(m => m.userId) })
+
+    await t.test('explicit invites and membership do not auto-add new rounds; response loss has a recoverable invite flow', async () => {
+      assert.equal('currency' in (await getGroup(a, g.id)), false)
+      assert.equal((await getInvite(b, token)).isMember, true)
+      assert.equal('currency' in (await getInvite(b, token)), false)
+      await assert.rejects(acceptInvite(b, key(), token), code('group_already_member'))
+      const group = await getGroup(a, g.id)
+      assert.equal(group.members.length, 4)
+      assert.equal(group.members[0].userId, a.userId)
+      const replay = await createInvite(a, inviteKey, g.id, {})
+      assert.equal(replay.inviteId, invite.inviteId)
+      assert.equal(replay.linkUnavailable, true)
+      assert.equal(replay.sharePath, undefined)
+      const replacement = await createInvite(a, key(), g.id, { replaceInviteId: invite.inviteId })
+      await assert.rejects(getInvite(b, token), code('not_found'))
+      assert.ok(replacement.sharePath)
+      await assert.rejects(createGroup(a, uuidV7(), { name: 'x'.repeat(101) }), code('invalid_input'))
+      await assert.rejects(createRound(a, uuidV7(), g.id, { name: '한 명', participantIds: [a.userId] }), code('minimum_participants'))
+      await assert.rejects(createRound(b, uuidV7(), g.id, { name: '본인 누락', participantIds: [a.userId, c.userId] }), code('minimum_participants'))
+      await assert.rejects(createRound(a, uuidV7(), g.id, { name: '외부인', participantIds: [a.userId, outsider.userId] }), code('invalid_participants'))
+    })
+
+    await t.test('round lists search group and round names with existing filters and cursors', async () => {
+      const rounds = await Promise.all(['alpha 검색대상', 'beta 검색대상', 'gamma 검색대상'].map(name =>
+        createRound(a, uuidV7(), g.id, { name, participantIds: [a.userId, b.userId] })))
+      const first = await listRounds(a, new URLSearchParams({ q: '검색대상', status: 'RECORDING', limit: '2' }), g.id)
+      const second = await listRounds(a, new URLSearchParams({ q: '검색대상', status: 'RECORDING', limit: '2', cursor: first.nextCursor! }), g.id)
+      assert.equal(first.items.length, 2)
+      assert.equal(second.items.length, 1)
+      assert.equal(new Set([...first.items, ...second.items].map(item => item.id)).size, 3)
+      assert.deepEqual((await listRounds(a, new URLSearchParams({ q: ' ALPHA ' }), g.id)).items.map(item => item.id), [rounds[0].id])
+      assert.equal((await listRounds(a, new URLSearchParams({ q: '정산 통합' }), g.id)).items.length, 3)
+      assert.equal((await listRounds(a, new URLSearchParams({ q: '검색대상', status: 'COMPLETED' }), g.id)).items.length, 0)
+      await assert.rejects(listRounds(a, new URLSearchParams({ q: '   ' }), g.id), code('invalid_input'))
+      await assert.rejects(listRounds(a, new URLSearchParams({ q: 'x'.repeat(101) }), g.id), code('invalid_input'))
+      for (const round of rounds) await command(round.id, 'cancel')
+    })
+
+    await t.test('group search keeps its filter across cursor pages', async () => {
+      const created = await Promise.all(['Alpha 모임 검색', 'Beta 모임 검색', 'Gamma 모임 검색'].map(name => createGroup(a, uuidV7(), { name })))
+      const first = await listGroups(a, new URLSearchParams({ q: ' 모임 검색 ', limit: '2' }))
+      const second = await listGroups(a, new URLSearchParams({ q: '모임 검색', limit: '2', cursor: first.nextCursor! }))
+      assert.equal(first.items.length, 2)
+      assert.equal(second.items.length, 1)
+      assert.deepEqual(new Set([...first.items, ...second.items].map(item => item.id)), new Set(created.map(group => group.id)))
+      assert.equal(second.nextCursor, null)
+      assert.deepEqual((await listGroups(a, new URLSearchParams({ q: ' alpha ' }))).items.map(group => group.id), [created[0].id])
+      await assert.rejects(listGroups(a, new URLSearchParams({ q: '   ' })), code('invalid_input'))
+    })
+
+    await t.test('group list previews at most five active members', async () => {
+      const group = await createGroup(a, uuidV7(), { name: '참여 인원 미리보기 검증' })
+      const invite = await createInvite(a, key(), group.id, {})
+      const extras = [await member('목록 회원 1'), await member('목록 회원 2')]
+      for (const person of [b, c, d, ...extras]) await acceptInvite(person, key(), invite.sharePath!.split('/').at(-1)!)
+      const listed = (await listGroups(a, new URLSearchParams({ q: '참여 인원 미리보기 검증' }))).items[0]
+      assert.equal(listed.memberCount, 6)
+      assert.equal(listed.memberPreview.length, 5)
+      assert.deepEqual(listed.memberPreview.map(person => person.userId), (await getGroup(a, group.id)).members.slice(0, 5).map(person => person.userId))
+      await leaveGroup(extras[0], key(), group.id)
+      const remaining = (await listGroups(a, new URLSearchParams({ q: '참여 인원 미리보기 검증' }))).items[0]
+      assert.equal(remaining.memberCount, 5)
+      assert.equal(remaining.memberPreview.some(person => person.userId === extras[0].userId), false)
+    })
+
+    await t.test('any active member starts and manages a round they create', async () => {
+      const withoutGroupOwner = await createRound(b, uuidV7(), g.id, { name: '모임 생성자 없는 회차', participantIds: [b.userId, c.userId] })
+      await assert.rejects(get(withoutGroupOwner.id, a), code('not_found'))
+      await assert.rejects(leaveGroup(a, key(), g.id), code('unfinished_group_rounds'))
+      await command(withoutGroupOwner.id, 'cancel', b)
+      const ownerExclusion = await createRound(b, uuidV7(), g.id, { name: '모임 생성자 제외', participantIds: [a.userId, b.userId, c.userId] })
+      assert.equal((await checkExclusion(b, ownerExclusion.id, a.userId)).allowed, true)
+      assert.equal((await checkExclusion(b, ownerExclusion.id, b.userId)).reason, 'round_creator_cannot_leave')
+      await excludeMember(b, key(), ownerExclusion.id, a.userId, { expectedVersion: (await get(ownerExclusion.id, b)).version })
+      const membership = (await client.query(`SELECT rm.excluded_at,gm.left_at FROM round_members rm
+        JOIN rounds r ON r.id=rm.round_id
+        JOIN group_members gm ON gm.group_id=r.group_id AND gm.user_id=rm.user_id
+        WHERE rm.round_id=$1 AND rm.user_id=$2`, [ownerExclusion.id, a.userId])).rows[0]
+      assert.notEqual(membership.excluded_at, null)
+      assert.equal(membership.left_at, null)
+      assert.equal((await getGroup(b, g.id)).members.some(member => member.userId === a.userId), true)
+      const next = await createRound(b, uuidV7(), g.id, { name: '제외 후 다음 회차', participantIds: [a.userId, b.userId] })
+      await command(next.id, 'cancel', b)
+      await command(ownerExclusion.id, 'cancel', b)
+      const r = await createRound(b, uuidV7(), g.id, { name: 'B가 시작한 회차', participantIds: [a.userId, b.userId, c.userId] })
+      const starterView = await get(r.id, b), groupOwnerView = await get(r.id, a)
+      assert.equal(starterView.creatorId, b.userId)
+      assert.equal(starterView.groupCreatorId, a.userId)
+      assert.equal(starterView.isCreator, true)
+      assert.equal(groupOwnerView.isCreator, false)
+      await assert.rejects(roundCommand(a, key(), r.id, 'cancel', { expectedVersion: groupOwnerView.version }), code('forbidden'))
+      const saved = await expense(r.id, a, a.userId, '3000')
+      await saveExpense(b, key(), r.id, { description: '회차 생성자가 수정', amount: '6000', expectedVersion: saved.version }, saved.id)
+      assert.equal((await get(r.id, b)).expenses[0].authorId, a.userId)
+      const byC = await expense(r.id, c, c.userId, '3000')
+      await assert.rejects(saveExpense(a, key(), r.id, { description: '모임 생성자의 수정 시도', amount: '6000', expectedVersion: byC.version }, byC.id), code('forbidden'))
+      const related = await checkExclusion(b, r.id, a.userId)
+      assert.equal(related.reason, 'member_exclusion_blocked')
+      assert.equal(related.expenses[0].id, saved.id)
+      assert.equal((await checkExclusion(b, r.id, b.userId)).reason, 'round_creator_cannot_leave')
+      await assert.rejects(command(r.id, 'cancel', b), code('round_has_expenses'))
+      await clearExpenses(r.id, b)
+      await command(r.id, 'cancel', b)
+    })
+
+    await t.test('participants leave without unfinished participation and creators close groups after every round completes', async () => {
+      const leaving = await createGroup(a, uuidV7(), { name: '나가기 검증' })
+      const invitation = await createInvite(a, key(), leaving.id, {})
+      const invitationToken = invitation.sharePath!.split('/').at(-1)!
+      await acceptInvite(b, key(), invitationToken)
+      const past = await createRound(a, uuidV7(), leaving.id, { name: '과거 회차', participantIds: [a.userId, b.userId] })
+      await assert.rejects(leaveGroup(b, key(), leaving.id), code('unfinished_rounds'))
+      await assert.rejects(leaveGroup(a, key(), leaving.id), code('unfinished_group_rounds'))
+      await saveExpense(a, key(), past.id, { currency: 'KRW', description: '완료할 지출', amount: '2', payerId: a.userId, splitMode: 'ALL', expectedVersion: 1 })
+      for (const action of ['confirm', 'send', 'force-complete']) await roundCommand(a, key(), past.id, action, { expectedVersion: (await getRound(a, past.id, query())).version })
+      await leaveGroup(b, key(), leaving.id)
+      await assert.rejects(getGroup(b, leaving.id), code('not_found'))
+      assert.equal((await listGroups(b, query())).items.some(group => group.id === leaving.id), false)
+      assert.equal((await getRound(b, past.id, query())).id, past.id)
+      await leaveGroup(a, key(), leaving.id)
+      await assert.rejects(getGroup(a, leaving.id), code('not_found'))
+      assert.equal((await getRound(a, past.id, query())).groupName, '나가기 검증')
+      await assert.rejects(getInvite(a, invitationToken), code('not_found'))
+
+      const empty = await createGroup(c, uuidV7(), { name: '삭제할 빈 모임' })
+      const emptyInvite = await createInvite(c, key(), empty.id, {})
+      await acceptInvite(d, key(), emptyInvite.sharePath!.split('/').at(-1)!)
+      const deletionKey = key()
+      assert.equal((await leaveGroup(c, deletionKey, empty.id)).id, empty.id)
+      assert.equal((await leaveGroup(c, deletionKey, empty.id)).id, empty.id)
+      await assert.rejects(getGroup(c, empty.id), code('not_found'))
+      await assert.rejects(getGroup(d, empty.id), code('not_found'))
+      await assert.rejects(getInvite(d, emptyInvite.sharePath!.split('/').at(-1)!), code('not_found'))
+    })
+
+    await t.test('empty rounds, author/round-creator edits, partial edits and immutable completed data', async () => {
+      const r = await round()
+      await assert.rejects(command(r.id, 'confirm'), code('empty_expenses'))
+      const saved = await expense(r.id, c, b.userId, '6000')
+      const first = await get(r.id)
+      assert.equal(first.pendingRemainders[0]?.amountMinor, '0')
+      assert.deepEqual(first.transfers, [{ currency: 'KRW', senderId: a.userId, receiverId: b.userId, amountMinor: '2000' }])
+      const update = { description: '생성자가 수정', amount: '9000', expectedVersion: first.version }
+      await assert.rejects(saveExpense(b, key(), r.id, update, saved.id), code('forbidden'))
+      await assert.rejects(saveExpense(a, key(), r.id, { ...update, description: null }, saved.id), code('invalid_input'))
+      await saveExpense(a, key(), r.id, update, saved.id)
+      const changed = await get(r.id)
+      assert.equal(changed.expenses[0].authorId, c.userId)
+      assert.equal(changed.expenses[0].payerId, b.userId)
+      assert.deepEqual(changed.transfers, [{ currency: 'KRW', senderId: a.userId, receiverId: b.userId, amountMinor: '3000' }])
+      await assert.rejects(get(r.id, outsider), code('not_found'))
+      await command(r.id, 'confirm')
+      await assert.rejects(deleteExpense(a, key(), r.id, saved.id, { expectedVersion: (await get(r.id)).version }), code('invalid_round_state'))
+      await command(r.id, 'reopen')
+      await command(r.id, 'confirm')
+      await command(r.id, 'send')
+      const sb = await getSettlement(b, r.id), sa = await getSettlement(a, r.id), sc = await getSettlement(c, r.id)
+      assert.equal(sb.balances[0]?.balanceMinor, '-6000')
+      assert.equal(sa.balances[0]?.balanceMinor, '3000')
+      assert.equal(sc.balances[0]?.balanceMinor, '3000')
+      assert.equal(sa.outgoing[0].receiverId, b.userId)
+      assert.equal(sa.outgoing[0].amountMinor, '3000')
+      assert.equal(sa.outgoing[0].account?.verifiedAt, null)
+      assert.equal(sb.incoming.length, 2)
+      assert.equal(sb.outgoing.length, 0)
+      assert.equal(JSON.stringify(sa).includes('D은행'), false)
+      const detailA = await get(r.id), detailB = await get(r.id, b), detailC = await get(r.id, c)
+      assert.deepEqual(detailA.transfers, [{ currency: 'KRW', senderId: a.userId, receiverId: b.userId, amountMinor: '3000' }])
+      assert.deepEqual(detailB.transfers, [
+        { currency: 'KRW', senderId: a.userId, receiverId: b.userId, amountMinor: '3000' },
+        { currency: 'KRW', senderId: c.userId, receiverId: b.userId, amountMinor: '3000' },
+      ].sort((left, right) => left.senderId.localeCompare(right.senderId)))
+      assert.deepEqual(detailC.transfers, [{ currency: 'KRW', senderId: c.userId, receiverId: b.userId, amountMinor: '3000' }])
+      for (const [viewer, detail] of [[a.userId, detailA], [b.userId, detailB], [c.userId, detailC]] as const) {
+        assert.ok(detail.transfers.every(row => row.senderId === viewer || row.receiverId === viewer))
+      }
+      await command(r.id, 'force-complete')
+      for (const action of ['reopen', 'cancel', 'confirm', 'send']) await assert.rejects(command(r.id, action), code('invalid_round_state'))
+      await updateBankAccount(b, key(), { bankName: '최신 은행', accountNumber: '12340312345679', accountHolder: 'B 최신' })
+      const newest = await getSettlement(a, r.id)
+      assert.equal(newest.outgoing[0].account?.accountNumber, '12340312345679')
+      assert.equal(newest.outgoing[0].account?.formattedAccountNumber, '123403-12-345679')
+      assert.equal(newest.outgoing[0].amountMinor, '3000')
+      const current = await getAccount(b)
+      await saveBankAccount(b, key(), { bankCode: '004', accountNumber: '12340312345670', accountHolder: 'B 최신', expectedBankVersion: current.bankVersion })
+      const unverified = await getSettlement(a, r.id)
+      assert.equal(unverified.outgoing[0].account?.accountNumber, '12340312345670')
+      assert.equal(unverified.outgoing[0].account?.formattedAccountNumber, '123403-12-345670')
+      assert.equal(unverified.outgoing[0].account?.verifiedAt, null)
+      assert.equal(unverified.outgoing[0].amountMinor, '3000')
+      assert.equal((await get(r.id)).expenses[0].amountMinor, '9000')
+    })
+
+    await t.test('payer outside selected burden retains all receivables after round exclusion', async () => {
+      const r = await round([a, b, c, d])
+      await expense(r.id, c, b.userId, '6000', [a.userId, c.userId])
+      const check = await checkExclusion(a, r.id, b.userId)
+      assert.equal(check.allowed, true)
+      await excludeMember(a, key(), r.id, b.userId, { expectedVersion: (await get(r.id)).version })
+      assert.equal((await getGroup(a, g.id)).members.some(m => m.userId === b.userId), true)
+      assert.equal((await get(r.id, b)).members.find(m => m.userId === b.userId)?.excludedAt !== null, true)
+      await assert.rejects(withdrawAccount(b), code('unfinished_rounds'))
+      await command(r.id, 'confirm'); await command(r.id, 'send')
+      const result = await getSettlement(b, r.id)
+      assert.equal(result.balances[0]?.balanceMinor, '-6000')
+      assert.deepEqual(result.incoming.map(x => x.amountMinor), ['3000', '3000'])
+      assert.equal(result.checkRequired, true, 'an excluded payer with receivables must still confirm')
+      assert.equal(result.requiredCount, 1)
+      assert.deepEqual(result.confirmations.map(member => ({ userId: member.userId, checkedAt: member.checkedAt })), [{ userId: b.userId, checkedAt: null }])
+      assert.ok(result.incoming.every(transfer => transfer.receivedAt === null))
+      await assert.rejects(command(r.id, 'complete'), code('pending_settlement_checks'))
+      const [first, second] = result.incoming
+      const firstSender = first.senderId === a.userId ? a : c
+      assert.equal((await getSettlement(firstSender, r.id)).outgoing.some(transfer => transfer.receiverId === b.userId), true)
+      const firstCheck = await setSettlementCheck(b, key(), r.id, { expectedVersion: result.version, checked: true, currency: 'KRW', senderId: first.senderId })
+      assert.equal(firstCheck.version, result.version, 'checks must not bump the round version')
+      const partial = await getSettlement(b, r.id)
+      assert.notEqual(partial.incoming.find(transfer => transfer.senderId === first.senderId)?.receivedAt, null)
+      assert.equal(partial.incoming.find(transfer => transfer.senderId === second.senderId)?.receivedAt, null)
+      assert.equal(partial.confirmations[0].checkedAt, null, 'a receiver remains pending until every incoming transfer is checked')
+      assert.equal((await getSettlement(firstSender, r.id)).outgoing.some(transfer => transfer.receiverId === b.userId), false)
+      await setSettlementCheck(b, key(), r.id, { expectedVersion: result.version, checked: false, currency: 'KRW', senderId: first.senderId })
+      assert.equal((await getSettlement(firstSender, r.id)).outgoing.some(transfer => transfer.receiverId === b.userId), true)
+      await setSettlementCheck(b, key(), r.id, { expectedVersion: result.version, checked: true, currency: 'KRW', senderId: first.senderId })
+      await setSettlementCheck(b, key(), r.id, { expectedVersion: result.version, checked: true, currency: 'KRW', senderId: second.senderId })
+      const confirmed = await getSettlement(a, r.id)
+      assert.equal(confirmed.checkedCount, 1)
+      assert.equal(confirmed.allChecked, true)
+      await command(r.id, 'complete')
+      assert.ok((await getSettlement(a, r.id)).confirmations.every(member => member.checkedAt !== null), 'completed rounds preserve every check')
+      assert.equal((await listRounds(b, query())).items.some(x => x.id === r.id), true)
+    })
+
+    await t.test('participants toggle their own check and only the creator can force completion', async () => {
+      const r = await round([a, b, c])
+      await expense(r.id, a, a.userId, '3000')
+      await command(r.id, 'confirm'); await command(r.id, 'send')
+      const initial = await getSettlement(a, r.id)
+      assert.deepEqual({ checkedAt: initial.checkedAt, checkRequired: initial.checkRequired, checkedCount: initial.checkedCount, requiredCount: initial.requiredCount, allChecked: initial.allChecked },
+        { checkedAt: null, checkRequired: true, checkedCount: 0, requiredCount: 1, allChecked: false })
+      await assert.rejects(setSettlementCheck(outsider, key(), r.id, { expectedVersion: initial.version, checked: true }), code('not_found'))
+      await assert.rejects(setSettlementCheck(a, key(), r.id, { expectedVersion: initial.version, checked: true, currency: 'KRW', senderId: outsider.userId }), code('forbidden'))
+      const requestKey = key()
+      await setSettlementCheck(a, requestKey, r.id, { expectedVersion: initial.version, checked: true })
+      const checkedAt = (await getSettlement(a, r.id)).checkedAt
+      await assert.rejects(setSettlementCheck(a, requestKey, r.id, { expectedVersion: initial.version, checked: true }), code('not_found'))
+      await assert.rejects(setSettlementCheck(a, key(), r.id, { expectedVersion: initial.version, checked: true }), code('not_found'))
+      assert.equal((await getSettlement(a, r.id)).checkedAt, checkedAt, 'repeated checks must preserve the first timestamp')
+      await setSettlementCheck(a, key(), r.id, { expectedVersion: initial.version, checked: false })
+      assert.equal((await getSettlement(a, r.id)).checkedAt, null)
+      await assert.rejects(roundCommand(b, key(), r.id, 'force-complete', { expectedVersion: initial.version }), code('forbidden'))
+      await roundCommand(a, key(), r.id, 'force-complete', { expectedVersion: initial.version })
+      await assert.rejects(setSettlementCheck(a, key(), r.id, { expectedVersion: initial.version + 1, checked: true }), code('invalid_round_state'))
+      const forced = await getSettlement(a, r.id)
+      assert.equal(forced.allChecked, false)
+      assert.ok(forced.confirmations.every(member => member.checkedAt === null), 'forced completion preserves pending confirmations')
+
+      const zero = await round([a, b])
+      await expense(zero.id, a, a.userId, '100', [a.userId])
+      await command(zero.id, 'confirm'); await command(zero.id, 'send')
+      const noTransfers = await getSettlement(a, zero.id)
+      assert.deepEqual({ requiredCount: noTransfers.requiredCount, allChecked: noTransfers.allChecked, confirmations: noTransfers.confirmations }, { requiredCount: 0, allChecked: true, confirmations: [] })
+      await command(zero.id, 'complete')
+    })
+
+    await t.test('creator, payer-burden and selected burden exclusions block atomically; ALL recalculates', async () => {
+      const r = await round([a, b, c, d])
+      const e1 = await expense(r.id, a, b.userId, '6000')
+      const e2 = await expense(r.id, a, a.userId, '3000', [c.userId, d.userId])
+      for (const target of [a.userId, b.userId, c.userId]) {
+        const before = await get(r.id)
+        await assert.rejects(excludeMember(a, key(), r.id, target, { expectedVersion: before.version }), code('member_exclusion_blocked'))
+        assert.deepEqual(await get(r.id), before)
+      }
+      assert.equal((await checkExclusion(a, r.id, c.userId)).expenses[0].id, e2.id)
+      await deleteExpense(a, key(), r.id, e2.id, { expectedVersion: (await get(r.id)).version })
+      await excludeMember(a, key(), r.id, c.userId, { expectedVersion: (await get(r.id)).version })
+      const after = await get(r.id)
+      assert.equal(after.expenses.find(e => e.id === e1.id)!.participantIds.length, 3)
+      assert.equal(after.expenses[0].participantIds.includes(c.userId), false)
+      await command(r.id, 'confirm'); await command(r.id, 'send')
+      const excludedSettlement = await getSettlement(c, r.id)
+      assert.equal(excludedSettlement.checkRequired, false)
+      assert.equal(excludedSettlement.requiredCount, 1)
+      await assert.rejects(setSettlementCheck(c, key(), r.id, { expectedVersion: excludedSettlement.version, checked: true }), code('forbidden'))
+      await command(r.id, 'force-complete')
+      const two = await round([a, c])
+      await assert.rejects(excludeMember(a, key(), two.id, c.userId, { expectedVersion: 1 }), code('minimum_participants'))
+      await command(two.id, 'cancel')
+    })
+
+    await t.test('receipt storage, authorization, failed upload preservation and nonempty cancel rejection', async () => {
+      const r = await round()
+      const e = await expense(r.id, b, b.userId, '10')
+      const sources = await Promise.all(['#f33', '#3f3', '#33f'].map(async background => ({ mimeType: 'image/avif', content: await sharp({ create: { width: 2, height: 2, channels: 3, background } }).avif().toBuffer() })))
+      await assert.rejects(addReceipt(c, key(), r.id, e.id, e.version!, sources[1].content, 'image/avif'), code('forbidden'))
+      await assert.rejects(addReceipt(b, key(), r.id, e.id, e.version!, Buffer.from('<svg/>'), 'image/svg+xml'), code('unsupported_receipt_type'))
+      await assert.rejects(addReceipt(b, key(), r.id, e.id, e.version!, sources[1].content, 'image/jpeg'), code('unsupported_receipt_type'))
+      await assert.rejects(addReceipt(b, key(), r.id, e.id, e.version!, sources[0].content.subarray(0, 32), 'image/avif'), code('unsupported_receipt_type'))
+      const uploaded: MutationResult[] = []
+      for (const source of sources) {
+        const expectedVersion = (await get(r.id)).version, uploadKey = key()
+        const receipt = await addReceipt(b, uploadKey, r.id, e.id, expectedVersion, source.content, source.mimeType)
+        const stored = await getReceipt(a, receipt.id)
+        assert.equal(stored.mimeType, 'image/avif')
+        assert.equal((await sharp(stored.content).metadata()).mediaType, 'image/avif')
+        assert.deepEqual(Buffer.from(stored.content), source.content)
+        const metadata = (await get(r.id)).expenses[0].receipts.find(item => item.id === receipt.id)
+        assert.equal(metadata?.mimeType, 'image/avif')
+        assert.equal(metadata?.byteSize, stored.content.length)
+        const persisted = (await client.query('SELECT object_key FROM expense_receipts WHERE id=$1', [receipt.id])).rows[0]
+        assert.match(persisted.object_key, /^receipts\/[\w-]+\/[\w-]+\.avif$/)
+        assert.equal((await addReceipt(b, uploadKey, r.id, e.id, expectedVersion, source.content, source.mimeType)).id, receipt.id)
+        uploaded.push(receipt)
+      }
+      const receipt = uploaded[1]
+      await assert.rejects(getReceipt(outsider, receipt.id), code('not_found'))
+      await command(r.id, 'confirm')
+      await assert.rejects(addReceipt(b, key(), r.id, e.id, (await get(r.id)).version, sources[1].content, sources[1].mimeType), code('invalid_round_state'))
+      await command(r.id, 'reopen')
+      await removeReceipt(a, key(), r.id, e.id, receipt.id, { expectedVersion: (await get(r.id)).version })
+      await assert.rejects(getReceipt(a, receipt.id), code('not_found'))
+      const keep = await addReceipt(b, key(), r.id, e.id, (await get(r.id)).version, sources[1].content, sources[1].mimeType)
+      await assert.rejects(command(r.id, 'cancel'), code('round_has_expenses'))
+      assert.equal((await getReceipt(a, keep.id)).mimeType, 'image/avif')
+      await clearExpenses(r.id)
+      const cancelKey = key(), payload = { expectedVersion: (await get(r.id)).version }
+      await roundCommand(a, cancelKey, r.id, 'cancel', payload)
+      assert.equal((await roundCommand(a, cancelKey, r.id, 'cancel', payload)).id, r.id)
+      await assert.rejects(get(r.id), code('not_found'))
+      assert.equal((await client.query('SELECT count(*)::int AS n FROM expense_receipts WHERE id=$1', [keep.id])).rows[0].n, 0)
+    })
+
+    await t.test('custom shares validate exact totals atomically and survive partial edits and mode changes', async () => {
+      for (const currency of ['KRW', 'JPY', 'USD']) {
+        const r = await createRound(a, uuidV7(), g.id, { name: '개별 부담금 검증', participantIds: [a.userId, b.userId] })
+        const unit = (value: number) => currency === 'USD' ? `0.${value}` : String(value)
+        const customShares = [{ userId: a.userId, amount: unit(10) }, { userId: b.userId, amount: unit(20) }]
+        const body = { currency: currency, description: '개별 지출', amount: unit(30), payerId: b.userId, splitMode: 'CUSTOM', customShares, expectedVersion: 1 }
+        const empty = await get(r.id)
+        const failedKey = key()
+        await assert.rejects(saveExpense(a, failedKey, r.id, { ...body, amount: unit(40) }), code('custom_share_total_mismatch'))
+        for (const amount of [0, '', '0', '-1', '1e1', currency === 'USD' ? '0.101' : '10.1']) {
+          // Keep currency precision errors independent of the pre-transaction total check.
+          const total = typeof amount === 'string' && amount.includes('.') ? amount : body.amount
+          await assert.rejects(saveExpense(a, key(), r.id, { ...body, amount: total, customShares: [{ userId: a.userId, amount }] }), code('invalid_amount'))
+        }
+        for (const shares of [[], [customShares[0], customShares[0]], [{ userId: outsider.userId, amount: unit(30) }]]) {
+          await assert.rejects(saveExpense(a, key(), r.id, { ...body, customShares: shares }), code('invalid_participants'))
+        }
+        await assert.rejects(saveExpense(a, key(), r.id, { ...body, participantIds: [a.userId] }), code('invalid_input'))
+        for (const splitMode of ['ALL', 'SELECTED']) {
+          await assert.rejects(saveExpense(a, key(), r.id, { ...body, splitMode, participantIds: [a.userId] }), code('invalid_input'))
+        }
+        assert.deepEqual(await get(r.id), empty)
+        assert.equal((await client.query('SELECT count(*)::int AS n FROM mutation_requests WHERE request_key=$1', [failedKey])).rows[0].n, 0)
+        const saved = await saveExpense(a, failedKey, r.id, body)
+        assert.equal((await saveExpense(a, failedKey, r.id, body)).id, saved.id)
+        const original = await get(r.id)
+        const expected = { [a.userId]: '10', [b.userId]: '20' }
+        assert.deepEqual(Object.fromEntries(original.expenses[0].shares.map(share => [share.userId, share.assignedAmountMinor])), expected)
+        assert.ok(original.expenses[0].shares.every(share => share.amountMinor === null))
+        assert.equal(original.expenses[0].remainderUnits, 0)
+        assert.deepEqual(original.transfers, [{ currency, senderId: a.userId, receiverId: b.userId, amountMinor: '10' }])
+
+        for (const change of [{ amount: unit(40) }, { customShares: [{ userId: a.userId, amount: unit(10) }] }]) {
+          await assert.rejects(saveExpense(a, key(), r.id, { ...change, expectedVersion: original.version }, saved.id), code('custom_share_total_mismatch'))
+          assert.deepEqual(await get(r.id), original)
+        }
+        await saveExpense(a, key(), r.id, { description: '이름만 수정', expectedVersion: original.version }, saved.id)
+        assert.deepEqual((await get(r.id)).expenses[0].shares, original.expenses[0].shares)
+        await saveExpense(a, key(), r.id, { amount: unit(40), customShares: [{ userId: a.userId, amount: unit(15) }, { userId: b.userId, amount: unit(25) }], expectedVersion: (await get(r.id)).version }, saved.id)
+        assert.equal((await get(r.id)).expenses[0].amountMinor, '40')
+
+        for (const splitMode of ['SELECTED', 'ALL']) {
+          await saveExpense(a, key(), r.id, { splitMode, ...(splitMode === 'SELECTED' ? { participantIds: [a.userId] } : {}), expectedVersion: (await get(r.id)).version }, saved.id)
+          const equal = await get(r.id)
+          assert.equal(equal.expenses[0].splitMode, splitMode)
+          assert.ok(equal.expenses[0].shares.every(share => share.assignedAmountMinor === null))
+          await assert.rejects(saveExpense(a, key(), r.id, { splitMode: 'CUSTOM', expectedVersion: equal.version }, saved.id), code('invalid_participants'))
+          await saveExpense(a, key(), r.id, { splitMode: 'CUSTOM', amount: unit(30), customShares, expectedVersion: equal.version }, saved.id)
+        }
+        await command(r.id, 'confirm'); await command(r.id, 'send')
+        assert.equal((await getSettlement(a, r.id)).finalized, true, 'custom allocation needs no remainder draw')
+        assert.deepEqual(Object.fromEntries((await get(r.id)).expenses[0].shares.map(share => [share.userId, share.amountMinor])), expected)
+        await command(r.id, 'force-complete')
+      }
+    })
+
+    await t.test('custom and equal allocations share previews and finalization without redrawing original burdens', async () => {
+      const r = await round([a, b, c, d])
+      const customShares = [{ userId: a.userId, amount: '1' }, { userId: c.userId, amount: '4' }]
+      const saved = await saveExpense(a, key(), r.id, { currency: 'KRW', description: '개별 부담', amount: '5', payerId: b.userId, splitMode: 'CUSTOM', customShares, expectedVersion: 1 })
+      await expense(r.id, a, b.userId, '6', [a.userId, c.userId])
+      const equal = await expense(r.id, a, b.userId, '10')
+      const before = await get(r.id)
+      const custom = before.expenses.find(item => item.id === saved.id)!
+      const blocked = await checkExclusion(a, r.id, c.userId)
+      assert.equal(blocked.allowed, false)
+      assert.equal(blocked.expenses.find(item => item.id === saved.id)?.reason, 'custom_participant')
+      await assert.rejects(excludeMember(a, key(), r.id, c.userId, { expectedVersion: before.version }), code('member_exclusion_blocked'))
+      assert.deepEqual(await get(r.id), before)
+      await excludeMember(a, key(), r.id, d.userId, { expectedVersion: before.version })
+      const excluded = await get(r.id)
+      assert.deepEqual(excluded.expenses.find(item => item.id === saved.id), custom)
+      await assert.rejects(saveExpense(a, key(), r.id, { customShares: [{ userId: d.userId, amount: '5' }], expectedVersion: excluded.version }, saved.id), code('invalid_participants'))
+      const first = await getRound(a, r.id, new URLSearchParams('limit=1'))
+      const second = await getRound(a, r.id, new URLSearchParams({ limit: '1', cursor: first.expensesNextCursor! }))
+      assert.equal(first.totals[0]?.totalMinor, '21')
+      assert.equal(first.pendingRemainders[0]?.amountMinor, '1')
+      assert.deepEqual(first.transfers, [{ currency: 'KRW', senderId: a.userId, receiverId: b.userId, amountMinor: '7' }])
+      assert.deepEqual(second.transfers, first.transfers, 'preview must include expenses outside the displayed page')
+      await command(r.id, 'confirm')
+      assert.deepEqual((await get(r.id)).expenses.find(item => item.id === saved.id)?.shares, custom.shares)
+      await command(r.id, 'reopen')
+      assert.deepEqual((await get(r.id)).expenses.find(item => item.id === saved.id)?.shares, custom.shares)
+      await command(r.id, 'confirm'); await command(r.id, 'send')
+      assert.equal((await getSettlement(a, r.id)).finalized, false)
+      assert.ok((await get(r.id)).expenses.every(item => item.shares.every(share => share.amountMinor === null)))
+      await command(r.id, 'draw')
+      const final = await get(r.id)
+      const finalCustom = final.expenses.find(item => item.id === saved.id)!
+      assert.ok(finalCustom.shares.every(share => share.amountMinor === share.assignedAmountMinor && share.receivedRemainder === false))
+      assert.equal(final.expenses.find(item => item.id === equal.id)!.shares.filter(share => share.receivedRemainder).length, 1)
+      assert.equal(final.expenses.flatMap(item => item.shares).reduce((sum, share) => sum + BigInt(share.amountMinor!), 0n), 21n)
+      const myBurden = final.expenses.flatMap(item => item.shares).filter(share => share.userId === a.userId).reduce((sum, share) => sum + BigInt(share.amountMinor!), 0n)
+      assert.equal((await getSettlement(a, r.id)).balances[0]?.balanceMinor, myBurden.toString())
+      await command(r.id, 'draw')
+      assert.deepEqual(await get(r.id), final)
+      await command(r.id, 'force-complete')
+    })
+
+    await t.test('one random draw, deferred finalization, idempotency and rollback after share writes', async () => {
+      const r = await round()
+      const submission = key(), body = { currency: 'KRW', description: '나머지', amount: '10000', payerId: b.userId, splitMode: 'ALL', expectedVersion: 1 }
+      const e = await saveExpense(a, submission, r.id, body)
+      const recording = await get(r.id)
+      assert.equal(recording.expenses[0].baseShareMinor, '3333')
+      assert.equal(recording.expenses[0].remainderUnits, 1)
+      assert.ok(recording.expenses[0].shares.every(s => s.amountMinor === null))
+      assert.equal((await saveExpense(a, submission, r.id, body)).id, e.id)
+      await assert.rejects(saveExpense(a, submission, r.id, { ...body, amount: '10001' }), code('idempotency_conflict'))
+      await command(r.id, 'confirm'); await command(r.id, 'send')
+      const pending = await getSettlement(a, r.id)
+      assert.equal(pending.finalized, false); assert.equal(pending.sharePath, null); assert.equal(pending.balances.length, 0)
+      assert.equal(pending.confirmations.length, 0, 'confirmation targets are derived only after transfers are finalized')
+      assert.equal(pending.allChecked, true)
+      await assert.rejects(command(r.id, 'complete'), code('invalid_round_state'))
+      // Fail after final shares/balances have been written to prove the whole transaction rolls back.
+      const suffix = key().replaceAll('-', ''), fn = `fail_${suffix}`, trigger = `trip_${suffix}`
+      await client.query(`CREATE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.round_id='${r.id}' THEN RAISE EXCEPTION 'integration failure'; END IF; RETURN NEW; END $$`)
+      await client.query(`CREATE TRIGGER ${trigger} BEFORE INSERT ON settlement_transfers FOR EACH ROW EXECUTE FUNCTION ${fn}()`)
+      const drawKey = key(), drawBody = { expectedVersion: pending.version }
+      try {
+        await assert.rejects(roundCommand(a, drawKey, r.id, 'draw', drawBody))
+        assert.equal((await getSettlement(a, r.id)).finalized, false)
+        assert.equal((await client.query('SELECT count(*)::int AS n FROM settlement_balances WHERE round_id=$1', [r.id])).rows[0].n, 0)
+        assert.equal((await client.query('SELECT count(*)::int AS n FROM expense_shares WHERE round_id=$1 AND final_amount_minor IS NOT NULL', [r.id])).rows[0].n, 0)
+        assert.equal((await client.query('SELECT count(*)::int AS n FROM mutation_requests WHERE request_key=$1', [drawKey])).rows[0].n, 0)
+      } finally {
+        await client.query(`DROP TRIGGER ${trigger} ON settlement_transfers`)
+        await client.query(`DROP FUNCTION ${fn}()`)
+      }
+      const draws = await Promise.all([roundCommand(a, drawKey, r.id, 'draw', drawBody), roundCommand(a, key(), r.id, 'draw', drawBody)])
+      assert.equal(draws[0].version, draws[1].version)
+      const final = await get(r.id), shares = final.expenses[0].shares
+      assert.equal(shares.reduce((total, s) => total + BigInt(s.amountMinor!), 0n), 10000n)
+      assert.equal(shares.filter(s => s.receivedRemainder).length, 1)
+      const before = await getSettlement(a, r.id)
+      await roundCommand(a, drawKey, r.id, 'draw', drawBody)
+      assert.deepEqual(await getSettlement(a, r.id), before)
+      await command(r.id, 'force-complete')
+    })
+
+    await t.test('racing edits/confirm and cancel/confirm cannot both commit, snapshots and pages stay coherent', async () => {
+      const r = await round()
+      const e = await expense(r.id, a, a.userId, '6000')
+      const results = await Promise.allSettled([
+        saveExpense(a, key(), r.id, { description: '동시 수정', expectedVersion: e.version }, e.id),
+        roundCommand(a, key(), r.id, 'confirm', { expectedVersion: e.version }),
+      ])
+      assert.equal(results.filter(x => x.status === 'fulfilled').length, 1)
+      const current = await get(r.id)
+      if (current.status === 'CONFIRMED') await command(r.id, 'reopen')
+      const v = (await get(r.id)).version
+      const cancelled = await Promise.allSettled([
+        roundCommand(a, key(), r.id, 'cancel', { expectedVersion: v }),
+        roundCommand(a, key(), r.id, 'confirm', { expectedVersion: v }),
+      ])
+      assert.equal(cancelled.filter(x => x.status === 'fulfilled').length, 1)
+      assert.equal(cancelled[0].status, 'rejected')
+      if (cancelled[0].status === 'rejected') assert.ok(['round_has_expenses', 'stale_round'].includes(cancelled[0].reason.code))
+      await command(r.id, 'reopen')
+      await clearExpenses(r.id)
+      await command(r.id, 'cancel')
+      const many = await round()
+      for (let i = 0; i < 3; i++) await expense(many.id, a, a.userId, '10')
+      const first = await getRound(a, many.id, new URLSearchParams('limit=2'))
+      const second = await getRound(a, many.id, new URLSearchParams({ limit: '2', cursor: first.expensesNextCursor! }))
+      assert.equal(first.totals[0]?.totalMinor, '30')
+      assert.equal(first.pendingRemainders[0]?.amountMinor, '3')
+      assert.deepEqual(second.transfers, first.transfers)
+      assert.deepEqual(first.transfers.map(row => row.amountMinor), ['9', '9'])
+      assert.equal(new Set([...first.expenses, ...second.expenses].map(x => x.id)).size, 3)
+      assert.equal((await getGroup(a, g.id)).members.length, 4)
+      await clearExpenses(many.id)
+      await command(many.id, 'cancel')
+    })
+
+    await t.test('expense and round total limits use each currency major unit and updates replace the old amount', async () => {
+      for (const currency of ['KRW', 'JPY', 'USD'] as const) {
+        const r = await createRound(a, uuidV7(), g.id, { name: `${currency} 금액 상한`, participantIds: [a.userId, b.userId] })
+        const maximum = currency === 'USD' ? '100000000.00' : '100000000'
+        const overMaximum = currency === 'USD' ? '100000000.01' : '100000001'
+        const belowMaximum = currency === 'USD' ? '99999999.99' : '99999999'
+        const minimum = currency === 'USD' ? '0.01' : '1'
+        const scale = currency === 'USD' ? 100n : 1n
+        const saved = [await expense(r.id, a, a.userId, maximum, undefined, currency)]
+
+        await assert.rejects(expense(r.id, a, a.userId, overMaximum, undefined, currency), code('expense_amount_limit_exceeded'))
+        for (let index = 1; index < 10; index++) saved.push(await expense(r.id, a, a.userId, maximum, undefined, currency))
+        assert.equal((await get(r.id)).totals[0]?.totalMinor, (1_000_000_000n * scale).toString())
+        await assert.rejects(expense(r.id, a, a.userId, minimum, undefined, currency), code('round_total_limit_exceeded'))
+
+        await saveExpense(a, key(), r.id, { amount: belowMaximum, expectedVersion: (await get(r.id)).version }, saved[0].id)
+        await expense(r.id, a, a.userId, minimum, undefined, currency)
+        const atLimit = await get(r.id)
+        assert.equal(atLimit.totals[0]?.totalMinor, (1_000_000_000n * scale).toString())
+        await assert.rejects(
+          saveExpense(a, key(), r.id, { amount: maximum, expectedVersion: atLimit.version }, saved[0].id),
+          code('round_total_limit_exceeded'),
+        )
+        const unchanged = await get(r.id)
+        assert.equal(unchanged.totals[0]?.totalMinor, atLimit.totals[0]?.totalMinor)
+        assert.equal(unchanged.expenses.find(item => item.id === saved[0].id)?.amountMinor, (99_999_999n * scale + (currency === 'USD' ? 99n : 0n)).toString())
+        await clearExpenses(r.id)
+        await command(r.id, 'cancel')
+      }
+    })
+
+    await t.test('all supported currencies persist exact amounts, editable expense currencies and KRW-only accounts without cross-round offset', async () => {
+      const participants = [a.userId, b.userId]
+      await assert.rejects(createGroup(a, uuidV7(), { name: '모임 통화 없음', currency: 'KRW' }), code('invalid_input'))
+      for (const currency of [undefined, null, '', 'XXX', 'usd']) {
+        const invalid = await createRound(a, uuidV7(), g.id, { name: '잘못된 통화', participantIds: participants })
+        await assert.rejects(saveExpense(a, key(), invalid.id, { description: '통화 검증', amount: '10', payerId: a.userId, splitMode: 'ALL', expectedVersion: 1, ...(currency === undefined ? {} : { currency }) }), code('unsupported_currency'))
+        await command(invalid.id, 'cancel')
+      }
+      const currencies = CURRENCY_CODES
+      const rounds = await Promise.all(currencies.map(currency => createRound(a, uuidV7(), g.id, { name: `${currency} 회차`, participantIds: participants })))
+      const settled: { id: string; currency: string; balanceMinor: string }[] = []
+      for (const [index, currency] of currencies.entries()) {
+        const r = rounds[index]
+        const wholeUnits = ['KRW', 'JPY', 'VND'].includes(currency)
+        const amount = wholeUnits ? '12345678' : '12345678.01'
+        const e = await expense(r.id, a, b.userId, amount, undefined, currency)
+        assert.equal((await get(r.id)).groupId, g.id)
+        assert.equal((await get(r.id)).expenses[0].currency, currency)
+        assert.equal((await get(r.id)).expenses[0].amountMinor, wholeUnits ? '12345678' : '1234567801')
+        await assert.rejects(saveExpense(a, key(), r.id, { amount: wholeUnits ? '1.5' : '1.001', expectedVersion: e.version }, e.id), code('invalid_amount'))
+        await assert.rejects(saveExpense(a, key(), r.id, { currency: 'XXX', expectedVersion: e.version }, e.id), code('unsupported_currency'))
+        await command(r.id, 'confirm')
+        await command(r.id, 'reopen')
+        const reopened = await get(r.id)
+        assert.equal(reopened.expenses[0].currency, currency)
+        await assert.rejects(roundCommand(a, key(), r.id, 'confirm', { expectedVersion: reopened.version, currency: 'USD' }), code('invalid_input'))
+        assert.deepEqual(await get(r.id), reopened)
+        await command(r.id, 'confirm'); await command(r.id, 'send'); await command(r.id, 'draw')
+        const s = await getSettlement(a, r.id)
+        assert.equal(s.balances[0].currency, currency)
+        assert.equal('account' in s.outgoing[0], currency === 'KRW')
+        assert.ok(s.balances[0]?.balanceMinor)
+        settled.push({ id: r.id, currency, balanceMinor: s.balances[0].balanceMinor })
+        await command(r.id, 'force-complete')
+        await assert.rejects(saveExpense(a, key(), r.id, { amount: '2', expectedVersion: (await get(r.id)).version }, e.id), code('invalid_round_state'))
+      }
+      for (const previous of settled) {
+        const still = await getSettlement(a, previous.id)
+        assert.equal(still.balances[0].currency, previous.currency)
+        assert.equal(still.balances[0]?.balanceMinor, previous.balanceMinor, 'later rounds must not offset this round')
+      }
+      assert.equal('currency' in (await getGroup(a, g.id)), false)
+      assert.equal((await listGroups(outsider, query())).items.length, 0)
+    })
+
+    await t.test('active Kakao profile images are shown and withdrawn profiles are masked', async () => {
+      const subject = `settlement-profile:${key()}`
+      const profileImageUrl = 'https://profiles.example.test/active.png'
+      const signup = await signInKakao(subject, { displayName: '탈퇴 프로필', email: null, profileImageUrl })
+      const registered = await completeOnboarding(readAccessToken(signup.accessToken), { bankName: '프로필은행', accountHolder: '탈퇴 프로필', accountNumber: '12340312345678' })
+      const departed = readAccessToken(registered.accessToken)!
+      const profileGroup = await createGroup(a, uuidV7(), { name: '프로필 표시 검증' })
+      const profileInvite = await createInvite(a, key(), profileGroup.id, {})
+      await acceptInvite(departed, key(), profileInvite.sharePath!.split('/').at(-1)!)
+      const r = await createRound(a, uuidV7(), profileGroup.id, { name: '프로필 회차', participantIds: [a.userId, departed.userId] })
+      await expense(r.id, a, departed.userId, '2000')
+      await command(r.id, 'confirm'); await command(r.id, 'send'); await command(r.id, 'force-complete')
+
+      assert.equal((await get(r.id)).members.find(member => member.userId === departed.userId)?.profileImageUrl, profileImageUrl)
+      assert.equal((await listGroups(a, new URLSearchParams({ q: '프로필 표시 검증' }))).items[0].memberPreview.find(member => member.userId === departed.userId)?.profileImageUrl, profileImageUrl)
+      const activeSettlement = await getSettlement(a, r.id)
+      assert.equal(activeSettlement.outgoing[0].profileImageUrl, profileImageUrl)
+      assert.equal(activeSettlement.confirmations.find(member => member.userId === departed.userId)?.profileImageUrl, profileImageUrl)
+      await withdrawAccount(departed)
+      assert.equal((await listGroups(a, new URLSearchParams({ q: '프로필 표시 검증' }))).items[0].memberCount, 1)
+      assert.equal((await get(r.id)).members.find(member => member.userId === departed.userId)?.profileImageUrl, null)
+      const deletedSettlement = await getSettlement(a, r.id)
+      assert.equal(deletedSettlement.outgoing[0].profileImageUrl, null)
+      assert.equal(deletedSettlement.confirmations.find(member => member.userId === departed.userId)?.profileImageUrl, null)
+      await signInKakao(subject, { displayName: '재가입 전 프로필', email: null, profileImageUrl: 'https://profiles.example.test/changed.png' })
+      assert.equal((await getSettlement(a, r.id)).outgoing[0].profileImageUrl, null)
+    })
+    await t.test('UUIDv7 creation validates version and variant using the library, normalizes case and preserves duplicate errors', async () => {
+      const owner = await member('UUID 생성자'), participant = await member('UUID 참여자')
+      const groupKey = uuidV7(), group = await createGroup(owner, groupKey.toUpperCase(), { name: 'UUID 검증 모임' })
+      assert.equal(group.id, groupKey)
+      await assert.rejects(createGroup(owner, groupKey, { name: '중복 모임' }), code('group_already_exists'))
+      const invitation = await createInvite(owner, key(), group.id, {})
+      await acceptInvite(participant, key(), invitation.sharePath!.split('/').at(-1)!)
+      const body = { name: 'UUID 검증 회차', participantIds: [owner.userId, participant.userId] }
+      const roundKey = uuidV7(), created = await createRound(owner, roundKey.toUpperCase(), group.id, body)
+      assert.equal(created.id, roundKey)
+      await assert.rejects(createRound(owner, roundKey, group.id, body), code('round_already_exists'))
+      for (const invalid of [
+        '', key(), ` ${roundKey}`, `${roundKey} `,
+        '00000000-0000-0000-0000-000000000000',
+        'ffffffff-ffff-ffff-ffff-ffffffffffff',
+        roundKey.slice(0, 19) + '0' + roundKey.slice(20),
+        roundKey.slice(0, 14) + '9' + roundKey.slice(15),
+      ]) {
+        await assert.rejects(createGroup(owner, invalid, { name: '거절 모임' }), code('invalid_request_key'))
+        await assert.rejects(createRound(owner, invalid, group.id, body), code('invalid_request_key'))
+      }
+      assert.equal((await listRounds(owner, new URLSearchParams(), group.id)).items.length, 1)
+    })
+  } finally { await client.end() }
+})
+
+before(async () => { await getPrismaClient(process.env.TEST_DATABASE_URL!) })

@@ -22,7 +22,8 @@
       {
         "name": "next"
       }
-    ]
+    ],
+    "experimentalDecorators": true
   },
   "include": [
     "next-env.d.ts",
@@ -32,6 +33,7 @@
     ".next/dev/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "dist"
   ]
 }

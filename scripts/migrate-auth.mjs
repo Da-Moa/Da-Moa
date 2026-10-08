@@ -1,5 +1,5 @@
 import nextEnv from '@next/env'
-import { createDatabaseClient } from '../src/lib/db.ts'
+import { createDatabaseClient } from '../src/backend/global/database/db.ts'
 import { applyMigrations } from './migrations.mjs'
 
 nextEnv.loadEnvConfig(process.cwd())

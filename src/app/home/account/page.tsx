@@ -1,4 +1,4 @@
-import { AccountPanel } from '../../../Domain/User/Frontend'
+import { AccountPanel } from '../../../frontend/domain/user'
 
 export default function AccountPage() {
   return <AccountPanel />

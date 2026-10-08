@@ -1,8 +1,5 @@
-import { NextResponse, type NextRequest } from 'next/server'
-import { jwtGuard } from './Global/Auth/Backend'
+import { NextResponse } from 'next/server'
 
-export function proxy(request: NextRequest) {
-  return jwtGuard(request) ?? NextResponse.next()
-}
-
-export const config = { matcher: '/api/:path*' }
+// API authentication is enforced by the Nest guard in the custom server.
+export function proxy() { return NextResponse.next() }
+export const config = { matcher: '/api/docs' }
