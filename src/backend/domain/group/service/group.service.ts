@@ -4,9 +4,11 @@ import { isUUID } from 'class-validator';
 import { PrismaService } from '../../../global/database/prisma.service';
 import { groupErrors } from '../code/group.error.code';
 import { GroupException } from '../exception/group.exception';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { requireAccount } from '../../../global/auth';
 import {
+  createInviteToken,
+  isInviteToken,
   nowSeconds,
   onlyKeys,
   pageOf,
@@ -259,7 +261,7 @@ export class GroupService {
       if (!group.user_id) throw missing();
       if (group.creator_id !== account.id) throw creatorOnly();
       const id = randomUUID(),
-        token = randomBytes(32).toString('base64url'),
+        token = createInviteToken(),
         now = nowSeconds();
       try {
         if (
@@ -367,7 +369,7 @@ export class GroupService {
   }
 
   private async validInvite(client: Database, token: string, userId: string) {
-    if (!/^[\w-]{43}$/.test(token)) throw missing();
+    if (!isInviteToken(token)) throw missing();
     const row = await this.repository.findValidInvite(
       client,
       createHash('sha256').update(token).digest('hex'),
@@ -400,7 +402,7 @@ export class GroupService {
     return this.prisma.withDatabaseConnection(
       async (client, discardConnection) => {
         const account = await requireAccount(client, access);
-        if (!/^[\w-]{43}$/.test(token)) throw missing();
+        if (!isInviteToken(token)) throw missing();
         const tokenHash = createHash('sha256').update(token).digest('hex');
         const digest = mutationDigest(key, { tokenHash });
         const row = await this.repository.findInviteAcceptance(

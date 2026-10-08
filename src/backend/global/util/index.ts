@@ -3,6 +3,7 @@ export { withDatabaseConnection, withReadTransaction, withWriteTransaction, with
 export { AppError, badInput, errorResponse } from '../apiPayload/errors'
 export { readBytes, readJsonBody, sameOrigin } from '../apiPayload/http'
 export { idsInput, onlyKeys, textInput } from './inputValidationUtil'
+export { createInviteToken, isInviteToken, INVITE_TOKEN_LENGTH } from './inviteTokenUtil'
 export { pageOf, pagination, queryParameters } from './pagenationUtil'
 export { domainMutation, type Identity } from './idempotencyUtil'
 export { currentTimestamp as nowSeconds } from '../auth/authUtil'
