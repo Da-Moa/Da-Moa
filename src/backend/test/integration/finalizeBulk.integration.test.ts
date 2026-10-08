@@ -1,3 +1,4 @@
+import { ReceiptStorage } from '../../global/util/minio.util';
 import { testProvider } from '../domainTestSupport';
 import { AuthorizationService } from '../../global/auth/service/authorization.service';
 import { MutationExecutor } from '../../global/util/idempotencyUtil';
@@ -67,8 +68,14 @@ test('send bulk-finalizes settlement with constant SQL count, exact money and at
       randomUUID(),
       invite.sharePath!.split('/').at(-1)!,
     );
-  const repository = new SettleRepository();
-  const service = new SettleService(new PrismaService(), repository, await testProvider(AuthorizationService), await testProvider(MutationExecutor));
+  const repository = new SettleRepository(new PrismaService());
+  const service = new SettleService(
+    new PrismaService(),
+    repository,
+    await testProvider(AuthorizationService),
+    await testProvider(MutationExecutor),
+    await testProvider(ReceiptStorage),
+  );
 
   type ExpenseInput = {
     currency: Currency;

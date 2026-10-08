@@ -3,7 +3,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { networkInterfaces } from 'node:os';
 import next from 'next';
 import { createBackend, startBackendWorkers } from '../../domain/main';
-import { stopReceiptWorker } from '../../domain/settle/service/receiptWorker';
+import { ReceiptWorker } from '../../domain/settle/service/receiptWorker';
 import { disconnectPrismaClients } from '../database/prisma.service';
 import { closeDatabasePools } from '../database/dbClient.mjs';
 import { createRateLimitController } from '../rateLimit/native';
@@ -103,7 +103,7 @@ export async function bootstrap() {
       await Promise.all([
         backend.app.close(),
         frontend.close(),
-        stopReceiptWorker(),
+        backend.app.get(ReceiptWorker).stop(),
         metricsServer?.listening
           ? new Promise<void>((resolve, reject) =>
               metricsServer.close((error) =>
@@ -123,7 +123,7 @@ export async function bootstrap() {
   process.once('SIGTERM', shutdown);
   process.once('SIGINT', shutdown);
 
-  await startBackendWorkers();
+  await startBackendWorkers(backend.app);
   if (metricsServer && metricsPort !== null) {
     await collectDatabaseMetrics();
     metricsTimer = setInterval(() => void collectDatabaseMetrics(), 30_000);

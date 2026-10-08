@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
-import { deleteReceiptObject, putReceipt, readReceipt } from '../../global/util/minio.util'
+import { ReceiptStorage } from '../../global/util/minio.util'
+const storage = new ReceiptStorage()
+const deleteReceiptObject = storage.deleteReceiptObject.bind(storage)
+const putReceipt = storage.putReceipt.bind(storage)
+const readReceipt = storage.readReceipt.bind(storage)
 
 test('receipt objects use the configured private S3 bucket', async () => {
   const sent: string[] = []

@@ -41,7 +41,7 @@ export const roundCreationCandidatesSql = `WITH actor AS (
 export class GroupRepository {
   constructor(
     @Inject(PrismaService)
-    private readonly prisma: PrismaService = new PrismaService(),
+    private readonly prisma: PrismaService,
   ) {}
 
   async findGroups(

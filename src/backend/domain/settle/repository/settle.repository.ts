@@ -85,7 +85,7 @@ const receiptDeletionContextSql = `context AS MATERIALIZED (
 export class SettleRepository {
   constructor(
     @Inject(PrismaService)
-    private readonly prisma: PrismaService = new PrismaService(),
+    private readonly prisma: PrismaService,
   ) {}
 
   findRound(client: Database, id: string, userId: string) {
@@ -1214,7 +1214,3 @@ export class SettleRepository {
     ).rows;
   }
 }
-
-// Native workers and integration callers use the same class implementation.
-const instance = new SettleRepository();
-export const finishReceiptStorage: SettleRepository['finishReceiptStorage'] = instance.finishReceiptStorage.bind(instance);

@@ -1,3 +1,6 @@
+import { ReceiptStorage } from '../../global/util/minio.util';
+import { ReceiptWorker } from '../../domain/settle/service/receiptWorker';
+import { SettleRepository } from '../../domain/settle/repository/settle.repository';
 import { AccountStateRepository } from '../../domain/user/repository/accountState.repository';
 import type { Database } from '../../global/database/db';
 import type { INestApplication } from '@nestjs/common';
@@ -87,7 +90,22 @@ async function request(
   return response;
 }
 
-test('Actual Nest HTTP plus real PostgreSQL contracts enforce Bearer JWTs, origin, idempotency, normalized images and personalized output', async () => {
+test('Actual Nest HTTP plus real PostgreSQL contracts enforce Bearer JWTs, origin, idempotency, normalized images and personalized output', async (t) => {
+  const storage = t.mock.method(app.get(ReceiptStorage), 'putReceipt');
+  const repository = t.mock.method(
+    app.get(SettleRepository),
+    'finishReceiptStorage',
+  );
+  t.after(() => {
+    assert.ok(
+      storage.mock.callCount() > 0,
+      'queued uploads use the registered storage Provider',
+    );
+    assert.ok(
+      repository.mock.callCount() > 0,
+      'queued completion uses the registered repository Provider',
+    );
+  });
   const client = createDatabaseClient(testUrl);
   await client.connect();
   try {
@@ -428,7 +446,7 @@ test('Actual Nest HTTP plus real PostgreSQL contracts enforce Bearer JWTs, origi
     );
     assert.equal(uploaded.status, 202);
     const receipt = (await uploaded.json()).data;
-    await drainReceiptQueue();
+    await drainReceiptQueue(app.get(ReceiptWorker));
     const binary = await request(`receipts/${receipt.id}`, b.accessToken);
     assert.equal(binary.headers.get('content-type'), 'image/avif');
     assert.equal(binary.headers.get('x-content-type-options'), 'nosniff');
@@ -458,7 +476,7 @@ test('Actual Nest HTTP plus real PostgreSQL contracts enforce Bearer JWTs, origi
     );
     assert.equal(largeUpload.status, 202, await largeUpload.clone().text());
     const largeReceipt = (await largeUpload.json()).data;
-    await drainReceiptQueue();
+    await drainReceiptQueue(app.get(ReceiptWorker));
     const largeBinary = await request(
       `receipts/${largeReceipt.id}`,
       b.accessToken,

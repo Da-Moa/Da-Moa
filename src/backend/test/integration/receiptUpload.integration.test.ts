@@ -85,7 +85,7 @@ test('receipt queue authorizes and persists atomically in two SQL calls; a new w
     try { await utils.rescheduleJobs([String(jobs.rows[0].id)], { runAt: new Date() }) } finally { await utils.release() }
     // A fresh process has no access to the original request buffer or worker memory.
     let workerOutput = ''
-    const worker = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', "const m=await import('./src/backend/test/integration/receiptWorkerTestSupport.ts');await m.drainReceiptQueue()"], { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] })
+    const worker = spawn(process.execPath, ['--import', '@swc-node/register/esm-register', '--input-type=module', '-e', "const m=await import('./src/backend/test/integration/receiptWorkerTestSupport.ts');await m.drainReceiptQueue()"], { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] })
     worker.stdout.on('data', b => { workerOutput += b }); worker.stderr.on('data', b => { workerOutput += b })
     const exitCode = await new Promise<number | null>((resolve, reject) => { worker.once('error', reject); worker.once('exit', resolve) })
     assert.equal(exitCode, 0, workerOutput)

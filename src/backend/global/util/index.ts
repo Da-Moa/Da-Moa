@@ -23,7 +23,7 @@ export {
   replayMutation,
   saveMutation,
 } from './mutations';
-export { putReceipt, readReceipt, deleteReceiptObject } from './minio.util';
+export { ReceiptStorage } from './minio.util';
 export {
   registerInvalidationPublisher,
   publishInvalidations,

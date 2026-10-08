@@ -1,8 +1,5 @@
-export {
-  startReceiptWorker,
-  checkReceiptWorker,
-  checkReceiptWorkerReady,
-} from './service/receiptWorker';
+export { ReceiptWorker } from './service/receiptWorker';
+export { ReceiptWorkerModule } from './module/receiptWorker.module';
 
 export {
   hasUnfinishedGroupRounds,

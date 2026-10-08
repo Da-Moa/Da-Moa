@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import test, { before, after } from 'node:test';
 import { createBackend } from '../../domain/main';
 import type { INestApplication } from '@nestjs/common';
-import { startReceiptWorker } from '../../domain/settle/index.ts';
+import { ReceiptWorker } from '../../domain/settle/index.ts';
 import { createDatabaseClient } from '../../global/database/dbClient.mjs';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
 
@@ -169,10 +169,10 @@ test('receipt worker probes distinguish startup, queue errors, dependencies and 
     MINIO_SECRET_KEY: 'test',
   });
   const get = (scope: string) => fetch(`${origin}/api/health/${scope}`);
-  let runner: Awaited<ReturnType<typeof startReceiptWorker>> | undefined;
+  let runner: Awaited<ReturnType<ReceiptWorker['start']>> | undefined;
   try {
     assert.equal((await get('worker')).status, 503);
-    runner = await startReceiptWorker();
+    runner = await app.get(ReceiptWorker).start();
     assert.equal((await get('worker')).status, 200);
     process.env.RECEIPT_WORKER_ENABLED = 'false';
     assert.equal((await get('worker')).status, 503);

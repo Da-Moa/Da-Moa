@@ -1,3 +1,4 @@
+import { ReceiptStorage } from '../../../global/util/minio.util';
 import { MutationExecutor } from '../../../global/util/idempotencyUtil';
 import type { RoundListQueryDTO } from '../dto/req/settle.request.dto';
 import type { PageQueryDTO } from '../../../global/apiPayload/dto/req/page.request.dto';
@@ -15,8 +16,6 @@ import {
   badInput,
   mutationDigest,
   mutationResult,
-  deleteReceiptObject,
-  readReceipt,
   type Database,
   idsInput,
   nowSeconds,
@@ -96,6 +95,7 @@ export class SettleService {
     @Inject(AuthorizationService)
     private readonly authorization: AuthorizationService,
     @Inject(MutationExecutor) private readonly mutations: MutationExecutor,
+    @Inject(ReceiptStorage) private readonly storage: ReceiptStorage,
   ) {}
 
   private async roundFor(
@@ -934,7 +934,7 @@ export class SettleService {
   private async cleanupReceiptObjects(keys: string[]) {
     for (const key of keys) {
       try {
-        await deleteReceiptObject(key);
+        await this.storage.deleteReceiptObject(key);
       } catch (error) {
         console.error('receipt_cleanup_failed', key, error);
       }
@@ -1834,7 +1834,7 @@ export class SettleService {
     if (receipt.storage_status === 'FAILED')
       throw new SettleException(settleErrors.STORAGE_UNAVAILABLE);
     const content = receipt.object_key
-      ? await readReceipt(receipt.object_key)
+      ? await this.storage.readReceipt(receipt.object_key)
       : receipt.content;
     if (!content) throw missing();
     return { mimeType: receipt.mime_type, content };

@@ -7,19 +7,20 @@ import {
 } from '../service/health.service';
 import { HealthRepository } from '../repository/health.repository';
 import { PrismaModule } from '../../../global/database/prisma.module';
-import { checkReceiptWorker, checkReceiptWorkerReady } from '../../settle';
+import { ReceiptWorkerModule, ReceiptWorker } from '../../settle';
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, ReceiptWorkerModule],
   controllers: [HealthController],
   providers: [
     HealthService,
     HealthRepository,
     {
       provide: HEALTH_WORKER_PROBES,
-      useFactory: () =>
+      inject: [ReceiptWorker],
+      useFactory: (receiptWorker: ReceiptWorker) =>
         ({
-          worker: checkReceiptWorker,
-          workerReady: checkReceiptWorkerReady,
+          worker: () => receiptWorker.check(),
+          workerReady: () => receiptWorker.checkReady(),
         }) satisfies HealthWorkerProbes,
     },
   ],
