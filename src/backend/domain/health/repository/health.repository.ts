@@ -5,12 +5,12 @@ import { PrismaService } from '../../../global/database/prisma.service';
 export class HealthRepository {
   constructor(
     @Inject(PrismaService)
-    private readonly prisma: PrismaService = new PrismaService(),
+    private readonly prisma: PrismaService,
   ) {}
   async checkDatabase(): Promise<void> {
     await this.prisma.client.$queryRaw`SELECT 1`;
   }
-  async checkMinio(): Promise<void> {
+  async getMinioHealth(): Promise<{ read: number; write: number }> {
     if (!process.env.MINIO_ENDPOINT)
       throw new Error('MINIO_ENDPOINT is required');
     const responses = await Promise.all(
@@ -21,10 +21,6 @@ export class HealthRepository {
         }),
       ),
     );
-    if (responses.some((response) => response.status !== 200))
-      throw new Error('MinIO storage is not ready');
+    return { read: responses[0].status, write: responses[1].status };
   }
 }
-const repository = new HealthRepository();
-export const checkDatabase = repository.checkDatabase.bind(repository);
-export const checkMinio = repository.checkMinio.bind(repository);

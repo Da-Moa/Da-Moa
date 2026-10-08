@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { channel } from 'node:diagnostics_channel';
 import { createServer } from 'node:http';
-import test from 'node:test';
-import { health as GET } from '../httpTestSupport';
+import test, { before, after } from 'node:test';
+import { createBackend } from '../../domain/main';
+import type { INestApplication } from '@nestjs/common';
 import { startReceiptWorker } from '../../domain/settle/index.ts';
 import { createDatabaseClient } from '../../global/database/dbClient.mjs';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
@@ -18,6 +19,17 @@ if (
   );
 process.env.DATABASE_URL = testUrl;
 
+let app: INestApplication;
+let origin: string;
+before(async () => {
+  ({ app } = await createBackend());
+  await app.listen(0, '127.0.0.1');
+  origin = await app.getUrl();
+});
+after(async () => {
+  await app?.close();
+});
+
 test('individual health routes probe PostgreSQL and MinIO independently', async (t) => {
   let minioStatus = 200;
   const paths: string[] = [];
@@ -29,9 +41,7 @@ test('individual health routes probe PostgreSQL and MinIO independently', async 
   const address = minio.address() as { port: number };
   process.env.MINIO_ENDPOINT = `http://127.0.0.1:${address.port}`;
   const get = (check: string) =>
-    GET(new Request(`http://localhost/api/health/${check}`), {
-      params: Promise.resolve({ check: [check] }),
-    });
+    fetch(`${origin}/api/health${check ? '/' + check : ''}`);
   try {
     minioStatus = 503;
     const previousLog = process.env.DB_QUERY_LOG;
@@ -83,6 +93,42 @@ test('individual health routes probe PostgreSQL and MinIO independently', async 
     ]);
 
     minioStatus = 200;
+    for (const [scope, databaseQueries, minioRequests] of [
+      ['live', 0, 0],
+      ['minio', 0, 2],
+      ['dependencies', 1, 2],
+      ['', 1, 2],
+    ] as const) {
+      const statements: string[] = [];
+      let count = 0;
+      const countStatement = () => {
+        count++;
+      };
+      paths.length = 0;
+      process.env.DB_QUERY_LOG = 'true';
+      channel('da-moa.db.query').subscribe(countStatement);
+      const log = t.mock.method(console, 'info', (message: string) => {
+        statements.push(
+          message
+            .replace(/^SQL:\s*/, '')
+            .replace(/\s+/g, ' ')
+            .trim(),
+        );
+      });
+      try {
+        const response = await get(scope);
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get('Cache-Control'), 'no-store');
+        assert.equal(count, databaseQueries, `${scope || 'overall'} SQL count`);
+        assert.deepEqual(statements, databaseQueries ? ['SELECT 1'] : []);
+        assert.equal(paths.length, minioRequests);
+      } finally {
+        channel('da-moa.db.query').unsubscribe(countStatement);
+        log.mock.restore();
+        if (previousLog === undefined) delete process.env.DB_QUERY_LOG;
+        else process.env.DB_QUERY_LOG = previousLog;
+      }
+    }
     process.env.DATABASE_URL = '';
     process.env.POSTGRES_URL = '';
     const healthyMinio = await get('minio');
@@ -122,10 +168,7 @@ test('receipt worker probes distinguish startup, queue errors, dependencies and 
     MINIO_ACCESS_KEY: 'test',
     MINIO_SECRET_KEY: 'test',
   });
-  const get = (scope: string) =>
-    GET(new Request(`http://localhost/api/health/${scope}`), {
-      params: Promise.resolve({ check: scope.split('/') }),
-    });
+  const get = (scope: string) => fetch(`${origin}/api/health/${scope}`);
   let runner: Awaited<ReturnType<typeof startReceiptWorker>> | undefined;
   try {
     assert.equal((await get('worker')).status, 503);

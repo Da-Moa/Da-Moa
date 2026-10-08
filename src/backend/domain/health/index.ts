@@ -1,1 +1,1 @@
-export { getHealthResponse } from './controller/health.controller';
+export { HealthModule } from './module/health.module';

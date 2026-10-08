@@ -26,7 +26,11 @@ import { GroupController } from '../domain/group/controller/group.controller';
 import { GroupService } from '../domain/group/service/group.service';
 import { SettleController } from '../domain/settle/controller/settle.controller';
 import { SettleService } from '../domain/settle/service/settle.service';
-import { getHealthResponse } from '../domain/health/controller/health.controller';
+import { HealthController } from '../domain/health/controller/health.controller';
+import { HealthService } from '../domain/health/service/health.service';
+import { HealthRepository } from '../domain/health/repository/health.repository';
+import { PrismaService } from '../global/database/prisma.service';
+import { checkReceiptWorker, checkReceiptWorkerReady } from '../domain/settle';
 import type { HttpRequest } from '../global/apiPayload/httpContext';
 
 import { UserController } from '../domain/user/controller/user.controller';
@@ -41,6 +45,12 @@ const controllers = [
   new UserController(new UserService()),
   new GroupController(new GroupService()),
   new SettleController(new SettleService()),
+  new HealthController(
+    new HealthService(new HealthRepository(new PrismaService()), {
+      worker: checkReceiptWorker,
+      workerReady: checkReceiptWorkerReady,
+    }),
+  ),
 ];
 // Test transport follows the actual Nest route and parameter decorators; no second API dispatch tree.
 export async function dispatch(
@@ -200,10 +210,12 @@ export async function dispatch(
   );
 }
 export async function health(
-  _request: Request,
-  context: { params: Promise<{ check?: string[] }> },
+  request: Request,
+  _context: { params: Promise<{ check?: string[] }> },
 ) {
-  return getHealthResponse((await context.params).check);
+  return dispatch(request as HttpRequest, {
+    params: Promise.resolve({ path: [] }),
+  });
 }
 
 export function getMeResponse(request: HttpRequest) {

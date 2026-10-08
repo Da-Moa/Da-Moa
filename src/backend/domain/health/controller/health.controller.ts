@@ -1,82 +1,66 @@
-import { Controller, Get, Inject, Res } from '@nestjs/common';
+import { Controller, Get, Header, Inject, Res } from '@nestjs/common';
 import type { Response as ServerResponse } from 'express';
-import { sendResponse } from '../../../global/apiPayload/httpContext';
-import type {
-  HealthRequestDTO,
-  HealthScope,
-} from '../dto/res/health.response.dto';
-import {
-  HealthService,
-  checkHealth,
-  type HealthProbes,
-} from '../service/health.service';
+import { RawApiResponse } from '../../../global/apiPayload/apiResponse.interceptor';
+import { HealthService } from '../service/health.service';
 
-export async function getHealthResponse(
-  check?: string[],
-  probes?: HealthProbes,
-): Promise<Response> {
-  const headers = { 'Cache-Control': 'no-store' };
-  const scope = check?.join('/') || 'overall';
-  if (
-    ![
-      'overall',
-      'live',
-      'database',
-      'minio',
-      'dependencies',
-      'worker',
-      'worker/readyz',
-    ].includes(scope) ||
-    (scope === 'overall' && check?.length)
-  ) {
-    return Response.json({ error: 'not_found' }, { status: 404, headers });
-  }
-  const request: HealthRequestDTO = { scope: scope as HealthScope };
-  const result = await checkHealth(request, probes);
-  return Response.json(result, {
-    status: result.status === 'ok' ? 200 : 503,
-    headers,
-  });
-}
-
+@RawApiResponse()
 @Controller('api/health')
 export class HealthController {
   constructor(@Inject(HealthService) private readonly service: HealthService) {}
+
   @Get('')
-  overall(@Res() response: ServerResponse) {
-    return this.respond(response, 'overall');
+  @Header('Cache-Control', 'no-store')
+  async overall(@Res({ passthrough: true }) response: ServerResponse) {
+    const result = await this.service.checkOverall();
+    response.status(result.status === 'ok' ? 200 : 503);
+    return result;
   }
+
   @Get('live')
-  live(@Res() response: ServerResponse) {
-    return this.respond(response, 'live');
+  @Header('Cache-Control', 'no-store')
+  async live(@Res({ passthrough: true }) response: ServerResponse) {
+    const result = await this.service.checkLive();
+    response.status(result.status === 'ok' ? 200 : 503);
+    return result;
   }
+
   @Get('database')
-  database(@Res() response: ServerResponse) {
-    return this.respond(response, 'database');
+  @Header('Cache-Control', 'no-store')
+  async database(@Res({ passthrough: true }) response: ServerResponse) {
+    const result = await this.service.checkDatabase();
+    response.status(result.status === 'ok' ? 200 : 503);
+    return result;
   }
+
   @Get('minio')
-  minio(@Res() response: ServerResponse) {
-    return this.respond(response, 'minio');
+  @Header('Cache-Control', 'no-store')
+  async minio(@Res({ passthrough: true }) response: ServerResponse) {
+    const result = await this.service.checkMinio();
+    response.status(result.status === 'ok' ? 200 : 503);
+    return result;
   }
+
   @Get('dependencies')
-  dependencies(@Res() response: ServerResponse) {
-    return this.respond(response, 'dependencies');
+  @Header('Cache-Control', 'no-store')
+  async dependencies(@Res({ passthrough: true }) response: ServerResponse) {
+    const result = await this.service.checkDependencies();
+    response.status(result.status === 'ok' ? 200 : 503);
+    return result;
   }
+
   @Get('worker')
-  worker(@Res() response: ServerResponse) {
-    return this.respond(response, 'worker');
+  @Header('Cache-Control', 'no-store')
+  async worker(@Res({ passthrough: true }) response: ServerResponse) {
+    const result = await this.service.checkWorker();
+    response.status(result.status === 'ok' ? 200 : 503);
+    return result;
   }
+
   @Get('worker/readyz')
-  workerReady(@Res() response: ServerResponse) {
-    return this.respond(response, 'worker/readyz');
-  }
-  private respond(response: ServerResponse, scope: HealthScope) {
-    return sendResponse(response, async () => {
-      const result = await this.service.checkHealth({ scope });
-      return Response.json(result, {
-        status: result.status === 'ok' ? 200 : 503,
-        headers: { 'Cache-Control': 'no-store' },
-      });
-    });
+  @Header('Cache-Control', 'no-store')
+  async workerReady(@Res({ passthrough: true }) response: ServerResponse) {
+    const result = await this.service.checkWorkerReady();
+    response.status(result.status === 'ok' ? 200 : 503);
+    return result;
   }
 }

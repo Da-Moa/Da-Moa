@@ -1,14 +1,63 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { before, after } from 'node:test';
 import { health as GET } from '../httpTestSupport';
-import { getHealthResponse } from '../../domain/health/controller/health.controller';
-import { checkMinio } from '../../domain/health/repository/health.repository';
-import type { HealthProbes } from '../../domain/health/service/health.service';
-import type { HealthScope } from '../../domain/health/dto/res/health.response.dto';
+import { HealthRepository } from '../../domain/health/repository/health.repository';
+import {
+  HEALTH_WORKER_PROBES,
+  HealthService,
+  type HealthWorkerProbes,
+} from '../../domain/health/service/health.service';
+import { createAccessToken } from '../../global/auth/native';
+import { PrismaService } from '../../global/database/prisma.service';
+import { createBackend } from '../../domain/main';
+import type { INestApplication } from '@nestjs/common';
+
+type HealthScope =
+  | 'overall'
+  | 'live'
+  | 'database'
+  | 'minio'
+  | 'dependencies'
+  | 'worker'
+  | 'worker/readyz';
+type HealthProbes = HealthWorkerProbes & {
+  database: () => Promise<unknown>;
+  minio: () => Promise<unknown>;
+};
 import { openApiDocument } from '../../global/util/openapi';
 
-const healthResponse = (scope: HealthScope, checks: HealthProbes) =>
-  getHealthResponse(scope === 'overall' ? undefined : scope.split('/'), checks);
+let app: INestApplication;
+let origin: string;
+let probes: Partial<HealthProbes>;
+const previousSecret = process.env.AUTH_JWT_SECRET;
+before(async () => {
+  process.env.AUTH_JWT_SECRET =
+    'health-controller-unit-test-secret-at-least-32-bytes';
+  ({ app } = await createBackend());
+  const repository = app.get(HealthRepository);
+  repository.checkDatabase = async () => {
+    await probes.database!();
+  };
+  repository.getMinioHealth = async () => {
+    await probes.minio!();
+    return { read: 200, write: 200 };
+  };
+  const worker = app.get<HealthWorkerProbes>(HEALTH_WORKER_PROBES);
+  worker.worker = () => probes.worker!();
+  worker.workerReady = () => probes.workerReady!();
+  await app.listen(0, '127.0.0.1');
+  origin = await app.getUrl();
+});
+after(async () => {
+  await app?.close();
+  if (previousSecret === undefined) delete process.env.AUTH_JWT_SECRET;
+  else process.env.AUTH_JWT_SECRET = previousSecret;
+});
+
+const healthResponse = (scope: HealthScope, checks: Partial<HealthProbes>) => {
+  probes = checks;
+  return fetch(`${origin}/api/health${scope === 'overall' ? '' : '/' + scope}`);
+};
 
 test('worker liveness skips dependencies and readiness reports each failure without exposing errors', async () => {
   for (const failed of [undefined, 'worker', 'database', 'minio'] as const) {
@@ -45,7 +94,16 @@ test('worker liveness skips dependencies and readiness reports each failure with
     ['worker', 'readyz', 'extra'],
     ['overall'],
   ]) {
-    assert.equal((await getHealthResponse(check)).status, 404);
+    assert.equal(
+      (
+        await fetch(`${origin}/api/health/${check.join('/')}`, {
+          headers: {
+            authorization: `Bearer ${createAccessToken('health-user', 'health-session')}`,
+          },
+        })
+      ).status,
+      404,
+    );
   }
   for (const path of [
     '/api/health/worker',
@@ -148,6 +206,10 @@ test('health routes require MinIO read and write quorum', async () => {
   );
   assert.equal(unknown.status, 404);
 
+  const service = new HealthService(new HealthRepository(new PrismaService()), {
+    worker: async () => {},
+    workerReady: async () => {},
+  });
   const originalEndpoint = process.env.MINIO_ENDPOINT;
   const originalFetch = globalThis.fetch;
   process.env.MINIO_ENDPOINT = 'http://127.0.0.1:9000';
@@ -158,7 +220,10 @@ test('health routes require MinIO read and write quorum', async () => {
       assert.equal(init?.cache, 'no-store');
       return new Response(null, { status: 200 });
     };
-    await checkMinio();
+    assert.deepEqual(await service.checkMinio(), {
+      status: 'ok',
+      checks: { minio: 'ok' },
+    });
     assert.deepEqual(paths.sort(), [
       'http://127.0.0.1:9000/minio/health/cluster',
       'http://127.0.0.1:9000/minio/health/cluster/read',
@@ -176,11 +241,79 @@ test('health routes require MinIO read and write quorum', async () => {
         new Response(null, {
           status: String(input) === failedPath ? 503 : 200,
         });
-      await assert.rejects(checkMinio, /not ready/);
+      assert.deepEqual(await service.checkMinio(), {
+        status: 'down',
+        checks: { minio: 'down' },
+      });
     }
   } finally {
     globalThis.fetch = originalFetch;
     if (originalEndpoint === undefined) delete process.env.MINIO_ENDPOINT;
     else process.env.MINIO_ENDPOINT = originalEndpoint;
   }
+});
+
+test('every Nest health route calls its matching service method for GET and HEAD', async (t) => {
+  const service = app.get(HealthService);
+  const calls: string[] = [];
+  const methods = {
+    '': 'checkOverall',
+    '/live': 'checkLive',
+    '/database': 'checkDatabase',
+    '/minio': 'checkMinio',
+    '/dependencies': 'checkDependencies',
+    '/worker': 'checkWorker',
+    '/worker/readyz': 'checkWorkerReady',
+  } as const;
+  for (const name of Object.values(methods))
+    t.mock.method(service, name, async () => {
+      calls.push(name);
+      return { status: 'down', checks: { database: 'down' } };
+    });
+  for (const [path, name] of Object.entries(methods)) {
+    for (const method of ['GET', 'HEAD']) {
+      calls.length = 0;
+      const response = await fetch(`${origin}/api/health${path}`, { method });
+      assert.equal(response.status, 503);
+      assert.equal(response.headers.get('Cache-Control'), 'no-store');
+      assert.deepEqual(calls, [name]);
+      if (method === 'HEAD') assert.equal(await response.text(), '');
+      else
+        assert.deepEqual(await response.json(), {
+          status: 'down',
+          checks: { database: 'down' },
+        });
+    }
+  }
+});
+
+test('synchronous probe errors become down results and concurrent failures are retained', async () => {
+  const service = new HealthService(
+    {
+      checkDatabase: () => {
+        throw new Error('secret database detail');
+      },
+      getMinioHealth: async () => ({ read: 503, write: 503 }),
+    },
+    {
+      worker: () => {
+        throw new Error('secret worker detail');
+      },
+      workerReady: () => {
+        throw new Error('secret worker readiness detail');
+      },
+    },
+  );
+  assert.deepEqual(await service.checkOverall(), {
+    status: 'down',
+    checks: { application: 'ok', database: 'down', minio: 'down' },
+  });
+  assert.deepEqual(await service.checkWorker(), {
+    status: 'down',
+    checks: { worker: 'down' },
+  });
+  assert.deepEqual(await service.checkWorkerReady(), {
+    status: 'down',
+    checks: { worker: 'down', database: 'down', minio: 'down' },
+  });
 });
