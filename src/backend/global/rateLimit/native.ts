@@ -9,16 +9,11 @@ import { rateLimitResponse } from './rateLimitResponse.ts'
 export { createTokenBuckets } from './tokenBucket.ts'
 export { rateLimitPolicies, requestRateLimitKinds } from './rateLimitPolicy.ts'
 
-function refreshCookie(cookie = '') {
-  let value: string | undefined
-  for (const part of cookie.split(';')) {
-    const separator = part.indexOf('=')
-    if (separator < 0) continue
-    if (part.slice(0, separator).trim() !== REFRESH_TOKEN_COOKIE_NAME) continue
-    try { value = decodeURIComponent(part.slice(separator + 1).trim()) }
-    catch { value = undefined }
-  }
-  return value
+type CookieRequest = IncomingMessage & { cookies?: Record<string, unknown> }
+
+function refreshCookie(request: CookieRequest) {
+  const value: unknown = request.cookies?.[REFRESH_TOKEN_COOKIE_NAME]
+  return typeof value === 'string' ? value : undefined
 }
 
 export function createRateLimitController(buckets = createTokenBuckets()) {
@@ -26,15 +21,15 @@ export function createRateLimitController(buckets = createTokenBuckets()) {
   const cleanup = setInterval(buckets.prune, 60000)
   cleanup.unref()
 
-  function handleRequest(request: IncomingMessage, response: ServerResponse) {
+  function handleRequest(request: CookieRequest, response: ServerResponse) {
     let pathname: string
     try { pathname = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname).replace(/\/{2,}/g, '/').replace(/\/+$/, '') }
     catch { return false }
     if (pathname !== '/api' && !pathname.startsWith('/api/')) return false
     const method = request.method ?? 'GET'
     if (apiJwtPolicy(method, pathname) === 'public') return false
-    const jwt = readApiJwt(method, pathname, request.headers.authorization, refreshCookie(request.headers.cookie))
-    // Invalid JWTs continue to the existing Proxy guard's 401/cookie cleanup response.
+    const jwt = readApiJwt(method, pathname, request.headers.authorization, refreshCookie(request))
+    // Invalid JWTs continue to the Nest Guard's 401/cookie cleanup response.
     if (!jwt) return false
     const retryAfter = buckets.consume(jwt.userId, requestRateLimitKinds(method, pathname))
     if (!retryAfter) return false

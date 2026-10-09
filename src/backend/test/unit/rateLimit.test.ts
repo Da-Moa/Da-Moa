@@ -3,6 +3,8 @@ import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
+import cookieParser from 'cookie-parser';
+import type { Request, Response } from 'express';
 import { HttpRequest as NextRequest } from '../../global/apiPayload/httpContext';
 import { jwtGuardForTest as proxy } from '../support/guardRequestTestSupport';
 import {
@@ -104,23 +106,26 @@ test(
     let calls = 0;
     const buckets = createTokenBuckets(() => time);
     const limiter = createRateLimitController(buckets);
+    const parseCookies = cookieParser();
     const server = createServer((request, response) => {
-      if (limiter.handleRequest(request, response)) return;
-      const guarded = proxy(
-        new NextRequest(`http://localhost${request.url}`, {
-          method: request.method,
-          headers: {
-            authorization: request.headers.authorization ?? '',
-            cookie: request.headers.cookie ?? '',
-          },
-        }),
-      );
-      if (guarded?.status === 401) {
-        response.writeHead(401).end();
-        return;
-      }
-      calls++;
-      response.writeHead(200).end();
+      parseCookies(request as Request, response as Response, () => {
+        if (limiter.handleRequest(request, response)) return;
+        const guarded = proxy(
+          new NextRequest(`http://localhost${request.url}`, {
+            method: request.method,
+            headers: {
+              authorization: request.headers.authorization ?? '',
+              cookie: request.headers.cookie ?? '',
+            },
+          }),
+        );
+        if (guarded?.status === 401) {
+          response.writeHead(401).end();
+          return;
+        }
+        calls++;
+        response.writeHead(200).end();
+      });
     });
     try {
       server.listen(0, '127.0.0.1');

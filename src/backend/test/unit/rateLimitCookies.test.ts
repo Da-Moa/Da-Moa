@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import type { Request, Response, NextFunction } from 'express';
 import { createBackend } from '../../domain/main';
 import {
   createRefreshToken,
@@ -15,7 +16,7 @@ test('actual Nest HTTP limiter and JWT Guard use the same parsed refresh-cookie 
   process.env.AUTH_JWT_SECRET = 'cookie-limiter-test-secret-at-least-32-bytes';
   const limiter = createRateLimitController(createTokenBuckets(() => 0));
   const { app } = await createBackend(async (app) => {
-    app.use((request, response, next) => {
+    app.use((request: Request, response: Response, next: NextFunction) => {
       if (!limiter.handleRequest(request, response)) next();
     });
   });
@@ -67,7 +68,7 @@ test('actual Nest HTTP limiter and JWT Guard use the same parsed refresh-cookie 
       401,
       'an invalid first cookie reaches the Guard instead of consuming a later identity quota',
     );
-    assert.equal((await response.json()).code, 'unauthorized');
+    assert.deepEqual(await response.json(), { error: 'unauthorized' });
   }
   const independent = await request(`${REFRESH_TOKEN_COOKIE_NAME}=${other}`);
   assert.equal(independent.status, 200);
