@@ -73,3 +73,7 @@ export type SettlementRow = RoundRow & {
   confirmations: (Omit<MemberRow, 'excluded_at'> & { checked_at: string | null })[];
   outgoing: OutgoingRow[]; incoming: IncomingRow[]
 }
+
+export type ReceiptAdmissionRow = Pick<RoundRow, 'status' | 'completed_at' | 'is_creator'> & {
+  id: string | null; expense_id: string | null; author_id: string | null; viewer_excluded_at: string | null; replay: boolean
+}

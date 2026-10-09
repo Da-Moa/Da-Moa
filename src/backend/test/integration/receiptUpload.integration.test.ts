@@ -62,7 +62,7 @@ async function member() {
   )!;
 }
 
-test('receipt queue authorizes and persists atomically in two SQL calls; a new worker resumes, retries and cleans deleted receipts', async (t) => {
+test('receipt queue authorizes before reading and persists atomically after one admission query; a new worker resumes, retries and cleans deleted receipts', async (t) => {
   const db = createDatabaseClient(testUrl);
   await db.connect();
   const originalLog = process.env.DB_QUERY_LOG,
@@ -166,14 +166,14 @@ test('receipt queue authorizes and persists atomically in two SQL calls; a new w
         ),
         code('unsupported_receipt_type'),
       );
-      assert.deepEqual(events, ['AUTH', 'READ']);
+      assert.deepEqual(events, ['AUTH', 'SQL', 'READ']);
     }
     events = [];
     await assert.rejects(
       addReceipt(other, key(), round.id, expense.id, upload()),
       code('forbidden'),
     );
-    assert.deepEqual(events, ['AUTH', 'READ', 'SQL']);
+    assert.deepEqual(events, ['AUTH', 'SQL']);
     assert.equal(putKeys.length, 0);
     const ticket = key(),
       requestVersion = version;
@@ -189,7 +189,7 @@ test('receipt queue authorizes and persists atomically in two SQL calls; a new w
         published++;
       },
     );
-    assert.deepEqual(events, ['AUTH', 'READ', 'SQL']);
+    assert.deepEqual(events, ['AUTH', 'SQL', 'READ', 'SQL']);
     assert.equal(published, 1);
     assert.equal(putKeys.length, 0);
     version = queued.version!;
@@ -226,7 +226,7 @@ test('receipt queue authorizes and persists atomically in two SQL calls; a new w
       ),
       queued,
     );
-    assert.deepEqual(events, ['AUTH', 'READ', 'SQL']);
+    assert.deepEqual(events, ['AUTH', 'SQL', 'READ', 'SQL']);
     assert.equal(published, 1);
     assert.equal(putKeys.length, 0);
     await drainReceiptQueue();

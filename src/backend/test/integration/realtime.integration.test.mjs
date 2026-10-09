@@ -291,10 +291,11 @@ test('authenticated WebSocket receives only its own committed invalidations', as
       type: 'invalidate', keys: ['rounds', `group-rounds:${groupId}`, `round:${expenseRoundId}`, `settlement:${expenseRoundId}`],
     })
     const receiptSql = requestSql(output.slice(receiptOutput))
-    assert.equal(receiptSql.length, 3, 'receipt enqueue uses two SQL calls and worker storage uses one')
+    assert.equal(receiptSql.length, 4, 'receipt enqueue uses account + resource admission + atomic persistence and worker storage uses one')
     assert.match(receiptSql[0], /FROM\s+"public"\."users"/)
-    assert.match(receiptSql[1], /UPDATE\s+rounds[\s\S]*INSERT INTO\s+expense_receipts[\s\S]*graphile_worker\.add_job[\s\S]*INSERT INTO\s+mutation_requests/)
-    assert.match(receiptSql[2], /UPDATE\s+expense_receipts[\s\S]*storage_status/)
+    assert.match(receiptSql[1], /SELECT[\s\S]*round_members[\s\S]*mutation_requests/)
+    assert.match(receiptSql[2], /UPDATE\s+rounds[\s\S]*INSERT INTO\s+expense_receipts[\s\S]*graphile_worker\.add_job[\s\S]*INSERT INTO\s+mutation_requests/)
+    assert.match(receiptSql[3], /UPDATE\s+expense_receipts[\s\S]*storage_status/)
     assert.ok(receiptSql.every(sql => !/\b(BEGIN|COMMIT|ROLLBACK)\b|pg_advisory|FOR UPDATE|FOR SHARE/.test(sql)))
     const receiptReadOutput = output.length
     const receiptImage = await requestWithRateLimit(`${origin}/api/receipts/${savedReceipt.id}`, { headers: { authorization: `Bearer ${other.accessToken}` } })
@@ -319,7 +320,7 @@ test('authenticated WebSocket receives only its own committed invalidations', as
       assert.deepEqual((await replay.json()).data, savedReceipt)
       await new Promise(resolve => setTimeout(resolve, 250))
       assert.equal(receiptReplayPublished, false)
-      assert.equal(requestSql(output.slice(replayOutput)).length, 2)
+      assert.equal(requestSql(output.slice(replayOutput)).length, 3)
     } finally {
       mine.socket.off('message', onReceiptReplay)
       other.socket.off('message', onReceiptReplay)

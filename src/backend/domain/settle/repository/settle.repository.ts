@@ -23,6 +23,7 @@ import type {
   ShareRow,
   ReceiptContentRow,
   ReceiptCreationRow,
+  ReceiptAdmissionRow,
   ReceiptDeletionRow,
   SettlementExpenseRow,
   SettlementCheckRow,
@@ -1052,6 +1053,30 @@ export class SettleRepository {
     ) incoming ON true WHERE r.id=$1`,
       [roundId, userId],
     );
+  }
+
+  async findReceiptAdmission(
+    client: Database,
+    roundId: string,
+    expenseId: string,
+    userId: string,
+    key: string,
+  ) {
+    return (
+      await rawRows<ReceiptAdmissionRow>(
+        client,
+        `WITH context AS (
+      SELECT r.id,r.status,r.completed_at,(r.creator_id=$3) AS is_creator,
+        e.id AS expense_id,e.author_id,viewer.excluded_at AS viewer_excluded_at
+      FROM rounds r JOIN round_members viewer ON viewer.round_id=r.id AND viewer.user_id=$3
+      LEFT JOIN expenses e ON e.round_id=r.id AND e.id=$2 WHERE r.id=$1
+    ) SELECT context.*,saved.replay FROM (
+      SELECT EXISTS(SELECT 1 FROM mutation_requests
+        WHERE actor_id=$3 AND operation='receipt.create' AND request_key=$4) AS replay
+    ) saved LEFT JOIN context ON true`,
+        [roundId, expenseId, userId, key],
+      )
+    )[0];
   }
 
   async enqueueReceipt(

@@ -67,6 +67,7 @@ import type {
   SettlementExpenseRow,
   ExpenseUpdateRow,
   ExpenseDeletionRow,
+  ReceiptAdmissionRow,
   MemberExclusionRow,
 } from '../dao/settle.dao';
 import { duplicateRound, missing } from '../exception/settle.exception';
@@ -78,12 +79,18 @@ type ExpenseFields = Pick<
 > &
   Pick<ExpenseRequestDTO, 'amount' | 'customShares'>;
 
-type ReceiptUpload = {
+export type ReceiptUpload = {
   expectedVersion: number;
   bytes: Uint8Array;
   type: string;
   name?: string;
 };
+export type ReceiptAdmission = Readonly<{
+  userId: string;
+  key: string;
+  roundId: string;
+  expenseId: string;
+}>;
 type ReceiptAudience = (audience: {
   groupId: string;
   userIds: string[];
@@ -116,7 +123,10 @@ export class SettleService {
     if (!round.is_creator) throw new SettleException(settleErrors.CREATOR_ONLY);
   }
 
-  private state(round: RoundRow, expected: RoundStatus) {
+  private state(
+    round: Pick<RoundRow, 'status' | 'completed_at'>,
+    expected: RoundStatus,
+  ) {
     if (
       round.status !== expected ||
       (expected !== 'COMPLETED' && round.completed_at !== null)
@@ -798,6 +808,14 @@ export class SettleService {
     userId: string,
     expectedVersion: number,
   ) {
+    this.validateExpenseEditor(round, userId);
+    this.version(round, expectedVersion);
+  }
+
+  private validateExpenseEditor(
+    round: Omit<ReceiptAdmissionRow, 'replay'>,
+    userId: string,
+  ) {
     if (!round.id || !round.expense_id) throw missing();
     this.state(round, 'RECORDING');
     if (
@@ -806,7 +824,6 @@ export class SettleService {
     ) {
       throw new SettleException(settleErrors.EXPENSE_EDITOR_ONLY);
     }
-    this.version(round, expectedVersion);
   }
 
   async deleteExpense(
@@ -1540,6 +1557,29 @@ export class SettleService {
     });
   }
 
+  async admitReceipt(
+    access: Identity,
+    key: string,
+    roundId: string,
+    expenseId: string,
+  ): Promise<ReceiptAdmission> {
+    if (!access) throw new SettleException(settleErrors.UNAUTHORIZED);
+    return this.prisma.withDatabaseConnection(async (client) => {
+      const account = await this.authorization.requireAccount(client, access);
+      const admission = await this.repository.findReceiptAdmission(
+        client,
+        roundId,
+        expenseId,
+        account.id,
+        key,
+      );
+      // A replay still needs the file digest, even if the original resource has
+      // changed or disappeared. The atomic save verifies the digest and actor again.
+      if (!admission.replay) this.validateExpenseEditor(admission, account.id);
+      return { userId: account.id, key, roundId, expenseId };
+    });
+  }
+
   async addReceipt(
     access: Identity,
     key: string,
@@ -1557,10 +1597,7 @@ export class SettleService {
           captureAudience?: ReceiptAudience,
         ]
   ) {
-    if (!access) throw new SettleException(settleErrors.UNAUTHORIZED);
-    const account = await this.prisma.withDatabaseConnection((client) =>
-      this.authorization.requireAccount(client, access),
-    );
+    const admission = await this.admitReceipt(access, key, roundId, expenseId);
     const upload: ReceiptUpload =
       typeof input[0] === 'function'
         ? await input[0]()
@@ -1573,6 +1610,15 @@ export class SettleService {
       typeof input[0] === 'function'
         ? (input[1] as ReceiptAudience | undefined)
         : input[3];
+    return this.saveReceipt(admission, upload, captureAudience);
+  }
+
+  async saveReceipt(
+    admission: ReceiptAdmission,
+    upload: ReceiptUpload,
+    captureAudience?: ReceiptAudience,
+  ) {
+    const { userId, key, roundId, expenseId } = admission;
     const { expectedVersion, bytes, type } = upload;
     // Multipart/programmatic uploads enter after account authorization, outside
     // JSON DTO pipes. Validate their metadata once with the same library rules.
@@ -1600,7 +1646,7 @@ export class SettleService {
           client,
           roundId,
           expenseId,
-          account.id,
+          userId,
           key,
           digest,
           expectedVersion,
@@ -1626,7 +1672,7 @@ export class SettleService {
       throw new SettleException(settleErrors.UNAUTHORIZED);
     const result = mutationResult<MutationResult>(current, digest);
     if (!result) {
-      this.validateEditableExpense(current, account.id, expectedVersion);
+      this.validateEditableExpense(current, userId, expectedVersion);
       throw new SettleException(settleErrors.STALE_ROUND);
     }
     if (current.inserted)
