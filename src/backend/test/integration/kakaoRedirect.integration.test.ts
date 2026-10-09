@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { generateKeyPairSync, randomUUID, sign } from 'node:crypto';
 import { test } from 'node:test';
 import { createBackend } from '../../domain/main';
+import { JwtService } from '@nestjs/jwt';
 import { ResponseCookies } from '@edge-runtime/cookies';
 import { requestTestServer } from '../support/actualHttpTestSupport.ts';
 import { KakaoAuthService } from '../../global/auth/service/kakaoAuth.service';
@@ -44,6 +45,13 @@ test('Kakao callbacks keep the selected URI for localhost and LAN and reject unt
   const originalFetch = globalThis.fetch;
   const { app } = await createBackend();
   t.after(() => app.close());
+  const signer = t.mock.method(app.get(JwtService), 'sign');
+  t.after(() =>
+    assert.ok(
+      signer.mock.callCount() >= 4,
+      'Kakao HTTP callbacks issue tokens through the registered JwtService',
+    ),
+  );
   const callbackProvider = t.mock.method(app.get(KakaoAuthService), 'complete');
   t.after(() =>
     assert.ok(

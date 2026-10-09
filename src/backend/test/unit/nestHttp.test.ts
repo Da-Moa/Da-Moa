@@ -14,7 +14,7 @@ import {
   BankAccountRequestDTO,
   OnboardingRequestDTO,
 } from '../../domain/user/dto/req/user.request.dto';
-import { issueTokens } from '../../global/auth/service/authTokens';
+import { TokenService } from '../../global/auth/service/token.service';
 import { AuthService } from '../../global/auth/service/auth.service';
 import { TestLoginRequestDTO } from '../../global/auth/dto/req/testLogin.request.dto';
 import { TestLoginBodyPipe } from '../../global/auth/pipe/testLoginBody.pipe';
@@ -51,7 +51,9 @@ test('native form Body validates once after the test-login Guard and preserves l
     'signInTestAccount',
     async (key: unknown) => {
       serviceCalls.push(key);
-      return issueTokens('form-user', 'app', Math.floor(Date.now() / 1000));
+      return app
+        .get(TokenService)
+        .issueTokens('form-user', 'app', Math.floor(Date.now() / 1000));
     },
   );
   const pipe = app.get(TestLoginBodyPipe);
@@ -566,7 +568,9 @@ test('Nest HTTP routes enforce JWT before body parsing, preserve cookies, and di
   });
   users.completeOnboarding = async (_access, body) => {
     assert.ok(body instanceof OnboardingRequestDTO);
-    return issueTokens('unit-user', 'app', Math.floor(Date.now() / 1000));
+    return app
+      .get(TokenService)
+      .issueTokens('unit-user', 'app', Math.floor(Date.now() / 1000));
   };
   const onboarding = await request(
     '/api/me/onboarding',

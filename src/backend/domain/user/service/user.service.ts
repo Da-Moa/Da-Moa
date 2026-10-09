@@ -7,7 +7,7 @@ import {
   type AccessToken,
   type KakaoProfile,
 } from '../../../global/auth/authUtil';
-import { issueTokens } from '../../../global/auth/service/authTokens';
+import { TokenService } from '../../../global/auth/service/token.service';
 import {
   AuthorizationService,
   type Account as AuthorizedAccount,
@@ -41,6 +41,7 @@ export class UserService {
     private readonly repository: UserRepository,
     @Inject(AuthorizationService)
     private readonly authorization: AuthorizationService,
+    @Inject(TokenService) private readonly tokens: TokenService,
   ) {}
 
   private assertBankVersion(
@@ -70,7 +71,7 @@ export class UserService {
       );
       this.assertOnboarding(account, bank);
       const now = currentTimestamp();
-      const session = issueTokens(account.id, 'app', now);
+      const session = this.tokens.issueTokens(account.id, 'app', now);
       if (
         !(await this.repository.saveOnboarding(
           client,

@@ -3,11 +3,13 @@ import assert from 'node:assert/strict';
 import { before, after, test } from 'node:test';
 import { networkInterfaces } from 'node:os';
 import { createBackend } from '../../domain/main';
+import { JwtService } from '@nestjs/jwt';
 import type { INestApplication } from '@nestjs/common';
 import { requestTestServer } from '../support/actualHttpTestSupport.ts';
 import {
   ACCESS_TOKEN_COOKIE_NAME,
   readAccessToken,
+  readRefreshToken,
   REFRESH_TOKEN_COOKIE_NAME,
 } from '../../global/auth/native.ts';
 import { getAccount } from '../support/domainTestSupport.ts';
@@ -84,8 +86,10 @@ function loginRequest(key: string, origin = 'http://localhost', extra = '') {
   });
 }
 
-test('local development test login issues only a Refresh cookie and bootstraps a Bearer Access JWT and rejects untrusted input', async () => {
+test('local development test login issues only a Refresh cookie and bootstraps a Bearer Access JWT and rejects untrusted input', async (t) => {
+  const signer = t.mock.method(app.get(JwtService), 'sign');
   for (const account of TEST_ACCOUNTS) {
+    const before = signer.mock.callCount();
     const response = await POST(loginRequest(account.key));
     assert.equal(response.status, 303, account.key);
     assert.equal(
@@ -115,6 +119,42 @@ test('local development test login issues only a Refresh cookie and bootstraps a
     const access = readAccessToken((await issued.json()).data.accessToken);
     assert.ok(access);
     assert.equal((await getAccount(access)).id, account.id);
+    assert.equal(
+      signer.mock.callCount() - before,
+      3,
+      'login and bootstrap use the registered JwtService',
+    );
+    const oldRefresh = readRefreshToken(
+      refreshCookie?.split(';')[0].split('=')[1],
+    );
+    assert.ok(oldRefresh);
+    const refreshed = await accessTokenResponse(
+      new Request('http://localhost/api/auth/refresh', {
+        method: 'POST',
+        headers: {
+          origin: 'http://localhost',
+          cookie: refreshCookie?.split(';')[0] ?? '',
+        },
+      }),
+    );
+    assert.equal(refreshed.status, 200);
+    const refreshedAccess = readAccessToken(
+      (await refreshed.json()).data.accessToken,
+    );
+    assert.equal(refreshedAccess?.sessionId, oldRefresh.sessionId);
+    assert.equal(refreshedAccess?.purpose, 'app');
+    const nextRefresh = refreshed.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`));
+    assert.equal(
+      readRefreshToken(nextRefresh?.split(';')[0].split('=')[1])?.sessionId,
+      oldRefresh.sessionId,
+    );
+    assert.equal(
+      signer.mock.callCount() - before,
+      5,
+      'refresh signs access and refresh through the same injected provider',
+    );
   }
 
   assert.equal((await POST(loginRequest('unknown'))).status, 404);

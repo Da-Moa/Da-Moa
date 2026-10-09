@@ -5,7 +5,6 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { before, test } from 'node:test';
 import {
-  accessTokenForRefresh,
   createAccessToken,
   createRefreshToken,
   currentTimestamp,
@@ -13,7 +12,8 @@ import {
   readRefreshToken,
   type AccessToken,
 } from '../../global/auth/native.ts';
-import { withdrawAccount } from '../support/domainTestSupport.ts';
+import { withdrawAccount, testProvider } from '../support/domainTestSupport.ts';
+import { TokenService } from '../../global/auth/service/token.service';
 import { type AuthSession } from '../../global/auth/index.ts';
 import { signInKakao } from '../support/domainTestSupport.ts';
 import { getAccount } from '../support/domainTestSupport.ts';
@@ -644,11 +644,12 @@ test('withdrawal checks all unfinished history including excluded members; rejoi
 });
 
 test('refresh JWTs can be reused without stored sessions and preserve onboarding purpose', async () => {
+  const tokens = await testProvider(TokenService);
   const user = await newAccount();
   const refresh = readRefreshToken(user.session.refreshToken)!;
   for (let i = 0; i < 2; i++) {
     const renewed = readAccessToken(
-      accessTokenForRefresh(refresh).accessToken,
+      tokens.accessTokenForRefresh(refresh).accessToken,
     )!;
     assert.equal((await getAccount(renewed)).id, user.session.userId);
   }
@@ -663,13 +664,15 @@ test('refresh JWTs can be reused without stored sessions and preserve onboarding
     'login and onboarding never store JWT sessions',
   );
   await withdrawAccount(user.access);
-  const renewed = readAccessToken(accessTokenForRefresh(refresh).accessToken)!;
+  const renewed = readAccessToken(
+    tokens.accessTokenForRefresh(refresh).accessToken,
+  )!;
   await assert.rejects(getAccount(renewed), codeIs('unauthorized'));
 
   const limited = await signInKakao(`integration-${randomUUID()}`, profile);
   const limitedRefresh = readRefreshToken(limited.refreshToken)!;
   const limitedAccess = readAccessToken(
-    accessTokenForRefresh(limitedRefresh).accessToken,
+    tokens.accessTokenForRefresh(limitedRefresh).accessToken,
   )!;
   assert.equal(limitedAccess.purpose, 'onboarding');
   await assert.rejects(

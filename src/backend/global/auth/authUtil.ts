@@ -1,3 +1,4 @@
+import { getSessionSecret } from './authConfig'
 import { getKakaoRedirectUris, safeReturnTo } from '../../../shared/authUrls'
 export { getKakaoRedirectUris, safeReturnTo } from '../../../shared/authUrls'
 // Node crypto is also used by the native WebSocket server; client reachability is checked by domain-boundaries.test.ts.
@@ -146,14 +147,6 @@ function signHs256(input: string, secret: string): string {
 
 export function currentTimestamp(): number {
   return Math.floor(Date.now() / 1000)
-}
-
-function getSessionSecret(): string {
-  const secret = process.env.AUTH_JWT_SECRET
-  if (!secret || Buffer.byteLength(secret) < 32) {
-    throw new Error('AUTH_JWT_SECRET must be at least 32 bytes')
-  }
-  return secret
 }
 
 
@@ -474,13 +467,6 @@ export function createRefreshToken(
   return createToken('refresh', userId, sessionId, maxAge, secret, issuedAt, purpose)
 }
 
-export function accessTokenForRefresh(refresh: RefreshToken) {
-  const now = currentTimestamp()
-  const purpose = refresh.purpose ?? 'app'
-  const maxAge = Math.min(ACCESS_TOKEN_MAX_AGE_SECONDS, (refresh.expiresAt ?? now) - now)
-  return { accessToken: createAccessToken(refresh.userId, refresh.sessionId, undefined, now, maxAge, purpose), purpose }
-}
-
 export function verifyAccessToken(
   token: string | undefined,
   secret = getSessionSecret(),
@@ -517,7 +503,6 @@ export function readRefreshToken(token: string | undefined): RefreshToken | null
     return null
   }
 }
-
 
 export function createReturnToCookie(
   value: unknown,

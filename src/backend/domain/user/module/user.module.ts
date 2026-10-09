@@ -1,3 +1,4 @@
+import { TokenModule } from '../../../global/auth/module/token.module';
 import { RealtimeModule } from '../../../global/websocket/module/realtime.module';
 import { GroupAudienceModule } from '../../group';
 import { SettleAudienceModule } from '../../settle';
@@ -10,6 +11,7 @@ import { PrismaModule } from '../../../global/database/prisma.module';
 
 @Module({
   imports: [
+    TokenModule,
     RealtimeModule,
     PrismaModule,
     AuthorizationModule,

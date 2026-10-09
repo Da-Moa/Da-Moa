@@ -12,11 +12,7 @@ export {
   CurrentUser,
   type AuthenticatedUser,
 } from './decorator/currentUser.decorator';
-export {
-  issueTokens,
-  AuthService,
-  type AuthSession,
-} from './service/auth.service';
+export { AuthService, type AuthSession } from './service/auth.service';
 export type { AccessToken, KakaoProfile } from './authUtil';
 export {
   ACCESS_TOKEN_COOKIE_NAME,

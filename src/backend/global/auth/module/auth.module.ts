@@ -1,3 +1,4 @@
+import { TokenModule } from './token.module';
 import { Module } from '@nestjs/common';
 import { AuthController } from '../controller/auth.controller';
 import { AuthService } from '../service/auth.service';
@@ -8,7 +9,7 @@ import { TestLoginBodyPipe } from '../pipe/testLoginBody.pipe';
 import { UserModule } from '../../../domain/user/module/user.module';
 import { PrismaModule } from '../../database/prisma.module';
 @Module({
-  imports: [PrismaModule, UserModule],
+  imports: [TokenModule, PrismaModule, UserModule],
   controllers: [AuthController, KakaoController],
   providers: [AuthService, KakaoAuthService, TestLoginGuard, TestLoginBodyPipe],
   exports: [AuthService],

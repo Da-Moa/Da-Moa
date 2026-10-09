@@ -13,8 +13,8 @@ import {
   testAccountForKey,
 } from '../../../../shared/testAccounts';
 
-export { issueTokens, refreshTokens, type AuthSession } from './authTokens';
-import { issueTokens, refreshTokens } from './authTokens';
+export type { AuthSession } from './authTokens';
+import { TokenService } from './token.service';
 @Injectable()
 export class AuthService {
   constructor(
@@ -22,6 +22,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     @Inject(UserService)
     private readonly userService: UserService,
+    @Inject(TokenService) private readonly tokens: TokenService,
   ) {}
 
   signInKakao(providerSubject: string, profile: KakaoProfile) {
@@ -38,7 +39,7 @@ export class AuthService {
         user.deletedAt !== null || user.onboardingCompletedAt === null
           ? 'onboarding'
           : 'app';
-      return issueTokens(user.id, purpose, now);
+      return this.tokens.issueTokens(user.id, purpose, now);
     });
   }
 
@@ -55,7 +56,7 @@ export class AuthService {
         const id = randomUUID(),
           now = currentTimestamp();
         await this.userService.createTestOnboardingUser(client, id, now);
-        return issueTokens(id, 'onboarding', now);
+        return this.tokens.issueTokens(id, 'onboarding', now);
       }
       const userId = await this.userService.getTestSignInUser(
         client,
@@ -68,11 +69,15 @@ export class AuthService {
           'not_found',
           '테스트 계정을 먼저 시드해 주세요',
         );
-      return issueTokens(userId, 'app', currentTimestamp());
+      return this.tokens.issueTokens(userId, 'app', currentTimestamp());
     });
   }
 
+  accessTokenForRefresh(refresh: RefreshToken) {
+    return this.tokens.accessTokenForRefresh(refresh);
+  }
+
   refreshTokens(refresh: RefreshToken) {
-    return refreshTokens(refresh);
+    return this.tokens.refreshTokens(refresh);
   }
 }

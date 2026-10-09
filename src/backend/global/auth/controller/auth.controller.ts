@@ -16,7 +16,7 @@ import {
 } from '../../apiPayload/requestBody.interceptor';
 import { ApiSuccess } from '../../apiPayload/apiResponse.interceptor';
 import { AppError } from '../../apiPayload/errors';
-import { accessTokenForRefresh, safeReturnTo } from '../authUtil';
+import { safeReturnTo } from '../authUtil';
 import {
   setAuthCookies,
   clearAuthCookies,
@@ -43,7 +43,7 @@ export class AuthController {
     detail: null,
   })
   access(@CurrentUser() user: AuthenticatedUser) {
-    return accessTokenForRefresh(user);
+    return this.service.accessTokenForRefresh(user);
   }
   @Post('api/auth/refresh')
   @HttpCode(200)

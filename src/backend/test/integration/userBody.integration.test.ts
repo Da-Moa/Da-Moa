@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { createBackend } from '../../domain/main';
+import { JwtService } from '@nestjs/jwt';
 import { UserService } from '../../domain/user/service/user.service';
 import {
   BankAccountRequestDTO,
@@ -36,6 +37,7 @@ test('account HTTP validates DTO shape before SQL and preserves normalized busin
   await app.listen(0, '127.0.0.1');
   const origin = await app.getUrl();
   const service = app.get(UserService);
+  const signer = t.mock.method(app.get(JwtService), 'sign');
   for (const [method, dto] of [
     ['completeOnboarding', OnboardingRequestDTO],
     ['updateBankAccount', BankAccountRequestDTO],
@@ -152,11 +154,17 @@ test('account HTTP validates DTO shape before SQL and preserves normalized busin
   }
   await request('bank-account', { ...input, confirmRejoin: true }, 400, 0);
   await request('onboarding', { ...input, confirmRejoin: 'true' }, 400, 0);
+  assert.equal(signer.mock.callCount(), 0, 'invalid input cannot issue tokens');
   const onboarded = await request(
     'onboarding',
     { ...input, verifyWithOpenBanking: false },
     200,
     2,
+  );
+  assert.equal(
+    signer.mock.callCount(),
+    2,
+    'onboarding signs both tokens through the registered JwtService',
   );
   assert.equal(readAccessToken(onboarded.data.accessToken)?.purpose, 'app');
   const token = onboarded.data.accessToken;
