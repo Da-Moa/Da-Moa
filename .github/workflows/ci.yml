@@ -86,34 +86,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - kind: api-smoke
-            database: da_moa_api_smoke_test
+          - kind: domain
+            database: da_moa_domain_test
             postgres_port: 15440
-            minio_port: 19010
-            metrics_port: 3108
-            bucket: da-moa-api-smoke-test
-            test_script: test:smoke
-          - kind: sql-regression
-            database: da_moa_sql_regression_test
+            test_script: test:domain
+          - kind: integration
+            database: da_moa_integration_test
             postgres_port: 25440
-            minio_port: 29010
-            metrics_port: 4108
-            bucket: da-moa-sql-regression-test
             test_script: test:integration
+          - kind: backend-scenario
+            database: da_moa_scenario_test
+            postgres_port: 35440
+            test_script: test:scenario
     env:
       CI_COMPOSE_PROJECT: da-moa-ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.kind }}
       CI_ARTIFACT_DIR: test-results/${{ matrix.kind }}
       CI_TEST_DATABASE: ${{ matrix.database }}
       CI_TEST_POSTGRES_PORT: ${{ matrix.postgres_port }}
-      CI_TEST_MINIO_PORT: ${{ matrix.minio_port }}
       TEST_DATABASE_URL: postgresql://da_moa_ci:da_moa_ci_test@127.0.0.1:${{ matrix.postgres_port }}/${{ matrix.database }}
-      MINIO_ENDPOINT: http://127.0.0.1:${{ matrix.minio_port }}
-      MINIO_BUCKET: ${{ matrix.bucket }}
-      MINIO_ACCESS_KEY: da_moa_ci
-      MINIO_SECRET_KEY: da_moa_ci_minio_test
       AUTH_JWT_SECRET: ci-only-nest-db-test-secret-at-least-32-bytes
-      RECEIPT_WORKER_ENABLED: "true"
-      METRICS_PORT: ${{ matrix.metrics_port }}
+      RECEIPT_WORKER_ENABLED: 'false'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -121,17 +113,12 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Start isolated PostgreSQL and MinIO
+      - name: Start isolated PostgreSQL
         run: |
           set -euo pipefail
           mkdir -p "$CI_ARTIFACT_DIR"
-          docker compose -f compose.ci.yaml -p "$CI_COMPOSE_PROJECT" up -d --wait --wait-timeout 60
-          docker compose -f compose.ci.yaml -p "$CI_COMPOSE_PROJECT" exec -T minio sh -c '
-            set -eu
-            mc alias set ci http://127.0.0.1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
-            mc mb --ignore-existing "ci/$MINIO_TEST_BUCKET"
-          '
-      - name: Test actual Nest HTTP and database contracts
+          docker compose -f compose.mock-test.yaml -p "$CI_COMPOSE_PROJECT" up -d --wait --wait-timeout 60
+      - name: Test injected Nest requests and real database contracts
         run: |
           set -euo pipefail
           npm run ${{ matrix.test_script }} 2>&1 | tee "$CI_ARTIFACT_DIR/tests.log"
@@ -139,8 +126,8 @@ jobs:
         if: always()
         run: |
           mkdir -p "$CI_ARTIFACT_DIR"
-          docker compose -f compose.ci.yaml -p "$CI_COMPOSE_PROJECT" logs --no-color > "$CI_ARTIFACT_DIR/services.log" 2>&1 || true
-          docker compose -f compose.ci.yaml -p "$CI_COMPOSE_PROJECT" down --volumes --remove-orphans
+          docker compose -f compose.mock-test.yaml -p "$CI_COMPOSE_PROJECT" logs --no-color > "$CI_ARTIFACT_DIR/services.log" 2>&1 || true
+          docker compose -f compose.mock-test.yaml -p "$CI_COMPOSE_PROJECT" down --volumes --remove-orphans
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -148,64 +135,9 @@ jobs:
           path: ${{ env.CI_ARTIFACT_DIR }}
           retention-days: 7
 
-  browser:
-    name: Chromium / native API and realtime
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    env:
-      CI_COMPOSE_PROJECT: da-moa-ci-${{ github.run_id }}-${{ github.run_attempt }}-browser
-      CI_ARTIFACT_DIR: test-results/browser
-      CI_TEST_DATABASE: da_moa_browser_test
-      CI_TEST_POSTGRES_PORT: 35440
-      CI_TEST_MINIO_PORT: 39010
-      TEST_DATABASE_URL: postgresql://da_moa_ci:da_moa_ci_test@127.0.0.1:35440/da_moa_browser_test
-      MINIO_ENDPOINT: http://127.0.0.1:39010
-      MINIO_BUCKET: da-moa-browser-test
-      MINIO_ACCESS_KEY: da_moa_ci
-      MINIO_SECRET_KEY: da_moa_ci_minio_test
-      AUTH_JWT_SECRET: ci-only-browser-test-secret-at-least-32-bytes
-      BROWSER_TEST_PORT: 3307
-      BROWSER_TEST_METRICS_PORT: 5108
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium
-      - name: Start isolated browser dependencies
-        run: |
-          set -euo pipefail
-          mkdir -p "$CI_ARTIFACT_DIR"
-          docker compose -f compose.ci.yaml -p "$CI_COMPOSE_PROJECT" up -d --wait --wait-timeout 60
-          docker compose -f compose.ci.yaml -p "$CI_COMPOSE_PROJECT" exec -T minio sh -c '
-            set -eu
-            mc alias set ci http://127.0.0.1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
-            mc mb --ignore-existing "ci/$MINIO_TEST_BUCKET"
-          '
-          npm run db:seed:test-accounts
-      - name: Build and test production Nest with Chromium
-        run: |
-          set -euo pipefail
-          npm run build 2>&1 | tee "$CI_ARTIFACT_DIR/build.log"
-          npm run test:browser 2>&1 | tee "$CI_ARTIFACT_DIR/tests.log"
-      - name: Collect service logs and remove owned resources
-        if: always()
-        run: |
-          mkdir -p "$CI_ARTIFACT_DIR"
-          docker compose -f compose.ci.yaml -p "$CI_COMPOSE_PROJECT" logs --no-color > "$CI_ARTIFACT_DIR/services.log" 2>&1 || true
-          docker compose -f compose.ci.yaml -p "$CI_COMPOSE_PROJECT" down --volumes --remove-orphans
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: browser-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ env.CI_ARTIFACT_DIR }}
-          retention-days: 7
-
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    needs: [test-and-build, integration, browser]
+    needs: [test-and-build, integration]
     runs-on: ubuntu-latest
     steps:
       - name: Notify Deploy

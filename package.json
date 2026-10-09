@@ -24,6 +24,8 @@
     "test:smoke": "SWC_NODE_PROJECT=tsconfig.backend.json node --import @swc-node/register/esm-register --test --test-concurrency=1 src/backend/test/integration/routes.integration.test.ts",
     "test:browser": "playwright test",
     "test:domain": "SWC_NODE_PROJECT=tsconfig.backend.json node --import @swc-node/register/esm-register --test --test-concurrency=1 src/backend/test/domain/*.domain.test.ts",
+    "test:scenario": "SWC_NODE_PROJECT=tsconfig.backend.json node --import @swc-node/register/esm-register --test --test-concurrency=1 src/backend/test/scenario/*.scenario.test.ts",
+    "test:all": "npm test && npm run test:domain && npm run test:integration && npm run test:scenario",
     "test:transport": "npm run build:backend && SWC_NODE_PROJECT=tsconfig.backend.json node --import @swc-node/register/esm-register --test --test-concurrency=1 src/backend/test/transport/*.test.ts src/backend/test/transport/*.test.mjs"
   },
   "dependencies": {

@@ -24,7 +24,7 @@ src/
 │   │   ├── rateLimit/
 │   │   ├── util/           # MinIO·입력 검증·멱등성·페이지네이션
 │   │   └── websocket/      # 인증·업그레이드·토픽 전송
-│   └── test/{unit,integration}/
+│   └── test/{unit,domain,integration,scenario,transport}/
 ├── frontend/
 │   ├── domain/{group,settle,user}/
 │   ├── global/{auth,util,websocket}/
@@ -63,9 +63,16 @@ UUID 검증에는 직접 작성한 정규식 대신 `class-validator`의 `isUUID
 npm run build:backend
 npm run typecheck
 npm test
-npm run test:integration  # 별도 TEST_DATABASE_URL 및 MINIO_* 설정 필요
+npm run test:domain       # 격리된 로컬 TEST_DATABASE_URL 필요
+npm run test:integration
+npm run test:scenario     # 백엔드 사용자 시나리오
+# 실제 포트·브라우저 검증은 별도로 실행
+npm run test:transport   # TEST_DATABASE_URL 및 MINIO_* 설정 필요
+npm run test:browser
 node --import tsx src/frontend/test/integration/browserCheck.mjs
 ```
+
+Controller 단위·도메인·통합·백엔드 사용자 시나리오는 서버 포트를 열지 않습니다. `@nestjs/testing`으로 초기화한 앱의 실제 Express/Nest 라우터에 `node-mocks-http` 기반 Request/Response와 메모리 본문 스트림을 주입하여 Guard·Pipe·Interceptor·예외 필터·쿠키·응답 완료 후 변경 알림을 검증합니다. 도메인·통합·시나리오는 실제 PostgreSQL을 사용하며 카카오·S3 저장소·WebSocket 전송은 대역을 사용합니다. 시나리오는 로그인 응답의 토큰·쿠키와 앞 요청의 ID·버전을 이어서 사용합니다. `npm run test:all`이 이 네 계층을 실행합니다. CI도 PostgreSQL만 시작하여 이 계층을 검증하며, 실제 소켓 회귀 검증은 `transport`, 브라우저 검증은 `test:browser`로 분리합니다. 운영 이미지의 네트워크 헬스 확인은 배포 빌드 검증으로 유지합니다.
 
 참고한 프레임워크 문서: [Nest controllers](https://docs.nestjs.com/controllers), [Prisma raw queries](https://www.prisma.io/docs/orm/v7/prisma-client/using-raw-sql/raw-queries), [Prisma transactions](https://www.prisma.io/docs/orm/v7/prisma-client/queries/transactions).
 

@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    ports:
+      - '127.0.0.1:${CI_TEST_POSTGRES_PORT:?CI_TEST_POSTGRES_PORT is required}:5432'
+    environment:
+      POSTGRES_DB: '${CI_TEST_DATABASE:?CI_TEST_DATABASE is required}'
+      POSTGRES_USER: da_moa_ci
+      POSTGRES_PASSWORD: da_moa_ci_test
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U da_moa_ci -d $$POSTGRES_DB']
+      interval: 2s
+      timeout: 5s
+      retries: 30
