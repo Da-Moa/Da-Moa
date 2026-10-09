@@ -417,7 +417,18 @@ test('actual Kakao HTTP uses the injected OIDC client and rejects invalid tokens
     mode = label;
     claims = payload;
     header = protectedHeader;
-    await finish('invalid');
+    // Keep the +61s boundary fixed while the actual HTTP request is in flight.
+    // A wall-clock second rollover otherwise turns this invalid token into +60s.
+    if (label === 'future-iat') {
+      const now = Date.now();
+      t.mock.timers.enable({ apis: ['Date'], now });
+      claims = { iat: Math.floor(now / 1000) + 61 };
+    }
+    try {
+      await finish('invalid');
+    } finally {
+      if (label === 'future-iat') t.mock.timers.reset();
+    }
     assert.equal(
       signIn.mock.callCount(),
       1,
