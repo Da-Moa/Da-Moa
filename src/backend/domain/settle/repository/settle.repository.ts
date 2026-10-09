@@ -1243,12 +1243,11 @@ export class SettleRepository {
   }
 
   async findBankSettlementAudience(client: Database, userId: string) {
-    return await rawRows<{ sender_id: string; round_id: string }>(
-      client,
-      `SELECT DISTINCT t.sender_id,t.round_id
-    FROM settlement_transfers t JOIN rounds r ON r.id=t.round_id
-    WHERE t.receiver_id=$1 AND t.received_at IS NULL AND t.currency='KRW'`,
-      [userId],
-    );
+    // The composite PK fixes uniqueness for a receiver and currency, and the
+    // rounds FK guarantees existence. No relation load or DISTINCT is needed.
+    return client.prisma.settlement_transfers.findMany({
+      where: { receiver_id: userId, received_at: null, currency: 'KRW' },
+      select: { sender_id: true, round_id: true },
+    });
   }
 }

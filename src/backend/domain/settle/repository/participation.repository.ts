@@ -6,37 +6,6 @@ import { rawRows } from '../../../global/database/rawSql';
 export const unfinishedGroupParticipationSql = `SELECT r.group_id,m.user_id FROM rounds r
   LEFT JOIN round_members m ON m.round_id=r.id AND m.excluded_at IS NULL WHERE r.status<>'COMPLETED'`;
 
-export async function hasUnfinishedGroupRounds(
-  client: Database,
-  groupId: string,
-): Promise<boolean> {
-  return Boolean(
-    (
-      await rawRows<Record<string, number>>(
-        client,
-        `SELECT 1 FROM (${unfinishedGroupParticipationSql}) unfinished WHERE group_id=$1 LIMIT 1`,
-        [groupId],
-      )
-    ).length,
-  );
-}
-
-export async function hasUnfinishedGroupParticipation(
-  client: Database,
-  groupId: string,
-  userId: string,
-): Promise<boolean> {
-  return Boolean(
-    (
-      await rawRows<Record<string, number>>(
-        client,
-        `SELECT 1 FROM (${unfinishedGroupParticipationSql}) unfinished WHERE group_id=$1 AND user_id=$2 LIMIT 1`,
-        [groupId, userId],
-      )
-    ).length,
-  );
-}
-
 export const unfinishedUserRoundsSql = `
     SELECT r.id, r.name, r.status, g.id AS "groupId", g.name AS "groupName"
     FROM round_members rm JOIN rounds r ON r.id = rm.round_id JOIN groups g ON g.id = r.group_id

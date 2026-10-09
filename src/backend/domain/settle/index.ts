@@ -2,10 +2,6 @@ export { ReceiptWorker } from './service/receiptWorker';
 export { ReceiptWorkerModule } from './module/receiptWorker.module';
 
 export {
-  hasUnfinishedGroupRounds,
-  hasUnfinishedGroupParticipation,
-} from './repository/participation.repository';
-export {
   getUnfinishedUserRounds,
   unfinishedUserRoundsSql,
 } from './repository/participation.repository';
