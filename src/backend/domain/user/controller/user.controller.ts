@@ -16,11 +16,8 @@ import {
   HttpCode,
 } from '@nestjs/common';
 import type { Request, Response as ServerResponse } from 'express';
-import {
-  after,
-  HttpResponse,
-  copyResponseCookies,
-} from '../../../global/apiPayload/httpContext';
+import { after } from '../../../global/apiPayload/httpContext';
+import { nativeCookieResponse } from '../../../global/auth/controller/authCookies';
 import { ApiSuccess } from '../../../global/apiPayload/apiResponse.interceptor';
 import {
   BankAccountRequestDTO,
@@ -79,10 +76,9 @@ export class UserController {
         this.settlements.findRecipients(id),
       ),
     );
-    const cookies = new HttpResponse(null);
+    const cookies = nativeCookieResponse(response);
     setAuthCookies(cookies, session);
     clearReturnToCookie(cookies);
-    copyResponseCookies(response, cookies);
     return { id: session.userId, returnTo, accessToken: session.accessToken };
   }
 
@@ -119,9 +115,8 @@ export class UserController {
         this.groups.findRecipients(ids),
       ),
     );
-    const cookies = new HttpResponse(null);
+    const cookies = nativeCookieResponse(response);
     clearAuthCookies(cookies, { returnTo: true, oidc: true });
-    copyResponseCookies(response, cookies);
     return { ok: true };
   }
 }

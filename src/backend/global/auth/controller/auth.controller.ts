@@ -8,16 +8,15 @@ import {
   HttpCode,
 } from '@nestjs/common';
 import type { Request, Response as ServerResponse } from 'express';
-import {
-  webRequest,
-  sendResponse,
-  HttpResponse,
-  copyResponseCookies,
-} from '../../apiPayload/httpContext';
+import { webRequest, sendResponse } from '../../apiPayload/httpContext';
 import { ApiSuccess } from '../../apiPayload/apiResponse.interceptor';
 import { AppError } from '../../apiPayload/errors';
 import { accessTokenForRefresh } from '../authUtil';
-import { setAuthCookies, clearAuthCookies } from './authCookies';
+import {
+  setAuthCookies,
+  clearAuthCookies,
+  nativeCookieResponse,
+} from './authCookies';
 import { getKakaoLoginResponse } from './kakaoLogin.controller';
 import { getKakaoCallbackResponse } from './kakaoCallback.controller';
 import { getTestLoginResponse } from './testLogin.controller';
@@ -66,9 +65,8 @@ export class AuthController {
   ) {
     try {
       const session = this.service.refreshTokens(user);
-      const cookies = new HttpResponse(null);
+      const cookies = nativeCookieResponse(response);
       setAuthCookies(cookies, session);
-      copyResponseCookies(response, cookies);
       return { accessToken: session.accessToken };
     } catch (error) {
       if (error instanceof AppError) throw error;
@@ -87,9 +85,8 @@ export class AuthController {
     detail: null,
   })
   logout(@Res({ passthrough: true }) response: ServerResponse) {
-    const cookies = new HttpResponse(null);
+    const cookies = nativeCookieResponse(response);
     clearAuthCookies(cookies, { returnTo: true });
-    copyResponseCookies(response, cookies);
     return { ok: true };
   }
   @Post('api/auth/test-login')

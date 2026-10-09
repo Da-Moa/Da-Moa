@@ -401,6 +401,21 @@ test('Nest HTTP routes enforce JWT before body parsing, preserve cookies, and di
   assert.equal(refreshPayload.meta.code, 'auth_ok');
   assert.equal(refreshed.headers.getSetCookie().length, 2);
   assert.equal(refreshed.headers.get('x-powered-by'), null);
+  const nativeRefreshCookie = refreshed.headers
+    .getSetCookie()
+    .find((cookie) => cookie.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`))!;
+  assert.match(
+    nativeRefreshCookie,
+    /Max-Age=1209600(?:;|$)/,
+    'Refresh cookie keeps its fourteen-day lifetime in seconds',
+  );
+  assert.match(nativeRefreshCookie, /Path=\/api\/auth(?:;|$)/);
+  assert.match(nativeRefreshCookie, /HttpOnly(?:;|$)/);
+  assert.match(nativeRefreshCookie, /SameSite=Lax(?:;|$)/);
+  assert.equal(
+    /(?:^|;\s*)Secure(?:;|$)/.test(nativeRefreshCookie),
+    process.env.NODE_ENV === 'production',
+  );
   const loggedOut = await fetch(`${origin}/api/auth/logout`, {
     method: 'POST',
     headers: { origin, cookie: `${REFRESH_TOKEN_COOKIE_NAME}=${refresh}` },

@@ -1,6 +1,7 @@
 import { testProvider } from './domainTestSupport';
 import 'reflect-metadata';
 import { EventEmitter } from 'node:events';
+import { response as expressResponseMethods } from 'express';
 import { Readable } from 'node:stream';
 import {
   PATH_METADATA,
@@ -104,11 +105,21 @@ export async function dispatch(
       ) ?? [])
         headers.set(name, value);
       const response = Object.assign(emitter, {
+        req: nodeRequest,
+        cookie: expressResponseMethods.cookie,
+        append: expressResponseMethods.append,
+        set: expressResponseMethods.set,
+        get(key: string) {
+          return key.toLowerCase() === 'set-cookie'
+            ? headers.getSetCookie()
+            : (headers.get(key) ?? undefined);
+        },
         status(value: number) {
           status = value;
           return this;
         },
         setHeader(key: string, value: string | string[]) {
+          headers.delete(key);
           if (Array.isArray(value))
             for (const item of value) headers.append(key, item);
           else headers.set(key, value);

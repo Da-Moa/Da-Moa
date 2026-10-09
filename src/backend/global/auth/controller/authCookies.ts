@@ -1,4 +1,4 @@
-import type { HttpResponse } from '../../apiPayload/httpContext';
+import type { Response } from 'express';
 import {
   ACCESS_TOKEN_COOKIE_NAME,
   REFRESH_TOKEN_COOKIE_NAME,
@@ -9,8 +9,32 @@ import {
 } from '../authUtil';
 import type { AuthSession } from '../service/auth.service';
 
+type CookieResponse = {
+  cookies: {
+    set(
+      name: string,
+      value: string,
+      options: ReturnType<typeof authCookieOptions>,
+    ): unknown;
+  };
+};
+
+export function nativeCookieResponse(response: Response): CookieResponse {
+  return {
+    cookies: {
+      set(name, value, options) {
+        // App policy uses seconds; Express cookie maxAge uses milliseconds.
+        response.cookie(name, value, {
+          ...options,
+          maxAge: options.maxAge * 1000,
+        });
+      },
+    },
+  };
+}
+
 export function setAuthCookies(
-  response: HttpResponse,
+  response: CookieResponse,
   session: Pick<AuthSession, 'refreshToken' | 'refreshMaxAge'>,
 ) {
   response.cookies.set(ACCESS_TOKEN_COOKIE_NAME, '', authCookieOptions(0));
@@ -20,15 +44,15 @@ export function setAuthCookies(
     refreshCookieOptions(session.refreshMaxAge),
   );
 }
-export function clearReturnToCookie(response: HttpResponse) {
+export function clearReturnToCookie(response: CookieResponse) {
   response.cookies.set(RETURN_TO_COOKIE_NAME, '', authCookieOptions(0));
 }
-export function clearOidcCookies(response: HttpResponse) {
+export function clearOidcCookies(response: CookieResponse) {
   for (const name of Object.values(OIDC_COOKIE_NAMES))
     response.cookies.set(name, '', authCookieOptions(0));
 }
 export function clearAuthCookies(
-  response: HttpResponse,
+  response: CookieResponse,
   options: { returnTo?: boolean; oidc?: boolean } = {},
 ) {
   setAuthCookies(response, { refreshToken: '', refreshMaxAge: 0 });

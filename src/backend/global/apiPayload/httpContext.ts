@@ -50,14 +50,6 @@ export function responseScope<T>(response: ExpressResponse, work: () => T): T {
   return callbacks.run(pending, work);
 }
 
-export function copyResponseCookies(
-  response: ExpressResponse,
-  cookies: HttpResponse,
-) {
-  const values = cookies.headers.getSetCookie();
-  if (values.length) response.setHeader('Set-Cookie', values);
-}
-
 const requests = new WeakMap<ExpressRequest, HttpRequest>();
 export function webRequest(request: ExpressRequest): HttpRequest {
   const existing = requests.get(request);
