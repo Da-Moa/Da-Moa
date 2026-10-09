@@ -12,17 +12,15 @@ import {
   AuthorizationService,
   type Account as AuthorizedAccount,
 } from '../../../global/auth/service/authorization.service';
-import {
-  objectBody,
-  mutationDigest,
-  type Database,
-} from '../../../global/util';
+import { mutationDigest, type Database } from '../../../global/util';
 import { getUnfinishedUserRounds } from '../../settle/repository';
 import {
   bankDisplayName,
   normalizeBankAccountInput,
   type Account,
   type BankAccountInput,
+  type BankAccountRequestDTO,
+  type OnboardingRequestDTO,
   type SignInUserDTO,
   type BankAccountResponseDTO,
 } from '../../../../shared/domain/user';
@@ -59,10 +57,11 @@ export class UserService {
     this.assertBankVersion(account, bank.expectedBankVersion);
   }
 
-  async completeOnboarding(access: AccessToken | null, input: unknown) {
-    const bank = normalizeBankAccountInput(objectBody(input), {
-      onboarding: true,
-    });
+  async completeOnboarding(
+    access: AccessToken | null,
+    input: OnboardingRequestDTO,
+  ) {
+    const bank = normalizeBankAccountInput(input);
     return this.prisma.withDatabaseConnection(async (client) => {
       const account = await this.authorization.requireAccount(
         client,
@@ -90,11 +89,11 @@ export class UserService {
   async updateBankAccount(
     access: AccessToken | null,
     requestKey: string,
-    input: unknown,
+    input: BankAccountRequestDTO,
   ): Promise<BankAccountResponseDTO> {
     return this.prisma.withDatabaseConnection(async (client) => {
       const account = await this.authorization.requireAccount(client, access);
-      const bank = normalizeBankAccountInput(objectBody(input));
+      const bank = normalizeBankAccountInput(input);
       mutationDigest(requestKey, null);
       if (
         !(await this.repository.saveBankAccount(

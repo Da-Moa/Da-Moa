@@ -241,9 +241,9 @@ test('bank account uses AUTH then validation then conditional UPDATE; one concur
       if (count === 2) assert.match(statements[1], /^UPDATE users SET .* WHERE id = \$1 AND bank_version = \$8 AND deleted_at IS NULL AND onboarding_completed_at IS NOT NULL$/)
       return result
     }
-    await trace(0, () => assert.rejects(updateBankAccount(null, randomUUID(), { bankCode: 'invalid' }), code('unauthorized')))
-    await trace(1, () => assert.rejects(updateBankAccount(access, randomUUID(), { ...input, bankCode: 'invalid' }), code('invalid_input')))
-    await trace(1, () => assert.rejects(updateBankAccount(access, randomUUID(), { ...input, accountNumber: 'abc' }), code('invalid_input')))
+    await trace(0, () => assert.rejects(updateBankAccount(null, randomUUID(), input), code('unauthorized')))
+    await trace(0, () => assert.rejects(updateBankAccount(access, randomUUID(), { ...input, bankCode: 'invalid' }), code('invalid_input')))
+    await trace(0, () => assert.rejects(updateBankAccount(access, randomUUID(), { ...input, accountNumber: 'abc' }), code('invalid_input')))
     await trace(1, () => assert.rejects(updateBankAccount(access, 'invalid', input), code('invalid_request_key')))
     await trace(1, () => assert.rejects(updateBankAccount(readAccessToken(signup.accessToken), randomUUID(), input), code('unauthorized')))
     await client.query("UPDATE users SET bank_verified_at=1, bank_verification_tran_id='test-verification' WHERE id=$1", [app.userId])
@@ -352,7 +352,7 @@ test('onboarding uses AUTH + conditional UPDATE; concurrent signup/rejoin has on
       // Keep updated_at unchanged to prove second-resolution timestamps cannot admit a second save.
       await client.query('UPDATE users SET deleted_at=$2, updated_at=$2 WHERE id=$1', [limited.userId, currentTimestamp()])
       const snapshot = (await withDatabaseConnection(connection => findUser(connection, limited.userId)))!
-      const normalized = normalizeBankAccountInput({ ...bank, expectedBankVersion: Number(snapshot.bank_version) }, { onboarding: true })
+      const normalized = normalizeBankAccountInput({ ...bank, expectedBankVersion: Number(snapshot.bank_version) })
       await client.query('UPDATE users SET updated_at=updated_at+1 WHERE id=$1', [limited.userId])
       assert.equal(await withDatabaseConnection(connection => saveOnboarding(connection, limited.userId, normalized,
         Number(snapshot.updated_at), Number(snapshot.updated_at))), false, 'a changed AUTH snapshot must be rejected')

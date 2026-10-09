@@ -45,7 +45,6 @@ export class BankAccountRequestDTO {
   @ValidateIf((_, value) => value !== undefined)
   @Equals(false)
   verifyWithOpenBanking?: false;
-  [key: string]: unknown;
 }
 export class OnboardingRequestDTO extends BankAccountRequestDTO {
   @ApiPropertyOptional({ type: Boolean })

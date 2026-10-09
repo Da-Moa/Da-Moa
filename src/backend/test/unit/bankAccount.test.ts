@@ -1,14 +1,17 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { createValidationPipe } from '../../global/apiPayload/validation.pipe'
+import { BankAccountRequestDTO } from '../../domain/user/dto/req/user.request.dto'
 import { BANKS, bankDisplayName, bankSelectionCode, formatAccountNumber, normalizeBankAccountInput, parseClipboardAccount, recognizedAccountNumber, suggestBanks } from '../../../shared/domain/user/index.ts'
 
-test('manual bank input keeps leading zeroes and rejects former verification fields', () => {
+test('manual bank input keeps leading zeroes and rejects former verification fields at the DTO boundary', async () => {
+  const validate = (input: unknown) => createValidationPipe().transform(input, { type: 'body', metatype: BankAccountRequestDTO })
   const input = { bankCode: '002', accountNumber: '031-1234 5678-901', accountHolder: ' 테스트 ', expectedBankVersion: 0 }
   assert.deepEqual(normalizeBankAccountInput(input), {
     bankCode: '002', bankName: 'KDB산업은행', accountNumber: '03112345678901', formattedAccountNumber: '031-1234-5678-901', accountHolder: '테스트', expectedBankVersion: 0, confirmRejoin: false,
   })
-  assert.throws(() => normalizeBankAccountInput({ ...input, birthDate: '1990-01-01' }))
-  assert.throws(() => normalizeBankAccountInput({ ...input, verifyWithOpenBanking: true }))
+  await assert.rejects(validate({ ...input, birthDate: '1990-01-01' }))
+  await assert.rejects(validate({ ...input, verifyWithOpenBanking: true }))
   assert.deepEqual(normalizeBankAccountInput({ ...input, verifyWithOpenBanking: false }), normalizeBankAccountInput(input))
   assert.equal(normalizeBankAccountInput({ ...input, bankCode: '092' }).formattedAccountNumber, '03112345678901')
   assert.equal(normalizeBankAccountInput({ ...input, accountNumber: '9999-9999' }).formattedAccountNumber, '99999999')

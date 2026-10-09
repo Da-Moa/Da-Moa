@@ -28,6 +28,10 @@ import {
   CreateInviteRequestDTO,
   GroupListQueryDTO,
 } from '../domain/group/dto/req/group.request.dto';
+import {
+  BankAccountRequestDTO,
+  OnboardingRequestDTO,
+} from '../domain/user/dto/req/user.request.dto';
 import { objectBody } from '../global/util/mutations';
 import {
   CreateRoundRequestDTO,
@@ -94,15 +98,20 @@ after(async () => {
 });
 
 export async function completeOnboarding(
-  ...args: Parameters<UserService['completeOnboarding']>
+  access: Parameters<UserService['completeOnboarding']>[0],
+  input: unknown,
 ): Promise<Awaited<ReturnType<UserService['completeOnboarding']>>> {
-  return (await testProvider(UserService)).completeOnboarding(...args);
+  const body = await testBody(OnboardingRequestDTO, input);
+  return (await testProvider(UserService)).completeOnboarding(access, body);
 }
 
 export async function updateBankAccount(
-  ...args: Parameters<UserService['updateBankAccount']>
+  access: Parameters<UserService['updateBankAccount']>[0],
+  key: string,
+  input: unknown,
 ): Promise<Awaited<ReturnType<UserService['updateBankAccount']>>> {
-  return (await testProvider(UserService)).updateBankAccount(...args);
+  const body = await testBody(BankAccountRequestDTO, input);
+  return (await testProvider(UserService)).updateBankAccount(access, key, body);
 }
 
 export async function withdrawAccount(

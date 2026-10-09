@@ -194,26 +194,23 @@ export function normalizeAccountHolder(value: string): string {
   return value.normalize('NFC').trim()
 }
 
+// Input shape is validated at the HTTP boundary; this owns bank/account policy.
 export function normalizeBankAccountInput(
-  input: Record<string, unknown>,
-  options: { onboarding?: boolean } = {},
+  input: Pick<
+    BankAccountInput,
+    'bankCode' | 'accountNumber' | 'accountHolder' | 'expectedBankVersion'
+  > & {
+    confirmRejoin?: boolean
+    verifyWithOpenBanking?: false
+  },
 ): BankAccountInput {
-  const allowed = ['bankCode', 'accountNumber', 'accountHolder', 'expectedBankVersion', 'verifyWithOpenBanking', ...(options.onboarding ? ['confirmRejoin'] : [])]
-  if (Object.keys(input).some(key => !allowed.includes(key))) invalidField('form', '지원하지 않는 계좌 입력 항목이 있어요')
-  if (input.verifyWithOpenBanking !== undefined && input.verifyWithOpenBanking !== false) invalidField('verifyWithOpenBanking', '계좌 자동 확인은 지원하지 않아요')
   const bank = BANK_INSTITUTIONS.find(item => item.code === input.bankCode)
   if (!bank) invalidField('bankCode', '지원하는 은행을 선택해 주세요')
-  if (typeof input.accountNumber !== 'string' || input.accountNumber.length > 64) invalidField('accountNumber', '계좌번호를 확인해 주세요')
   const accountNumber = input.accountNumber.replace(/[ -]/g, '')
   if (!/^[0-9]{1,16}$/.test(accountNumber)) invalidField('accountNumber', '계좌번호는 숫자 16자리 이내로 입력해 주세요')
   const bankCode = bank.code === '011' || bank.code === '012' ? nonghyupAccountCode(accountNumber) ?? bank.code : bank.code
   const formattedAccountNumber = formatAccountNumber(bankCode, accountNumber)
-  if (typeof input.accountHolder !== 'string' || input.accountHolder.length > 100) invalidField('accountHolder', '예금주명을 확인해 주세요')
   const accountHolder = normalizeAccountHolder(input.accountHolder)
   if (!accountHolder || accountHolder.length > 40 || /[\p{Cc}\p{Cf}]/u.test(accountHolder)) invalidField('accountHolder', '예금주명을 확인해 주세요')
-  if (typeof input.expectedBankVersion !== 'number' || !Number.isSafeInteger(input.expectedBankVersion) || input.expectedBankVersion < 0 || input.expectedBankVersion >= 2_147_483_647) {
-    invalidField('expectedBankVersion', '계좌정보를 다시 불러온 뒤 저장해 주세요')
-  }
-  if (input.confirmRejoin !== undefined && typeof input.confirmRejoin !== 'boolean') invalidField('confirmRejoin', '재가입 동의를 확인해 주세요')
   return { bankCode, bankName: bankDisplayName(bank.name), accountNumber, formattedAccountNumber, accountHolder, expectedBankVersion: input.expectedBankVersion, confirmRejoin: input.confirmRejoin === true }
 }
