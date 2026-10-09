@@ -452,12 +452,27 @@ test('Actual Nest HTTP plus real PostgreSQL contracts enforce Bearer JWTs, origi
     assert.equal(binary.headers.get('x-content-type-options'), 'nosniff');
     assert.equal(binary.headers.get('cache-control'), 'private, no-store');
     const converted = Buffer.from(await binary.arrayBuffer());
+    assert.equal(
+      binary.headers.get('content-length'),
+      String(converted.length),
+    );
+    assert.equal(binary.headers.get('content-disposition'), null);
     assert.equal((await sharp(converted).metadata()).mediaType, 'image/avif');
     assert.deepEqual(converted, avif);
-    assert.equal(
-      (await request(`receipts/${receipt.id}`, outsider.accessToken)).status,
-      404,
+    const forbiddenReceipt = await request(
+      `receipts/${receipt.id}`,
+      outsider.accessToken,
     );
+    assert.equal(forbiddenReceipt.status, 404);
+    assert.equal(
+      forbiddenReceipt.headers.get('content-type'),
+      'application/json',
+    );
+    assert.equal(
+      forbiddenReceipt.headers.get('cache-control'),
+      'private, no-store',
+    );
+    assert.equal((await forbiddenReceipt.json()).code, 'not_found');
     const largeAvif = Buffer.alloc(10 * 1024 * 1024);
     avif.copy(largeAvif);
     largeAvif.writeUInt32BE(largeAvif.length - avif.length, avif.length);
@@ -946,8 +961,6 @@ before(async () => {
 });
 after(async () => {
   await app?.close();
-
-
 });
 
 test('Nest HTTP uses the registered account Provider and retains transaction context', async (t) => {

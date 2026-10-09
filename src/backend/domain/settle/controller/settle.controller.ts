@@ -7,6 +7,7 @@ import {
   Body,
   Query,
   HttpCode,
+  StreamableFile,
   Get,
   Post,
   Patch,
@@ -19,12 +20,10 @@ import {
 import type { Request, Response as ServerResponse } from 'express';
 import {
   webRequest,
-  sendResponse,
   after,
   type HttpRequest,
 } from '../../../global/apiPayload/httpContext';
 import { CurrentUser, type AuthenticatedUser } from '../../../global/auth';
-import { errorResponse } from '../../../global/util';
 import { SettleService } from '../service/settle.service';
 import {
   CreateRoundRequestDTO,
@@ -511,25 +510,15 @@ export class SettleController {
 
   @Get('api/receipts/:receiptId')
   @RawApiResponse()
-  getReceipt(
+  async getReceipt(
     @CurrentUser() user: AuthenticatedUser,
-    @Res() response: ServerResponse,
+    @Res({ passthrough: true }) response: ServerResponse,
     @Param('receiptId') receiptId: string,
   ) {
-    return sendResponse(response, async () => {
-      try {
-        const receipt = await this.service.getReceipt(user, receiptId);
-        return new Response(new Uint8Array(receipt.content).buffer, {
-          headers: {
-            'Content-Type': receipt.mimeType,
-            'X-Content-Type-Options': 'nosniff',
-            'Cache-Control': 'private, no-store',
-          },
-        });
-      } catch (error) {
-        return errorResponse(error);
-      }
-    });
+    const receipt = await this.service.getReceipt(user, receiptId);
+    response.setHeader('X-Content-Type-Options', 'nosniff');
+    response.setHeader('Cache-Control', 'private, no-store');
+    return new StreamableFile(receipt.content, { type: receipt.mimeType });
   }
   private async receiptForm(web: HttpRequest) {
     const bytes = await readBytes(
