@@ -10,7 +10,6 @@ export class CreateGroupRequestDTO {
   @Matches(/\S/)
   @MaxLength(100)
   name!: string;
-  [key: string]: unknown;
 }
 export class CreateInviteRequestDTO {
   @ApiPropertyOptional({ maxLength: 128 })
@@ -19,6 +18,5 @@ export class CreateInviteRequestDTO {
   @Matches(/\S/)
   @MaxLength(128)
   replaceInviteId?: string;
-  [key: string]: unknown;
 }
 export class GroupListQueryDTO extends SearchPageQueryDTO {}

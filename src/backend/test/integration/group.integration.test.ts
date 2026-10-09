@@ -5,7 +5,7 @@ import { uuidV7 } from '../../../shared/uuid.ts'
 import assert from 'node:assert/strict'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import test from 'node:test'
-import { readAccessToken } from '../../global/auth/native.ts'
+import { createAccessToken, readAccessToken } from '../../global/auth/native.ts'
 import { signInKakao } from '../domainTestSupport';
 import { createDatabaseClient } from '../../global/database/db.ts';
 import { withDatabaseConnection } from '../domainTestSupport';
@@ -16,6 +16,9 @@ import { completeTestOnboarding } from './bankTestSupport.ts'
 import { createRound, getRound, roundCommand } from '../domainTestSupport';
 import { RealtimePublisher } from '../../global/util/invalidationUtil.ts'
 import { testProvider } from '../domainTestSupport'
+import { createBackend } from '../../domain/main'
+import { GroupService } from '../../domain/group/service/group.service'
+import { CreateGroupRequestDTO, CreateInviteRequestDTO } from '../../domain/group/dto/req/group.request.dto'
 
 const database = process.env.TEST_DATABASE_URL
 if (!database || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(database).hostname) || !new URL(database).pathname.toLowerCase().includes('test')) throw new Error('TEST_DATABASE_URL must name an isolated local test database')
@@ -55,6 +58,71 @@ test('Group autocommit reads, group/invite creation/revocation and atomic replay
       return result
     }
     try {
+      await t.test('native Body DTOs own Group field validation and normalization; HTTP writes preserve replay, errors and SQL counts', async ht => {
+        const { app } = await createBackend()
+        ht.after(async () => app.close())
+        await app.listen(0, '127.0.0.1')
+        const origin = await app.getUrl(), service = app.get(GroupService)
+        const accessToken = createAccessToken(owner.userId, owner.sessionId)
+        const create = service.createGroup.bind(service), invite = service.createInvite.bind(service)
+        let calls = 0
+        ht.mock.method(service, 'createGroup', (...args: Parameters<typeof create>) => {
+          calls++
+          assert.ok(args[2] instanceof CreateGroupRequestDTO)
+          assert.equal(args[2].name, args[2].name.trim())
+          return create(...args)
+        })
+        ht.mock.method(service, 'createInvite', (...args: Parameters<typeof invite>) => {
+          calls++
+          assert.ok(args[3] instanceof CreateInviteRequestDTO)
+          return invite(...args)
+        })
+        const request = async (path: string, body: unknown, key: string, status: number, count: number, headers: Record<string, string> = {}) => {
+          statements = []
+          const response = await fetch(`${origin}${path}`, {
+            method: 'POST', headers: { origin, authorization: `Bearer ${accessToken}`, 'content-type': 'application/json', 'idempotency-key': key, ...headers },
+            body: JSON.stringify(body), signal: AbortSignal.timeout(10000),
+          })
+          const result = await response.json()
+          assert.equal(response.status, status, JSON.stringify(result))
+          assert.equal(statements.length, count, statements.join('\n'))
+          assert.ok(statements.every(sql => !/^(BEGIN|COMMIT|ROLLBACK|SET)\b|pg_advisory|FOR UPDATE/.test(sql)))
+          if (count) assert.match(statements[0], /"users" WHERE .*"id" = \$1/)
+          return result
+        }
+        const ticket = uuidV7(), name = `네이티브 모임 ${randomUUID()}`
+        const created = await request('/api/groups', { name: ` \t${name}\n ` }, ticket, 200, 2)
+        assert.equal(created.data.id, ticket)
+        ht.after(async () => { await leaveGroup(owner, randomUUID(), ticket) })
+        assert.equal((await getGroup(owner, ticket)).name, name)
+        assert.equal((await request('/api/groups', { name: '중복' }, ticket, 409, 2)).code, 'group_already_exists')
+        const validCalls = calls
+        for (const body of [{}, { name: 123 }, { name: null }, { name: '   ' }, { name: 'x'.repeat(101) }, { name: '정상', extra: true }, []])
+          assert.equal((await request('/api/groups', body, uuidV7(), 400, 0)).code, 'invalid_input')
+        const fieldError = await request('/api/groups', { name: 123 }, uuidV7(), 400, 0)
+        assert.equal(fieldError.message, '입력값을 확인해 주세요')
+        assert.deepEqual(fieldError.detail, { field: 'name' })
+        assert.equal((await request('/api/groups', {}, uuidV7(), 401, 0, { authorization: '' })).code, 'unauthorized')
+        assert.equal((await request('/api/groups', {}, uuidV7(), 403, 0, { origin: 'https://evil.test' })).code, 'forbidden')
+        assert.equal(calls, validCalls, 'rejected DTOs and Guards never call the Service')
+        const path = `/api/groups/${ticket}/invites`, inviteKey = randomUUID()
+        const issued = (await request(path, {}, inviteKey, 200, 3)).data
+        const replay = (await request(path, {}, inviteKey, 200, 2)).data
+        assert.equal(replay.id, issued.id)
+        assert.equal(replay.linkUnavailable, true)
+        assert.equal(replay.sharePath, undefined)
+        assert.equal((await request(path, { replaceInviteId: issued.id }, inviteKey, 409, 2)).code, 'idempotency_conflict')
+        // A padded ID remains a different lookup value; validation never silently
+        // changes the mutation digest or revokes a different invite.
+        assert.equal((await request(path, { replaceInviteId: ` ${issued.id} ` }, randomUUID(), 404, 3)).code, 'not_found')
+        const inviteCalls = calls
+        for (const body of [{ replaceInviteId: '' }, { replaceInviteId: '   ' }, { replaceInviteId: null }, { replaceInviteId: 123 }, { replaceInviteId: 'x'.repeat(129) }, { extra: true }])
+          assert.equal((await request(path, body, randomUUID(), 400, 0)).code, 'invalid_input')
+        assert.equal(calls, inviteCalls)
+        const replaced = (await request(path, { replaceInviteId: issued.id }, randomUUID(), 200, 3)).data
+        assert.notEqual(replaced.id, issued.id)
+        assert.deepEqual((await getGroup(owner, ticket)).invites.map(item => item.id), [replaced.id])
+      })
       const createKey = uuidV7(), body = { name: `모임 SQL ${randomUUID()}` }
       const group = await trace(2, null, () => createGroup(owner, createKey, body))
       assert.equal(group.id, createKey)

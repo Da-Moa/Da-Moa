@@ -23,7 +23,12 @@ import { AuthorizationService } from '../global/auth/service/authorization.servi
 import { UserRepository } from '../domain/user/repository/user.repository';
 import { createValidationPipe } from '../global/apiPayload/validation.pipe';
 import { PageQueryDTO } from '../global/apiPayload/dto/req/page.request.dto';
-import { GroupListQueryDTO } from '../domain/group/dto/req/group.request.dto';
+import {
+  CreateGroupRequestDTO,
+  CreateInviteRequestDTO,
+  GroupListQueryDTO,
+} from '../domain/group/dto/req/group.request.dto';
+import { objectBody } from '../global/util/mutations';
 import {
   RoundListQueryDTO,
   parseRoundListQuery,
@@ -49,6 +54,13 @@ async function testQuery<T extends PageQueryDTO>(
   }
   return createValidationPipe().transform(values, {
     type: 'query',
+    metatype: dto,
+  });
+}
+
+async function testBody<T>(dto: Type<T>, input: unknown): Promise<T> {
+  return createValidationPipe().transform(objectBody(input), {
+    type: 'body',
     metatype: dto,
   });
 }
@@ -142,9 +154,18 @@ export async function getGroup(
 }
 
 export async function createGroup(
-  ...args: Parameters<GroupService['createGroup']>
+  access: Parameters<GroupService['createGroup']>[0],
+  key: string,
+  body: unknown,
+  captureAudience?: Parameters<GroupService['createGroup']>[3],
 ): Promise<Awaited<ReturnType<GroupService['createGroup']>>> {
-  return (await testProvider(GroupService)).createGroup(...args);
+  const parsed = await testBody(CreateGroupRequestDTO, body);
+  return (await testProvider(GroupService)).createGroup(
+    access,
+    key,
+    parsed,
+    captureAudience,
+  );
 }
 
 export async function leaveGroup(
@@ -154,9 +175,20 @@ export async function leaveGroup(
 }
 
 export async function createInvite(
-  ...args: Parameters<GroupService['createInvite']>
+  access: Parameters<GroupService['createInvite']>[0],
+  key: string,
+  groupId: string,
+  body: unknown,
+  captureAudience?: Parameters<GroupService['createInvite']>[4],
 ): Promise<Awaited<ReturnType<GroupService['createInvite']>>> {
-  return (await testProvider(GroupService)).createInvite(...args);
+  const parsed = await testBody(CreateInviteRequestDTO, body);
+  return (await testProvider(GroupService)).createInvite(
+    access,
+    key,
+    groupId,
+    parsed,
+    captureAudience,
+  );
 }
 
 export async function revokeInvite(

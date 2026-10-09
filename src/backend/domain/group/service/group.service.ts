@@ -9,10 +9,8 @@ import {
   createInviteToken,
   isInviteToken,
   nowSeconds,
-  onlyKeys,
   pageOf,
   type SearchPageQuery,
-  textInput,
   type Database,
   type Identity,
 } from '../../../global/util';
@@ -154,11 +152,9 @@ export class GroupService {
   async createGroup(
     access: Identity,
     key: string,
-    body: CreateGroupRequestDTO | Record<string, unknown>,
+    body: CreateGroupRequestDTO,
     captureAudience?: (userIds: string[]) => void,
   ): Promise<GroupMutationResult> {
-    onlyKeys(body, ['name']);
-    const name = textInput(body.name);
     if (!isUUID(key, '7'))
       throw new GroupException(groupErrors.GROUP_CREATION_KEY_REQUIRED);
     const id = key.toLowerCase();
@@ -169,7 +165,7 @@ export class GroupService {
           client,
           id,
           account.id,
-          name,
+          body.name,
           nowSeconds(),
         );
       } catch (error) {
@@ -237,12 +233,9 @@ export class GroupService {
     access: Identity,
     key: string,
     groupId: string,
-    body: CreateInviteRequestDTO | Record<string, unknown>,
+    body: CreateInviteRequestDTO,
     captureAudience?: (userIds: string[]) => void,
   ): Promise<GroupMutationResult> {
-    onlyKeys(body, ['replaceInviteId']);
-    if (body.replaceInviteId !== undefined)
-      textInput(body.replaceInviteId, 128);
     return this.prisma.withDatabaseConnection(async (client) => {
       const account = await this.authorization.requireAccount(client, access);
       const digest = mutationDigest(key, { groupId, ...body });
@@ -273,7 +266,7 @@ export class GroupService {
             now + 7 * 86400,
             key,
             digest,
-            body.replaceInviteId ? String(body.replaceInviteId) : null,
+            body.replaceInviteId ?? null,
           ))
         )
           throw missing();
