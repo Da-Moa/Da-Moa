@@ -465,7 +465,8 @@ test('Actual Nest HTTP plus real PostgreSQL contracts enforce Bearer JWTs, origi
     );
     assert.equal(forbiddenReceipt.status, 404);
     assert.equal(
-      forbiddenReceipt.headers.get('content-type'),
+      // Native JSON adds UTF-8 charset; the JSON media type stays unchanged.
+      forbiddenReceipt.headers.get('content-type')?.split(';')[0],
       'application/json',
     );
     assert.equal(

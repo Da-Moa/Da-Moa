@@ -4,7 +4,8 @@ import { test } from 'node:test'
 import { Client } from 'pg'
 import { createDatabaseClient } from '../../global/database/dbClient.mjs'
 import { collectDatabaseMetrics, httpMetrics, trackHttpResponse } from '../../global/monitoring/httpMetrics.mjs'
-import { AppError, errorResponse } from '../../global/apiPayload/errors.ts'
+import { AppError } from '../../global/apiPayload/errors.ts'
+import { errorResponse } from '../support/nativeResponseTestSupport.ts'
 
 test('golden signal counters preserve query behavior and omit failed DB capacity samples', async t => {
   t.mock.method(Client.prototype, 'connect', async () => {})

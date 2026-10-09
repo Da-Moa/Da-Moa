@@ -1,9 +1,13 @@
+import { captureResponse } from './nativeResponseTestSupport';
+import { writeErrorResponse } from '../../global/apiPayload/errors';
+import type { ExecutionContext } from '@nestjs/common';
+import type { AuthenticatedRequest } from '../../global/auth/decorator/currentUser.decorator';
 import { JwtService } from '@nestjs/jwt';
 import { TokenService } from '../../global/auth/service/token.service';
 import { getSessionSecret } from '../../global/auth/authConfig';
 import cookieParser from 'cookie-parser';
 import type { Request as ExpressRequest, Response } from 'express';
-import { nativeJwtGuard } from '../../global/auth/guard/jwt.guard';
+import { JwtGuard } from '../../global/auth/guard/jwt.guard';
 import type { AccessToken } from '../../global/auth/authUtil';
 
 export const testTokens = new TokenService(
@@ -23,5 +27,19 @@ export function jwtGuardForTest(
     headers: { host: url.host, ...Object.fromEntries(request.headers) },
   } as ExpressRequest;
   cookieParser()(native, {} as Response, () => {});
-  return nativeJwtGuard(native, testTokens, authenticated);
+  const captured = captureResponse(native);
+  try {
+    new JwtGuard(testTokens).canActivate({
+      switchToHttp: () => ({
+        getRequest: () => native,
+        getResponse: () => captured.response,
+      }),
+    } as unknown as ExecutionContext);
+    const user = (native as AuthenticatedRequest).user;
+    if (user) authenticated?.(user);
+    return null;
+  } catch (error) {
+    writeErrorResponse(captured.response, error);
+    return captured.result!;
+  }
 }

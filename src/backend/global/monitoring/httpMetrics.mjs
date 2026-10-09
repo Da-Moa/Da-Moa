@@ -63,7 +63,7 @@ export function httpMetrics() {
     '# HELP da_moa_db_queries_total Application query() calls including failures and transaction statements; excludes metric probes.',
     '# TYPE da_moa_db_queries_total counter',
     `da_moa_db_queries_total ${queries}`,
-    '# HELP da_moa_exceptions_total Unexpected API exceptions handled by errorResponse().',
+    '# HELP da_moa_exceptions_total Unexpected API exceptions handled by the API exception filter.',
     '# TYPE da_moa_exceptions_total counter',
     `da_moa_exceptions_total ${exceptions}`,
     '# HELP da_moa_db_metrics_success Whether the last PostgreSQL capacity probe succeeded.',

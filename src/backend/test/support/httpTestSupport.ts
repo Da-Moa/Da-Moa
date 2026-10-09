@@ -1,8 +1,6 @@
 import { testTokens } from './guardRequestTestSupport';
 import { testProvider } from './domainTestSupport';
 import 'reflect-metadata';
-import { EventEmitter } from 'node:events';
-import { response as expressResponseMethods } from 'express';
 import cookieParser from 'cookie-parser';
 import { Readable } from 'node:stream';
 import {
@@ -17,15 +15,13 @@ import { defer, lastValueFrom } from 'rxjs';
 import { RequestBodyInterceptor } from '../../global/apiPayload/requestBody.interceptor';
 import { OriginGuard } from '../../global/apiPayload/origin.guard';
 import { JwtGuard } from '../../global/auth/guard/jwt.guard';
-import { HttpResponseException } from '../../global/apiPayload/handler/global.exception.handler';
+import { writeErrorResponse } from '../../global/apiPayload/errors';
+import { captureResponse, errorResponse } from './nativeResponseTestSupport';
 import { createValidationPipe } from '../../global/apiPayload/validation.pipe';
 import { ApiResponseInterceptor } from '../../global/apiPayload/apiResponse.interceptor';
 import { type ExecutionContext, RequestMethod } from '@nestjs/common';
-import type {
-  Request as ExpressRequest,
-  Response as ExpressResponse,
-} from 'express';
-import { AppError, errorResponse } from '../../global/apiPayload/errors';
+import type { Request as ExpressRequest } from 'express';
+import { AppError } from '../../global/apiPayload/errors';
 import { GroupController } from '../../domain/group/controller/group.controller';
 import { SettleController } from '../../domain/settle/controller/settle.controller';
 import { HealthController } from '../../domain/health/controller/health.controller';
@@ -96,43 +92,15 @@ export async function dispatch(
           ...(bytes ? { 'content-length': String(bytes.length) } : {}),
         },
       }) as unknown as ExpressRequest;
-      const headers = new Headers(),
-        emitter = new EventEmitter();
-      let result: Response | undefined,
-        status = Reflect.getMetadata(HTTP_CODE_METADATA, handler) ?? 200;
+      const headers = new Headers();
+      const status = Reflect.getMetadata(HTTP_CODE_METADATA, handler) ?? 200;
       for (const { name, value } of Reflect.getMetadata(
         HEADERS_METADATA,
         handler,
       ) ?? [])
         headers.set(name, value);
-      const response = Object.assign(emitter, {
-        req: nodeRequest,
-        cookie: expressResponseMethods.cookie,
-        append: expressResponseMethods.append,
-        set: expressResponseMethods.set,
-        get(key: string) {
-          return key.toLowerCase() === 'set-cookie'
-            ? headers.getSetCookie()
-            : (headers.get(key) ?? undefined);
-        },
-        status(value: number) {
-          status = value;
-          return this;
-        },
-        setHeader(key: string, value: string | string[]) {
-          headers.delete(key);
-          if (Array.isArray(value))
-            for (const item of value) headers.append(key, item);
-          else headers.set(key, value);
-        },
-        end(body: Buffer) {
-          result = new Response(
-            request.method === 'HEAD' ? null : new Uint8Array(body),
-            { status, headers },
-          );
-          emitter.emit('finish');
-        },
-      }) as unknown as ExpressResponse;
+      const captured = captureResponse(nodeRequest, headers, status);
+      const response = captured.response;
       const metadata = Reflect.getMetadata(
         ROUTE_ARGS_METADATA,
         controller.constructor,
@@ -203,13 +171,12 @@ export async function dispatch(
               }),
           }),
         );
-        if (!result) response.end(Buffer.from(JSON.stringify(output)));
+        if (!captured.result) response.end(Buffer.from(JSON.stringify(output)));
       } catch (error) {
-        if (error instanceof HttpResponseException) return error.response;
-        return errorResponse(error);
+        writeErrorResponse(response, error);
       }
 
-      return result!;
+      return captured.result!;
     }
   return errorResponse(
     new AppError(404, 'not_found', '요청한 API를 찾을 수 없어요'),

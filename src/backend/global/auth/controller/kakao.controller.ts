@@ -15,11 +15,7 @@ import {
   RETURN_TO_COOKIE_NAME,
   safeReturnTo,
 } from '../authUtil';
-import {
-  clearOidcCookies,
-  nativeCookieResponse,
-  setAuthCookies,
-} from './authCookies';
+import { clearOidcCookies, setAuthCookies } from './authCookies';
 
 // Keep the first-value query contract when a browser repeats a query key.
 function queryString(value: unknown): string | null {
@@ -53,7 +49,6 @@ export class KakaoController {
     try {
       const config = getKakaoAuthenticationConfig(nodeRequestOrigin(request));
       const login = createKakaoAuthorizationRequest(config);
-      const cookies = nativeCookieResponse(response);
       const options = authCookieOptions(OIDC_MAX_AGE_SECONDS);
       // Compute signatures before writing any cookie so failed configuration writes none.
       const redirectCookie = createRedirectUriCookie(
@@ -64,19 +59,15 @@ export class KakaoController {
         queryString(returnTo),
         login.state,
       );
-      cookies.cookies.set(OIDC_COOKIE_NAMES.state, login.state, options);
-      cookies.cookies.set(OIDC_COOKIE_NAMES.nonce, login.nonce, options);
-      cookies.cookies.set(
+      response.cookie(OIDC_COOKIE_NAMES.state, login.state, options);
+      response.cookie(OIDC_COOKIE_NAMES.nonce, login.nonce, options);
+      response.cookie(
         OIDC_COOKIE_NAMES.codeVerifier,
         login.codeVerifier,
         options,
       );
-      cookies.cookies.set(
-        OIDC_COOKIE_NAMES.redirectUri,
-        redirectCookie,
-        options,
-      );
-      cookies.cookies.set(RETURN_TO_COOKIE_NAME, returnCookie, options);
+      response.cookie(OIDC_COOKIE_NAMES.redirectUri, redirectCookie, options);
+      response.cookie(RETURN_TO_COOKIE_NAME, returnCookie, options);
       response.redirect(307, login.url);
     } catch {
       const destination = new URL('/login', requestBase(request));
@@ -116,7 +107,6 @@ export class KakaoController {
         returnTo: returnCookie,
       },
     );
-    const cookies = nativeCookieResponse(response);
     response.setHeader('Cache-Control', 'private, no-store');
     let destination: URL;
     if ('error' in result) {
@@ -127,8 +117,8 @@ export class KakaoController {
       }).toString();
     } else {
       const { session, returnTo } = result;
-      setAuthCookies(cookies, session);
-      cookies.cookies.set(
+      setAuthCookies(response, session);
+      response.cookie(
         RETURN_TO_COOKIE_NAME,
         session.purpose === 'onboarding'
           ? createReturnToCookie(returnTo, queryString(state)!)
@@ -142,7 +132,7 @@ export class KakaoController {
         requestBase(request),
       );
     }
-    clearOidcCookies(cookies);
+    clearOidcCookies(response);
     response.redirect(307, destination.toString());
   }
 }

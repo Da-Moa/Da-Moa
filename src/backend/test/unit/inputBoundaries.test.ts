@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { errorResponse } from '../../global/apiPayload/errors.ts'
+import { errorResponse } from '../support/nativeResponseTestSupport.ts'
 import { pageOf, decodePageCursor } from '../../global/util/index.ts'
 
 test('pagination cursors include only the position and reject malformed or overflowing values', () => {

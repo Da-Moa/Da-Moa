@@ -17,11 +17,7 @@ import {
 import { ApiSuccess } from '../../apiPayload/apiResponse.interceptor';
 import { AppError } from '../../apiPayload/errors';
 import { safeReturnTo } from '../authUtil';
-import {
-  setAuthCookies,
-  clearAuthCookies,
-  nativeCookieResponse,
-} from './authCookies';
+import { setAuthCookies, clearAuthCookies } from './authCookies';
 import { TestLoginGuard } from '../guard/testLogin.guard';
 import type { TestLoginInput } from '../dto/req/testLogin.request.dto';
 import { TestLoginBodyPipe } from '../pipe/testLoginBody.pipe';
@@ -58,8 +54,7 @@ export class AuthController {
   ) {
     try {
       const session = this.service.refreshTokens(user);
-      const cookies = nativeCookieResponse(response);
-      setAuthCookies(cookies, session);
+      setAuthCookies(response, session);
       return { accessToken: session.accessToken };
     } catch (error) {
       if (error instanceof AppError) throw error;
@@ -78,8 +73,7 @@ export class AuthController {
     detail: null,
   })
   logout(@Res({ passthrough: true }) response: ServerResponse) {
-    const cookies = nativeCookieResponse(response);
-    clearAuthCookies(cookies, { returnTo: true });
+    clearAuthCookies(response, { returnTo: true });
     return { ok: true };
   }
   @Post('api/auth/test-login')
@@ -99,7 +93,7 @@ export class AuthController {
       `/auth/complete?returnTo=${encodeURIComponent(safeReturnTo(body.returnTo))}`,
       expected,
     );
-    setAuthCookies(nativeCookieResponse(response), session);
+    setAuthCookies(response, session);
     response.setHeader('Cache-Control', 'private, no-store');
     response.redirect(303, destination.toString());
   }

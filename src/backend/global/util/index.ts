@@ -1,5 +1,5 @@
 export type { Database } from '../database/db';
-export { AppError, badInput, errorResponse } from '../apiPayload/errors';
+export { AppError, badInput } from '../apiPayload/errors';
 export { sameOrigin } from '../apiPayload/http';
 export {
   createInviteToken,

@@ -10,7 +10,6 @@ import {
   type AuthenticatedRequest,
   type AuthenticatedUser,
 } from '../../global/auth/decorator/currentUser.decorator';
-import { HttpResponseException } from '../../global/apiPayload/handler/global.exception.handler';
 import { AppError } from '../../global/apiPayload/errors';
 import { type ExecutionContext } from '@nestjs/common';
 import { ROUTE_ARGS_METADATA } from '@nestjs/common/constants.js';
@@ -73,8 +72,7 @@ test('global JwtGuard replaces untrusted user data and CurrentUser reads only ve
     const denied = request(`Bearer ${token}`);
     assert.throws(
       () => guard.canActivate(context(denied)),
-      (error: unknown) =>
-        error instanceof HttpResponseException && error.response.status === 401,
+      (error: unknown) => error instanceof AppError && error.status === 401,
     );
     assert.equal(denied.user, undefined);
     assert.throws(

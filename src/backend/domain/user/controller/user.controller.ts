@@ -15,7 +15,6 @@ import {
 } from '@nestjs/common';
 import type { Response as ServerResponse } from 'express';
 import { after } from '../../../global/apiPayload/httpContext';
-import { nativeCookieResponse } from '../../../global/auth/controller/authCookies';
 import { ApiSuccess } from '../../../global/apiPayload/apiResponse.interceptor';
 import {
   BankAccountRequestDTO,
@@ -71,9 +70,8 @@ export class UserController {
         this.settlements.findRecipients(id),
       ),
     );
-    const cookies = nativeCookieResponse(response);
-    setAuthCookies(cookies, session);
-    clearReturnToCookie(cookies);
+    setAuthCookies(response, session);
+    clearReturnToCookie(response);
     return { id: session.userId, returnTo, accessToken: session.accessToken };
   }
 
@@ -110,8 +108,7 @@ export class UserController {
         this.groups.findRecipients(ids),
       ),
     );
-    const cookies = nativeCookieResponse(response);
-    clearAuthCookies(cookies, { returnTo: true, oidc: true });
+    clearAuthCookies(response, { returnTo: true, oidc: true });
     return { ok: true };
   }
 }

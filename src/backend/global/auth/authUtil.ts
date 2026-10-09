@@ -162,7 +162,8 @@ export function getKakaoAuthenticationConfig(origin?: URL | null): KakaoConfig {
 export function authCookieOptions(maxAge: number, path = '/') {
   return {
     httpOnly: true,
-    maxAge,
+    // Cookie policy takes seconds; Express cookie maxAge takes milliseconds.
+    maxAge: maxAge * 1000,
     path,
     sameSite: 'lax' as const,
     secure: process.env.NODE_ENV === 'production',
