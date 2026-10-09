@@ -37,7 +37,7 @@ import {
   setSettlementCheck,
 } from '../support/domainTestSupport.ts';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
-import { completeTestOnboarding as completeOnboarding } from './bankTestSupport.ts';
+import { completeTestOnboarding as completeOnboarding } from '../support/bankTestSupport.ts';
 
 const testUrl = process.env.TEST_DATABASE_URL;
 if (

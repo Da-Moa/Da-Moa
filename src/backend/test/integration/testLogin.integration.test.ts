@@ -2,10 +2,14 @@ import { getPrismaClient } from '../support/domainTestSupport.ts';
 import assert from 'node:assert/strict';
 import { before, after, test } from 'node:test';
 import { networkInterfaces } from 'node:os';
-import { createBackend } from '../../domain/main';
+import {
+  createMockBackend,
+  mockFetch,
+  mockOrigin,
+} from '../support/mockHttpTestSupport';
 import { JwtService } from '@nestjs/jwt';
 import type { INestApplication } from '@nestjs/common';
-import { requestTestServer } from '../support/actualHttpTestSupport.ts';
+import { requestMockServer } from '../support/mockHttpTestSupport.ts';
 import {
   ACCESS_TOKEN_COOKIE_NAME,
   REFRESH_TOKEN_COOKIE_NAME,
@@ -39,15 +43,15 @@ process.env.AUTH_JWT_SECRET = 'isolated-test-login-secret-at-least-32-bytes';
 
 let app: INestApplication, origin: string;
 const accessTokenResponse = (request: Request) =>
-  requestTestServer(origin, request);
-const POST = (request: Request) => requestTestServer(origin, request);
+  requestMockServer(origin, request);
+const POST = (request: Request) => requestMockServer(origin, request);
 after(async () => app?.close());
 
 before(async () => {
-  const backend = await createBackend();
+  const backend = await createMockBackend();
   app = backend.app;
-  await app.listen(0, '127.0.0.1');
-  origin = await app.getUrl();
+
+  origin = mockOrigin(app);
   const client = createDatabaseClient(testUrl);
   try {
     await client.connect();

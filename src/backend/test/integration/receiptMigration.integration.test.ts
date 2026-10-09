@@ -1,6 +1,6 @@
 import { before } from 'node:test';
 import { getPrismaClient } from '../support/domainTestSupport.ts';
-import { addStoredReceipt as addReceipt } from './receiptWorkerTestSupport';
+import { addStoredReceipt as addReceipt } from '../support/receiptWorkerTestSupport';
 import { uuidV7 } from '../../../shared/uuid.ts';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
@@ -23,7 +23,7 @@ import {
   roundCommand,
   saveExpense,
 } from '../support/domainTestSupport.ts';
-import { completeTestOnboarding } from './bankTestSupport.ts';
+import { completeTestOnboarding } from '../support/bankTestSupport.ts';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
 
 const testUrl = process.env.TEST_DATABASE_URL;

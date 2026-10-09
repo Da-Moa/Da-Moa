@@ -10,7 +10,7 @@ import { readAccessToken } from '../support/legacyTokenTestSupport.ts';
 import { withdrawAccount } from '../support/domainTestSupport.ts';
 import { AppError } from '../../global/apiPayload/errors.ts';
 import { getDatabasePool } from '../support/domainTestSupport.ts';
-import { completeTestOnboarding } from './bankTestSupport.ts';
+import { completeTestOnboarding } from '../support/bankTestSupport.ts';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
 
 const testUrl = process.env.TEST_DATABASE_URL;

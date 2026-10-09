@@ -6,12 +6,16 @@ import type { Database } from '../../global/database/db';
 import type { INestApplication } from '@nestjs/common';
 import { channel } from 'node:diagnostics_channel';
 import { before, after } from 'node:test';
-import { createBackend } from '../../domain/main';
+import {
+  createMockBackend,
+  mockFetch,
+  mockOrigin,
+} from '../support/mockHttpTestSupport';
 import { AuthService } from '../../global/auth/service/auth.service';
 
 import { PrismaService } from '../../global/database/prisma.service';
 
-import { drainReceiptQueue } from './receiptWorkerTestSupport';
+import { drainReceiptQueue } from '../support/receiptWorkerTestSupport';
 import { uuidV7 } from '../../../shared/uuid.ts';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -21,7 +25,7 @@ import { readAccessToken } from '../support/legacyTokenTestSupport.ts';
 import { createDatabaseClient } from '../../global/database/db.ts';
 import { CURRENCY_CODES } from '../../../shared/domain/settle/money.ts';
 
-const me = (req: Request) => fetch(req.url, { headers: req.headers });
+const me = (req: Request) => mockFetch(app)(req.url, { headers: req.headers });
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
 
 const testUrl = process.env.TEST_DATABASE_URL;
@@ -80,7 +84,7 @@ async function request(
   const multipart = body instanceof FormData;
   if (body !== undefined && !multipart)
     headers.set('content-type', 'application/json');
-  const response = await fetch(`${origin}/api/${path}`, {
+  const response = await mockFetch(app)(`${origin}/api/${path}`, {
     method,
     headers,
     ...(body === undefined
@@ -90,7 +94,7 @@ async function request(
   return response;
 }
 
-test('Actual Nest HTTP plus real PostgreSQL contracts enforce Bearer JWTs, origin, idempotency, normalized images and personalized output', async (t) => {
+test('Injected Nest requests plus real PostgreSQL contracts enforce Bearer JWTs, origin, idempotency, normalized images and personalized output', async (t) => {
   const storage = t.mock.method(app.get(ReceiptStorage), 'putReceipt');
   const repository = t.mock.method(
     app.get(SettleRepository),
@@ -956,9 +960,9 @@ test('Nest HTTP expense failure rolls back the expense, version and replay metad
 });
 
 before(async () => {
-  ({ app } = await createBackend());
-  await app.listen(0, '127.0.0.1');
-  origin = await app.getUrl();
+  ({ app } = await createMockBackend());
+
+  origin = mockOrigin(app);
 });
 after(async () => {
   await app?.close();

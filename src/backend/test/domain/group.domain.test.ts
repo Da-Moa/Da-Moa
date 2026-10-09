@@ -24,7 +24,7 @@ import {
   revokeInvite,
 } from '../support/domainTestSupport.ts';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
-import { completeTestOnboarding } from './bankTestSupport.ts';
+import { completeTestOnboarding } from '../support/bankTestSupport.ts';
 import {
   createRound,
   getRound,
@@ -32,7 +32,11 @@ import {
 } from '../support/domainTestSupport.ts';
 import { RealtimePublisher } from '../../global/util/invalidationUtil.ts';
 import { testProvider } from '../support/domainTestSupport.ts';
-import { createBackend } from '../../domain/main';
+import {
+  createMockBackend,
+  mockFetch,
+  mockOrigin,
+} from '../support/mockHttpTestSupport';
 import { GroupService } from '../../domain/group/service/group.service';
 import {
   CreateGroupRequestDTO,
@@ -136,10 +140,10 @@ test('Group autocommit reads, group/invite creation/revocation and atomic replay
       await t.test(
         'native Body DTOs own Group field validation and normalization; HTTP writes preserve replay, errors and SQL counts',
         async (ht) => {
-          const { app } = await createBackend();
+          const { app } = await createMockBackend();
           ht.after(async () => app.close());
-          await app.listen(0, '127.0.0.1');
-          const origin = await app.getUrl(),
+
+          const origin = mockOrigin(app),
             service = app.get(GroupService);
           const accessToken = createAccessToken(owner.userId, owner.sessionId);
           const create = service.createGroup.bind(service),
@@ -173,7 +177,7 @@ test('Group autocommit reads, group/invite creation/revocation and atomic replay
             headers: Record<string, string> = {},
           ) => {
             statements = [];
-            const response = await fetch(`${origin}${path}`, {
+            const response = await mockFetch(app)(`${origin}${path}`, {
               method: 'POST',
               headers: {
                 origin,

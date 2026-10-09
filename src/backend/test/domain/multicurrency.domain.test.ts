@@ -27,7 +27,7 @@ import type {
   ExpenseRequestDTO,
 } from '../../../shared/domain/settle/index.ts';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
-import { completeTestOnboarding } from './bankTestSupport.ts';
+import { completeTestOnboarding } from '../support/bankTestSupport.ts';
 
 const testUrl = process.env.TEST_DATABASE_URL;
 if (

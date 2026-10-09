@@ -15,7 +15,7 @@ import {
   signInKakao,
   testProvider,
 } from '../support/domainTestSupport';
-import { completeTestOnboarding } from './bankTestSupport';
+import { completeTestOnboarding } from '../support/bankTestSupport';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
 import { uuidV7 } from '../../../shared/uuid';
 

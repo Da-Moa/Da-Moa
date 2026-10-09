@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { request as httpRequest } from 'node:http';
 import test from 'node:test';
 import sharp from 'sharp';
-import { createBackend } from '../../domain/main';
+import {
+  createMockBackend,
+  mockFetch,
+  mockOrigin,
+} from '../support/mockHttpTestSupport';
 import { SettleService } from '../../domain/settle/service/settle.service';
 import { createDatabaseClient } from '../../global/database/db';
 import {
@@ -18,8 +21,8 @@ import {
   saveExpense,
   signInKakao,
 } from '../support/domainTestSupport';
-import { completeTestOnboarding } from './bankTestSupport';
-import { drainReceiptQueue } from './receiptWorkerTestSupport';
+import { completeTestOnboarding } from '../support/bankTestSupport';
+import { drainReceiptQueue } from '../support/receiptWorkerTestSupport';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
 import { uuidV7 } from '../../../shared/uuid';
 
@@ -77,10 +80,10 @@ test('receipt HTTP admits resource access before any upload bytes and rechecks a
     splitMode: 'ALL',
     expectedVersion: round.version,
   });
-  const { app } = await createBackend();
+  const { app } = await createMockBackend();
   t.after(() => app.close());
-  await app.listen(0, '127.0.0.1');
-  const origin = await app.getUrl();
+
+  const origin = mockOrigin(app);
   const path = `/api/rounds/${round.id}/expenses/${expense.id}/receipts`;
   const previous = process.env.DB_QUERY_LOG;
   process.env.DB_QUERY_LOG = 'true';
@@ -94,39 +97,27 @@ test('receipt HTTP admits resource access before any upload bytes and rechecks a
   });
   // Send headers alone. Receiving a denial proves that resource authorization
   // neither waits for nor buffers the advertised multipart payload.
-  const headersOnly = (token: string) =>
-    new Promise<{ status: number; body: string }>((resolve, reject) => {
-      const request = httpRequest(
-        `${origin}${path}`,
-        {
-          method: 'POST',
-          headers: {
-            origin,
-            authorization: `Bearer ${token}`,
-            'idempotency-key': randomUUID(),
-            'content-type': 'multipart/form-data; boundary=not-sent',
-            'content-length': '11000000',
-            connection: 'close',
-          },
+  const headersOnly = async (token: string) => {
+    let reads = 0;
+    const response = await mockFetch(app)(`${origin}${path}`, {
+      method: 'POST',
+      headers: {
+        origin,
+        authorization: `Bearer ${token}`,
+        'idempotency-key': randomUUID(),
+        'content-type': 'multipart/form-data; boundary=not-sent',
+        'content-length': '11000000',
+      },
+      chunks: {
+        async *[Symbol.asyncIterator]() {
+          reads++;
+          throw new Error('Authorization read the upload');
         },
-        (response) => {
-          let body = '';
-          response.on('data', (bytes) => {
-            body += bytes;
-          });
-          response.on('error', reject);
-          response.on('end', () => {
-            resolve({ status: response.statusCode!, body });
-            request.destroy();
-          });
-        },
-      );
-      request.on('error', reject);
-      request.setTimeout(2000, () =>
-        request.destroy(new Error('Authorization waited for upload bytes')),
-      );
-      request.flushHeaders();
+      },
     });
+    assert.equal(reads, 0, 'authorization rejects before consuming the body');
+    return { status: response.status, body: await response.text() };
+  };
   for (const [token, status, count] of [
     [viewer.accessToken, 403, 2],
     [outsider.accessToken, 404, 2],
@@ -147,7 +138,7 @@ test('receipt HTTP admits resource access before any upload bytes and rechecks a
     const form = new FormData();
     form.set('file', new File([bytes], 'receipt.avif', { type: 'image/avif' }));
     form.set('expectedVersion', String(expectedVersion));
-    return fetch(`${origin}${path}`, {
+    return mockFetch(app)(`${origin}${path}`, {
       method: 'POST',
       headers: {
         origin,

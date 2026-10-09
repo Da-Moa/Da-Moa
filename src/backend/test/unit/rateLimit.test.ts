@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { createServer } from 'node:http';
+import {
+  createMockBackend,
+  mockFetch,
+  mockOrigin,
+} from '../support/mockHttpTestSupport';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import cookieParser from 'cookie-parser';
@@ -109,30 +113,30 @@ test(
     const buckets = createTokenBuckets(() => time);
     const limiter = createRateLimitController(testTokens, buckets);
     const parseCookies = cookieParser();
-    const server = createServer((request, response) => {
-      parseCookies(request as Request, response as Response, () => {
-        if (limiter.handleRequest(request, response)) return;
-        const guarded = proxy(
-          new Request(`http://localhost${request.url}`, {
-            method: request.method,
-            headers: {
-              authorization: request.headers.authorization ?? '',
-              cookie: request.headers.cookie ?? '',
-            },
-          }),
-        );
-        if (guarded?.status === 401) {
-          response.writeHead(401).end();
-          return;
-        }
-        calls++;
-        response.writeHead(200).end();
+    const { app } = await createMockBackend(async (app) => {
+      app.use((request: Request, response: Response) => {
+        parseCookies(request as Request, response as Response, () => {
+          if (limiter.handleRequest(request, response)) return;
+          const guarded = proxy(
+            new Request(`http://localhost${request.url}`, {
+              method: request.method,
+              headers: {
+                authorization: request.headers.authorization ?? '',
+                cookie: request.headers.cookie ?? '',
+              },
+            }),
+          );
+          if (guarded?.status === 401) {
+            response.writeHead(401).end();
+            return;
+          }
+          calls++;
+          response.writeHead(200).end();
+        });
       });
     });
     try {
-      server.listen(0, '127.0.0.1');
-      await once(server, 'listening');
-      const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+      const origin = mockOrigin(app);
       const access = createAccessToken('a', 'first');
       const request = (
         path: string,
@@ -140,7 +144,7 @@ test(
         token = access,
         cookie = '',
       ) =>
-        fetch(`${origin}${path}`, {
+        mockFetch(app)(`${origin}${path}`, {
           method,
           headers: {
             authorization: `Bearer ${token}`,
@@ -272,7 +276,7 @@ test(
       assert.equal(invalidSocket.destroyed, true);
     } finally {
       limiter.close();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await app.close();
       if (previous === undefined) delete process.env.AUTH_JWT_SECRET;
       else process.env.AUTH_JWT_SECRET = previous;
     }

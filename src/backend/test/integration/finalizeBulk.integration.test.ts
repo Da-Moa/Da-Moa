@@ -9,8 +9,10 @@ import {
   createGroup,
   createInvite,
   acceptInvite,
+  createRound,
+  saveExpense,
+  roundCommand,
 } from '../support/domainTestSupport';
-import { SettleService } from '../../domain/settle/service/settle.service';
 import { SettleRepository } from '../../domain/settle/repository/settle.repository';
 import {
   finalizeCurrencySettlement,
@@ -63,7 +65,6 @@ test('send bulk-finalizes settlement with constant SQL count, exact money and at
       randomUUID(),
       invite.sharePath!.split('/').at(-1)!,
     );
-  const service = await testProvider(SettleService);
   const repository = await testProvider(SettleRepository);
 
   type ExpenseInput = {
@@ -74,14 +75,14 @@ test('send bulk-finalizes settlement with constant SQL count, exact money and at
   };
   const fixture = async (specs: ExpenseInput[], count = 2) => {
     const participants = people.slice(0, count);
-    const round = await service.createRound(owner, uuidV7(), group.id, {
+    const round = await createRound(owner, uuidV7(), group.id, {
       name: '벌크 회차',
       participantIds: participants.map((person) => person.userId),
     });
     let version = 1;
     const expenses = [];
     for (const spec of specs) {
-      const saved = await service.createExpense(owner, randomUUID(), round.id, {
+      const saved = await saveExpense(owner, randomUUID(), round.id, {
         description: '벌크 지출',
         currency: spec.currency,
         amount: spec.amount,
@@ -98,7 +99,7 @@ test('send bulk-finalizes settlement with constant SQL count, exact money and at
         participantIds: participants.map((person) => person.userId),
       });
     }
-    const confirmed = await service.roundCommand(
+    const confirmed = await roundCommand(
       owner,
       randomUUID(),
       round.id,
@@ -137,7 +138,7 @@ test('send bulk-finalizes settlement with constant SQL count, exact money and at
     key = randomUUID(),
   ) =>
     trace(() =>
-      service.roundCommand(owner, key, round.roundId, 'send', {
+      roundCommand(owner, key, round.roundId, 'send', {
         expectedVersion: round.version,
       }),
     );
@@ -382,7 +383,7 @@ test('send bulk-finalizes settlement with constant SQL count, exact money and at
         null,
       );
       assert.ok(result.version !== undefined);
-      const drawn = await service.roundCommand(
+      const drawn = await roundCommand(
         owner,
         randomUUID(),
         round.roundId,

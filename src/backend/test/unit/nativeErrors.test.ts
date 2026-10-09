@@ -6,7 +6,11 @@ import {
   NotFoundException,
   PayloadTooLargeException,
 } from '@nestjs/common';
-import { createBackend } from '../../domain/main';
+import {
+  createMockBackend,
+  mockFetch,
+  mockOrigin,
+} from '../support/mockHttpTestSupport';
 import { UserService } from '../../domain/user/service/user.service';
 import { TokenService } from '../../global/auth/service/token.service';
 import { AppError } from '../../global/apiPayload/errors';
@@ -30,10 +34,10 @@ test('actual Nest errors preserve status, payload, diagnostics and refresh-only 
       else process.env[key] = value;
     }
   });
-  const { app } = await createBackend();
+  const { app } = await createMockBackend();
   t.after(() => app.close());
-  await app.listen(0, '127.0.0.1');
-  const origin = await app.getUrl();
+
+  const origin = mockOrigin(app);
   const tokens = app.get(TokenService);
   const token = tokens.createAccessToken('error-user', 'error-session');
   let failure: unknown;
@@ -50,7 +54,7 @@ test('actual Nest errors preserve status, payload, diagnostics and refresh-only 
   t.after(() => exceptions.unsubscribe(observe));
   const request = async (error: unknown, status: number, body: unknown) => {
     failure = error;
-    const response = await fetch(`${origin}/api/me`, {
+    const response = await mockFetch(app)(`${origin}/api/me`, {
       headers: { authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(10000),
     });
@@ -122,7 +126,7 @@ test('actual Nest errors preserve status, payload, diagnostics and refresh-only 
   ]);
 
   const beforeGuard = called.mock.callCount();
-  const denied = await fetch(`${origin}/api/me`, {
+  const denied = await mockFetch(app)(`${origin}/api/me`, {
     headers: { authorization: 'Bearer forged' },
     signal: AbortSignal.timeout(10000),
   });
@@ -143,7 +147,7 @@ test('actual Nest errors preserve status, payload, diagnostics and refresh-only 
         `${REFRESH_TOKEN_COOKIE_NAME}=forged`,
         `${REFRESH_TOKEN_COOKIE_NAME}=${token}`,
       ]) {
-        const response = await fetch(`${origin}/api/auth/${path}`, {
+        const response = await mockFetch(app)(`${origin}/api/auth/${path}`, {
           method: 'POST',
           headers: { origin, cookie },
           signal: AbortSignal.timeout(10000),

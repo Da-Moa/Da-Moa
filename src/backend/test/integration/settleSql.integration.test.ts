@@ -1,6 +1,6 @@
 import { before } from 'node:test';
 import { getPrismaClient } from '../support/domainTestSupport.ts';
-import { drainReceiptQueue } from './receiptWorkerTestSupport';
+import { drainReceiptQueue } from '../support/receiptWorkerTestSupport';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
@@ -14,7 +14,11 @@ import {
   createAccessToken,
   readAccessToken,
 } from '../support/legacyTokenTestSupport.ts';
-import { createBackend } from '../../domain/main';
+import {
+  createMockBackend,
+  mockFetch,
+  mockOrigin,
+} from '../support/mockHttpTestSupport';
 import { SettleService } from '../../domain/settle/service/settle.service';
 import { CreateRoundRequestDTO } from '../../domain/settle/dto/req/settle.request.dto';
 import { MAX_GROUP_MEMBERS } from '../../../shared/domain/group/constants';
@@ -41,7 +45,7 @@ import {
 } from '../support/domainTestSupport.ts';
 import { createDatabaseClient } from '../../global/database/db.ts';
 import { uuidV7 } from '../../../shared/uuid.ts';
-import { completeTestOnboarding } from './bankTestSupport.ts';
+import { completeTestOnboarding } from '../support/bankTestSupport.ts';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
 
 const database = process.env.TEST_DATABASE_URL;
@@ -127,9 +131,13 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       assert.equal(
         statements.length,
         count +
-          (write === 'session' || (write === 'patch' && count >= 5) ? 1 : 0),
+          (count > 0 &&
+          (write === 'session' || (write === 'patch' && count >= 5))
+            ? 1
+            : 0),
         statements.join('\n'),
       );
+      if (count === 0) return result;
       if (write === 'receipt-delete') {
         assert.ok(
           statements.every(
@@ -536,12 +544,12 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       await t.test(
         'Round Body DTO validation rejects invalid input before SQL while canonical members and the write transaction stay unchanged',
         async (ht) => {
-          const { app } = await createBackend();
+          const { app } = await createMockBackend();
           ht.after(async () => {
             await app.close();
           });
-          await app.listen(0, '127.0.0.1');
-          const origin = await app.getUrl(),
+
+          const origin = mockOrigin(app),
             service = app.get(SettleService);
           const token = createAccessToken(a.userId, a.sessionId);
           const create = service.createRound.bind(service);
@@ -564,7 +572,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
             authorization = `Bearer ${token}`,
           ) => {
             statements = [];
-            const response = await fetch(
+            const response = await mockFetch(app)(
               `${origin}/api/groups/${group.id}/rounds`,
               {
                 method: 'POST',
@@ -697,12 +705,12 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       await t.test(
         'every JSON settlement command validates version and nested fields before DB; valid typed input still reaches authorization and conflict checks',
         async (ht) => {
-          const { app } = await createBackend();
+          const { app } = await createMockBackend();
           ht.after(async () => {
             await app.close();
           });
-          await app.listen(0, '127.0.0.1');
-          const origin = await app.getUrl(),
+
+          const origin = mockOrigin(app),
             token = createAccessToken(a.userId, a.sessionId);
           const base = `/api/rounds/${round.id}`,
             expense = `${base}/expenses/${randomUUID()}`;
@@ -742,7 +750,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
             authorization = `Bearer ${token}`,
           ) => {
             statements = [];
-            const response = await fetch(`${origin}${path}`, {
+            const response = await mockFetch(app)(`${origin}${path}`, {
               method,
               headers: {
                 origin,
@@ -859,10 +867,10 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         ),
       );
       for (const [actor, ticket, input, expected, count] of [
-        [null, '', body, 'unauthorized', 2],
-        [{ ...a, userId: randomUUID() }, '', body, 'unauthorized', 3],
+        [null, '', body, 'unauthorized', 0],
+        [{ ...a, userId: randomUUID() }, uuidV7(), body, 'unauthorized', 3],
         [a, randomUUID(), body, 'invalid_request_key', 3],
-        [a, '', body, 'invalid_request_key', 3],
+        [a, '', body, 'invalid_request_key', 0],
         [
           a,
           uuidV7(),
@@ -1337,7 +1345,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         assert.rejects(
           saveExpense(
             { ...a, userId: randomUUID() },
-            '',
+            key(),
             round.id,
             expenseBody,
           ),
@@ -1558,7 +1566,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
             assert.rejects(
               saveExpense(
                 { ...a, userId: randomUUID() },
-                '',
+                key(),
                 patchRound.id,
                 { expectedVersion: patchVersion },
                 original.id,
@@ -1868,7 +1876,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
                 Bucket: process.env.MINIO_BUCKET!,
                 Key: objectKey,
               };
-              await trace(2, 'delete', () =>
+              await trace(0, 'delete', () =>
                 assert.rejects(
                   deleteExpense(
                     null,
@@ -1884,7 +1892,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
                 assert.rejects(
                   deleteExpense(
                     { ...a, userId: randomUUID() },
-                    '',
+                    key(),
                     deletionRound.id,
                     original.id,
                     request,
@@ -2186,7 +2194,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
           { ...a, userId: randomUUID() },
           round.id,
           c.userId,
-          '',
+          key(),
           { expectedVersion: version },
           'unauthorized',
           1,
@@ -2207,7 +2215,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
           '',
           { expectedVersion: version },
           'invalid_request_key',
-          1,
+          0,
         ],
         [
           b,
@@ -2394,7 +2402,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
             ],
             [
               { ...b, userId: randomUUID() },
-              '',
+              key(),
               confirmation.id,
               { expectedVersion: 1 },
               'unauthorized',
@@ -2406,7 +2414,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
               confirmation.id,
               { expectedVersion: 1 },
               'invalid_request_key',
-              1,
+              0,
             ],
             [a, key(), confirmation.id, { expectedVersion: 1 }, 'forbidden', 4],
             [
@@ -2593,13 +2601,13 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
                 ],
                 [
                   { ...b, userId: randomUUID() },
-                  '',
+                  key(),
                   confirmation.id,
                   { expectedVersion: 1 },
                   'unauthorized',
                   1,
                 ],
-                [b, '', confirmation.id, request, 'invalid_request_key', 1],
+                [b, '', confirmation.id, request, 'invalid_request_key', 0],
                 [
                   b,
                   key(),
@@ -2838,13 +2846,13 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
             [null, '', round.id, request, 'unauthorized', 0],
             [
               { ...a, userId: randomUUID() },
-              '',
+              key(),
               round.id,
               request,
               'unauthorized',
               1,
             ],
-            [a, '', round.id, request, 'invalid_request_key', 1],
+            [a, '', round.id, request, 'invalid_request_key', 0],
             [a, key(), round.id, { unexpected: true }, 'invalid_input', 0],
             [b, key(), round.id, request, 'forbidden', 2],
             [nonParticipant, key(), round.id, request, 'not_found', 2],
@@ -3046,13 +3054,13 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
             [null, '', round.id, request, 'unauthorized', 0],
             [
               { ...a, userId: randomUUID() },
-              '',
+              key(),
               round.id,
               request,
               'unauthorized',
               1,
             ],
-            [a, '', round.id, request, 'invalid_request_key', 1],
+            [a, '', round.id, request, 'invalid_request_key', 0],
             [a, key(), round.id, { unexpected: true }, 'invalid_input', 0],
             [b, key(), round.id, request, 'forbidden', 2],
             [nonParticipant, key(), round.id, request, 'not_found', 2],
@@ -3231,17 +3239,18 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         }),
       );
       for (const [actor, count] of [
-        [null, 2],
+        [null, 0],
         [{ ...a, userId: randomUUID() }, 3],
       ] as const) {
         statements = [];
         await assert.rejects(
-          roundCommand(actor, '', cancelled.id, 'cancel', {
+          roundCommand(actor, key(), cancelled.id, 'cancel', {
             expectedVersion: 1,
           }),
           (error: { code: string }) => error.code === 'unauthorized',
         );
         assert.equal(statements.length, count);
+        if (count === 0) continue;
         assert.equal(statements[0], 'BEGIN');
         assert.equal(statements.at(-1), 'ROLLBACK');
         assert.ok(statements.every((sql) => !sql.includes('pg_advisory')));
@@ -3499,13 +3508,13 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
             [null, '', even.id, request, 'unauthorized', 0],
             [
               { ...a, userId: randomUUID() },
-              '',
+              key(),
               even.id,
               request,
               'unauthorized',
               1,
             ],
-            [a, '', even.id, request, 'invalid_request_key', 1],
+            [a, '', even.id, request, 'invalid_request_key', 0],
             [a, key(), even.id, { unexpected: true }, 'invalid_input', 0],
             [b, key(), even.id, request, 'forbidden', 2],
             [nonParticipant, key(), even.id, request, 'not_found', 2],

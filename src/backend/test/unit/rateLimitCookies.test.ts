@@ -2,7 +2,11 @@ import { TokenService } from '../../global/auth/service/token.service';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Request, Response, NextFunction } from 'express';
-import { createBackend } from '../../domain/main';
+import {
+  createMockBackend,
+  mockFetch,
+  mockOrigin,
+} from '../support/mockHttpTestSupport';
 import { REFRESH_TOKEN_COOKIE_NAME } from '../../global/auth/native';
 import { createRefreshToken } from '../support/legacyTokenTestSupport.ts';
 import {
@@ -10,11 +14,11 @@ import {
   createTokenBuckets,
 } from '../../global/rateLimit/native';
 
-test('actual Nest HTTP limiter and JWT Guard use the same parsed refresh-cookie identity and reject duplicates consistently', async (t) => {
+test('injected Nest requests limiter and JWT Guard use the same parsed refresh-cookie identity and reject duplicates consistently', async (t) => {
   const previous = process.env.AUTH_JWT_SECRET;
   process.env.AUTH_JWT_SECRET = 'cookie-limiter-test-secret-at-least-32-bytes';
   let limiter: ReturnType<typeof createRateLimitController>;
-  const { app } = await createBackend(async (app) => {
+  const { app } = await createMockBackend(async (app) => {
     limiter = createRateLimitController(
       app.get(TokenService),
       createTokenBuckets(() => 0),
@@ -29,13 +33,13 @@ test('actual Nest HTTP limiter and JWT Guard use the same parsed refresh-cookie 
     if (previous === undefined) delete process.env.AUTH_JWT_SECRET;
     else process.env.AUTH_JWT_SECRET = previous;
   });
-  await app.listen(0, '127.0.0.1');
-  const origin = await app.getUrl();
+
+  const origin = mockOrigin(app);
   const token = createRefreshToken('cookie-limit-user', 'first-session');
   const other = createRefreshToken('different-cookie-user', 'second-session');
   const cookie = `${REFRESH_TOKEN_COOKIE_NAME}=${token.replace(/\./g, '%2E')}`;
   const request = (cookie: string) =>
-    fetch(`${origin}/api/auth/access-token`, {
+    mockFetch(app)(`${origin}/api/auth/access-token`, {
       method: 'POST',
       headers: { origin, cookie },
       signal: AbortSignal.timeout(10000),

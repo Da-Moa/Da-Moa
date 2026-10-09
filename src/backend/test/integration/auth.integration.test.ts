@@ -37,7 +37,7 @@ import { applyMigrations } from '../../../../scripts/migrations.mjs';
 import {
   completeTestOnboarding as completeOnboarding,
   updateTestBankAccount as updateBankAccount,
-} from './bankTestSupport.ts';
+} from '../support/bankTestSupport.ts';
 
 const testUrl = process.env.TEST_DATABASE_URL;
 if (

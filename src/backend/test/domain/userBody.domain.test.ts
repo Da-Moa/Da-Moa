@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { createBackend } from '../../domain/main';
+import {
+  createMockBackend,
+  mockFetch,
+  mockOrigin,
+} from '../support/mockHttpTestSupport';
 import { JwtService } from '@nestjs/jwt';
 import { UserService } from '../../domain/user/service/user.service';
 import {
@@ -35,10 +39,10 @@ test('account HTTP validates DTO shape before SQL and preserves normalized busin
     email: null,
     profileImageUrl: null,
   });
-  const { app } = await createBackend();
+  const { app } = await createMockBackend();
   t.after(() => app.close());
-  await app.listen(0, '127.0.0.1');
-  const origin = await app.getUrl();
+
+  const origin = mockOrigin(app);
   const service = app.get(UserService);
   const signer = t.mock.method(app.get(JwtService), 'sign');
   for (const [method, dto] of [
@@ -75,7 +79,7 @@ test('account HTTP validates DTO shape before SQL and preserves normalized busin
     token = session.accessToken,
   ) => {
     statements = [];
-    const response = await fetch(`${origin}/api/me/${path}`, {
+    const response = await mockFetch(app)(`${origin}/api/me/${path}`, {
       method: path === 'onboarding' ? 'POST' : 'PUT',
       headers: {
         origin,

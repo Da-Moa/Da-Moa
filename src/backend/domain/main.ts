@@ -9,6 +9,14 @@ import type { INestApplication } from '@nestjs/common';
 import { AppModule } from './app.module';
 import cookieParser from 'cookie-parser';
 
+export function configureBackend(app: INestApplication) {
+  const express = app.getHttpAdapter().getInstance();
+  express.disable('x-powered-by');
+  app.use(cookieParser());
+  app.useGlobalPipes(createValidationPipe());
+  return express;
+}
+
 export async function createBackend(
   beforeInit?: (app: INestApplication) => Promise<void>,
 ) {
@@ -17,10 +25,7 @@ export async function createBackend(
     bodyParser: false,
     logger: ['error', 'warn'],
   });
-  const express = app.getHttpAdapter().getInstance();
-  express.disable('x-powered-by');
-  app.use(cookieParser());
-  app.useGlobalPipes(createValidationPipe());
+  const express = configureBackend(app);
   try {
     await beforeInit?.(app);
     configureSwaggerUi(app);

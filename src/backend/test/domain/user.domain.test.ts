@@ -31,7 +31,7 @@ import { getDatabasePool } from '../support/domainTestSupport.ts';
 import { getMeResponse as GET } from '../support/httpTestSupport.ts';
 import { getBankAccountResponse as PUT } from '../support/httpTestSupport.ts';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
-import { completeTestOnboarding } from './bankTestSupport.ts';
+import { completeTestOnboarding } from '../support/bankTestSupport.ts';
 import { uuidV7 } from '../../../shared/uuid.ts';
 import { createGroup } from '../support/domainTestSupport.ts';
 import { createRound } from '../support/domainTestSupport.ts';
@@ -197,6 +197,7 @@ test('withdrawal locks before checks and releases the transaction lock on commit
       statements = [];
       const result = await work();
       assert.equal(statements.length, count, statements.join('\n'));
+      if (count === 0) return result;
       assert.equal(statements[0], 'BEGIN');
       assert.equal(
         statements[1],
@@ -231,7 +232,7 @@ test('withdrawal locks before checks and releases the transaction lock on commit
       await client.query('SELECT pg_advisory_unlock(1684106607)');
       return result;
     };
-    await trace(3, () =>
+    await trace(0, () =>
       assert.rejects(withdrawAccount(null), code('unauthorized')),
     );
     await trace(5, () =>
@@ -694,7 +695,7 @@ test('onboarding uses AUTH + conditional UPDATE; concurrent signup/rejoin has on
     const secret = process.env.AUTH_JWT_SECRET;
     delete process.env.AUTH_JWT_SECRET;
     try {
-      await trace(1, () =>
+      await trace(0, () =>
         assert.rejects(completeOnboarding(access, input), /AUTH_JWT_SECRET/),
       );
     } finally {

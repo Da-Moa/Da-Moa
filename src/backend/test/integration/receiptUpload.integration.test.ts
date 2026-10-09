@@ -28,9 +28,9 @@ import {
   removeReceipt,
   saveExpense,
 } from '../support/domainTestSupport.ts';
-import { completeTestOnboarding } from './bankTestSupport.ts';
+import { completeTestOnboarding } from '../support/bankTestSupport.ts';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
-import { drainReceiptQueue } from './receiptWorkerTestSupport';
+import { drainReceiptQueue } from '../support/receiptWorkerTestSupport';
 
 const testUrl = process.env.TEST_DATABASE_URL;
 if (
@@ -143,7 +143,7 @@ test('receipt queue authorizes before reading and persists atomically after one 
     await assert.rejects(
       addReceipt(
         { ...owner, userId: key() },
-        '',
+        key(),
         round.id,
         expense.id,
         upload(),
@@ -265,7 +265,7 @@ test('receipt queue authorizes before reading and persists atomically after one 
         '@swc-node/register/esm-register',
         '--input-type=module',
         '-e',
-        "const m=await import('./src/backend/test/integration/receiptWorkerTestSupport.ts');await m.drainReceiptQueue()",
+        "const m=await import('./src/backend/test/support/receiptWorkerTestSupport.ts');await m.drainReceiptQueue()",
       ],
       { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] },
     );

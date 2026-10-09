@@ -1,6 +1,6 @@
 import { before } from 'node:test';
 import { getPrismaClient } from '../support/domainTestSupport.ts';
-import { addStoredReceipt as addReceipt } from './receiptWorkerTestSupport';
+import { addStoredReceipt as addReceipt } from '../support/receiptWorkerTestSupport';
 import { uuidV7 } from '../../../shared/uuid.ts';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -44,7 +44,7 @@ import { applyMigrations } from '../../../../scripts/migrations.mjs';
 import {
   completeTestOnboarding as completeOnboarding,
   updateTestBankAccount as updateBankAccount,
-} from './bankTestSupport.ts';
+} from '../support/bankTestSupport.ts';
 
 const testUrl = process.env.TEST_DATABASE_URL;
 if (

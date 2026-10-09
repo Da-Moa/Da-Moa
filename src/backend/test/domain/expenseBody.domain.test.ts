@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { createBackend } from '../../domain/main';
+import {
+  createMockBackend,
+  mockFetch,
+  mockOrigin,
+} from '../support/mockHttpTestSupport';
 import { SettleService } from '../../domain/settle/service/settle.service';
 import {
   CreateExpenseRequestDTO,
@@ -16,7 +20,7 @@ import {
   createRound,
   signInKakao,
 } from '../support/domainTestSupport';
-import { completeTestOnboarding } from './bankTestSupport';
+import { completeTestOnboarding } from '../support/bankTestSupport';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
 import { uuidV7 } from '../../../shared/uuid';
 
@@ -60,10 +64,10 @@ test('expense HTTP separates create/update DTOs, preserves trimmed UTF-16 limits
     name: '지출 경계',
     participantIds: [a.userId, b.userId],
   });
-  const { app } = await createBackend();
+  const { app } = await createMockBackend();
   t.after(() => app.close());
-  await app.listen(0, '127.0.0.1');
-  const origin = await app.getUrl();
+
+  const origin = mockOrigin(app);
   const service = app.get(SettleService);
   for (const [method, dto] of [
     ['createExpense', CreateExpenseRequestDTO],
@@ -107,7 +111,7 @@ test('expense HTTP separates create/update DTOs, preserves trimmed UTF-16 limits
     key = randomUUID(),
   ) => {
     sql = [];
-    const response = await fetch(
+    const response = await mockFetch(app)(
       `${origin}/api/rounds/${round.id}/expenses${expenseId ? `/${expenseId}` : ''}`,
       {
         method: expenseId ? 'PATCH' : 'POST',

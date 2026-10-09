@@ -9,7 +9,11 @@ import {
 } from '../../domain/health/service/health.service';
 import { createAccessToken } from '../support/legacyTokenTestSupport.ts';
 import { PrismaService } from '../../global/database/prisma.service';
-import { createBackend } from '../../domain/main';
+import {
+  createMockBackend,
+  mockFetch,
+  mockOrigin,
+} from '../support/mockHttpTestSupport';
 import type { INestApplication } from '@nestjs/common';
 import type {
   ReferenceObject,
@@ -38,7 +42,7 @@ const previousSecret = process.env.AUTH_JWT_SECRET;
 before(async () => {
   process.env.AUTH_JWT_SECRET =
     'health-controller-unit-test-secret-at-least-32-bytes';
-  ({ app } = await createBackend());
+  ({ app } = await createMockBackend());
   const repository = app.get(HealthRepository);
   repository.checkDatabase = async () => {
     await probes.database!();
@@ -50,8 +54,8 @@ before(async () => {
   const worker = app.get<HealthWorkerProbes>(HEALTH_WORKER_PROBES);
   worker.worker = () => probes.worker!();
   worker.workerReady = () => probes.workerReady!();
-  await app.listen(0, '127.0.0.1');
-  origin = await app.getUrl();
+
+  origin = mockOrigin(app);
 });
 after(async () => {
   await app?.close();
@@ -61,7 +65,9 @@ after(async () => {
 
 const healthResponse = (scope: HealthScope, checks: Partial<HealthProbes>) => {
   probes = checks;
-  return fetch(`${origin}/api/health${scope === 'overall' ? '' : '/' + scope}`);
+  return mockFetch(app)(
+    `${origin}/api/health${scope === 'overall' ? '' : '/' + scope}`,
+  );
 };
 
 test('worker liveness skips dependencies and readiness reports each failure without exposing errors', async () => {
@@ -101,7 +107,7 @@ test('worker liveness skips dependencies and readiness reports each failure with
   ]) {
     assert.equal(
       (
-        await fetch(`${origin}/api/health/${check.join('/')}`, {
+        await mockFetch(app)(`${origin}/api/health/${check.join('/')}`, {
           headers: {
             authorization: `Bearer ${createAccessToken('health-user', 'health-session')}`,
           },
@@ -213,7 +219,11 @@ test('health routes require MinIO read and write quorum', async () => {
   });
   assert.equal(live.status, 200);
   const unknown = await GET(
-    new Request('http://localhost/api/health/unknown'),
+    new Request('http://localhost/api/health/unknown', {
+      headers: {
+        authorization: `Bearer ${createAccessToken('health-user', 'health-session')}`,
+      },
+    }),
     { params: Promise.resolve({ check: ['unknown'] }) },
   );
   assert.equal(unknown.status, 404);
@@ -285,7 +295,9 @@ test('every Nest health route calls its matching service method for GET and HEAD
   for (const [path, name] of Object.entries(methods)) {
     for (const method of ['GET', 'HEAD']) {
       calls.length = 0;
-      const response = await fetch(`${origin}/api/health${path}`, { method });
+      const response = await mockFetch(app)(`${origin}/api/health${path}`, {
+        method,
+      });
       assert.equal(response.status, 503);
       assert.equal(response.headers.get('Cache-Control'), 'no-store');
       assert.deepEqual(calls, [name]);

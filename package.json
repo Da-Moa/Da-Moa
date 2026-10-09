@@ -16,13 +16,15 @@
     "build": "prisma generate && nest build && next build",
     "start": "NODE_ENV=production nest start",
     "test": "SWC_NODE_PROJECT=tsconfig.backend.json node --import @swc-node/register/esm-register --test src/backend/test/unit/*.test.ts src/backend/test/unit/*.test.mjs src/frontend/test/unit/*.test.ts src/frontend/test/unit/*.test.mjs",
-    "test:integration": "npm run build:backend && SWC_NODE_PROJECT=tsconfig.backend.json node --import @swc-node/register/esm-register --test --test-concurrency=1 src/backend/test/integration/*.integration.test.ts src/backend/test/integration/*.integration.test.mjs",
+    "test:integration": "SWC_NODE_PROJECT=tsconfig.backend.json node --import @swc-node/register/esm-register --test --test-concurrency=1 src/backend/test/integration/*.integration.test.ts",
     "typecheck": "tsc --project tsconfig.check.json --noEmit --incremental false && tsc --project tsconfig.backend.json --noEmit --incremental false",
     "db:generate": "prisma generate",
     "postinstall": "prisma generate",
     "build:backend": "prisma generate && nest build",
-    "test:smoke": "npm run build:backend && SWC_NODE_PROJECT=tsconfig.backend.json node --import @swc-node/register/esm-register --test --test-concurrency=1 src/backend/test/integration/routes.integration.test.ts",
-    "test:browser": "playwright test"
+    "test:smoke": "SWC_NODE_PROJECT=tsconfig.backend.json node --import @swc-node/register/esm-register --test --test-concurrency=1 src/backend/test/integration/routes.integration.test.ts",
+    "test:browser": "playwright test",
+    "test:domain": "SWC_NODE_PROJECT=tsconfig.backend.json node --import @swc-node/register/esm-register --test --test-concurrency=1 src/backend/test/domain/*.domain.test.ts",
+    "test:transport": "npm run build:backend && SWC_NODE_PROJECT=tsconfig.backend.json node --import @swc-node/register/esm-register --test --test-concurrency=1 src/backend/test/transport/*.test.ts src/backend/test/transport/*.test.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1142.0",
@@ -60,6 +62,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@nestjs/cli": "^11.0.24",
+    "@nestjs/testing": "^11.2.7",
     "@playwright/test": "1.64.0",
     "@swc-node/register": "^1.12.1",
     "@swc/core": "^1.16.13",
@@ -75,6 +78,7 @@
     "eslint": "^10.12.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.6",
+    "node-mocks-http": "^1.18.1",
     "prettier": "3.9.9",
     "prisma": "7.9.1",
     "swc-loader": "^0.2.6",

@@ -1,6 +1,6 @@
 import { before } from 'node:test';
 import { getPrismaClient } from '../support/domainTestSupport.ts';
-import { addStoredReceipt as addReceipt } from './receiptWorkerTestSupport';
+import { addStoredReceipt as addReceipt } from '../support/receiptWorkerTestSupport';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
@@ -22,7 +22,7 @@ import {
   removeReceipt,
   saveExpense,
 } from '../support/domainTestSupport.ts';
-import { completeTestOnboarding } from './bankTestSupport.ts';
+import { completeTestOnboarding } from '../support/bankTestSupport.ts';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
 
 const testUrl = process.env.TEST_DATABASE_URL;
@@ -205,7 +205,7 @@ test('receipt deletion uses AUTH, authorized context and one atomic deletion wit
         f.round.id,
         f.expense.id,
         f.receipt.id,
-        '',
+        key(),
         body,
         'unauthorized',
         ['AUTH'],
@@ -228,7 +228,7 @@ test('receipt deletion uses AUTH, authorized context and one atomic deletion wit
         '',
         body,
         'invalid_request_key',
-        ['AUTH'],
+        [],
       ],
       [
         groupOwner,
