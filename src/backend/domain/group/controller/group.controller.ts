@@ -1,4 +1,5 @@
 import { JsonBody } from '../../../global/apiPayload/requestBody.interceptor';
+import { parseSearchPageQuery } from '../../../global/apiPayload/pageQuery';
 import { groupErrors } from '../code/group.error.code';
 import { RequiredIdempotencyKey } from '../../../global/apiPayload/requiredHeader.decorator';
 import {
@@ -36,7 +37,7 @@ export class GroupController {
     @CurrentUser() user: AuthenticatedUser,
     @Query() query: GroupListQueryDTO,
   ) {
-    return this.service.listGroups(user, query);
+    return this.service.listGroups(user, parseSearchPageQuery(query));
   }
 
   @JsonBody()

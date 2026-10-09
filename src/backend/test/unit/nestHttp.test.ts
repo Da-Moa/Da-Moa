@@ -4,10 +4,7 @@ import { request as nodeRequest } from 'node:http';
 import { GroupService } from '../../domain/group/service/group.service';
 import { SettleService } from '../../domain/settle/service/settle.service';
 import { UserService } from '../../domain/user/service/user.service';
-import {
-  CreateGroupRequestDTO,
-  GroupListQueryDTO,
-} from '../../domain/group/dto/req/group.request.dto';
+import { CreateGroupRequestDTO } from '../../domain/group/dto/req/group.request.dto';
 import {
   ExpenseRequestDTO,
   CreateExpenseRequestDTO,
@@ -509,8 +506,7 @@ test('Nest HTTP routes enforce JWT before body parsing, preserve cookies, and di
   );
   groups.listGroups = async (_access, query) => {
     assert.equal(_access?.userId, 'unit-user');
-    assert.ok(query instanceof GroupListQueryDTO);
-    assert.equal(query.limit, 2);
+    assert.deepEqual(query, { limit: 2, cursor: null, search: null });
     return { items: [], nextCursor: null };
   };
   const page = await request('/api/groups?limit=2', 'GET', undefined, true);

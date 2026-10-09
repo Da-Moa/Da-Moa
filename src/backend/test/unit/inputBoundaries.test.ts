@@ -1,16 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { errorResponse } from '../../global/apiPayload/errors.ts'
-import { pageOf, pagination } from '../../global/util/index.ts'
+import { pageOf, decodePageCursor } from '../../global/util/index.ts'
 
 test('pagination cursors include only the position and reject malformed or overflowing values', () => {
   const first = { id: 'entry-one', createdAt: 100, description: 'private expense', accountNumber: '001234' }
   const page = pageOf([first, { ...first, id: 'entry-two' }], 1, row => row)
   assert.deepEqual(JSON.parse(Buffer.from(page.nextCursor!, 'base64url').toString()), { id: 'entry-one', createdAt: '100' })
-  assert.deepEqual(pagination(new URLSearchParams({ cursor: page.nextCursor! })).cursor, { id: 'entry-one', createdAt: '100' })
+  assert.deepEqual(decodePageCursor(page.nextCursor!), { id: 'entry-one', createdAt: '100' })
   for (const createdAt of [[1], '999999999999999999999', '10\n']) {
     const cursor = Buffer.from(JSON.stringify({ id: 'entry', createdAt })).toString('base64url')
-    assert.throws(() => pagination(new URLSearchParams({ cursor })))
+    assert.throws(() => decodePageCursor(cursor))
   }
 })
 

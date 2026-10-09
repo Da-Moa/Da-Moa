@@ -1,6 +1,7 @@
 import { JsonBody } from '../../../global/apiPayload/requestBody.interceptor';
 import { RequiredIdempotencyKey } from '../../../global/apiPayload/requiredHeader.decorator';
 import { PageQueryDTO } from '../../../global/apiPayload/dto/req/page.request.dto';
+import { parsePageQuery } from '../../../global/apiPayload/pageQuery';
 import {
   Controller,
   Body,
@@ -28,6 +29,7 @@ import { SettleService } from '../service/settle.service';
 import {
   CreateRoundRequestDTO,
   RoundListQueryDTO,
+  parseRoundListQuery,
   ExpenseRequestDTO,
   CreateExpenseRequestDTO,
   SettlementCheckRequestDTO,
@@ -57,7 +59,7 @@ export class SettleController {
     @Query() query: RoundListQueryDTO,
     @Param('groupId') groupId: string,
   ) {
-    return this.service.listRounds(user, query, groupId);
+    return this.service.listRounds(user, parseRoundListQuery(query), groupId);
   }
 
   @JsonBody()
@@ -93,7 +95,7 @@ export class SettleController {
     @CurrentUser() user: AuthenticatedUser,
     @Query() query: RoundListQueryDTO,
   ) {
-    return this.service.listRounds(user, query);
+    return this.service.listRounds(user, parseRoundListQuery(query));
   }
 
   @Get('api/rounds/:roundId')
@@ -102,7 +104,7 @@ export class SettleController {
     @Query() query: PageQueryDTO,
     @Param('roundId') roundId: string,
   ) {
-    return this.service.getRound(user, roundId, query);
+    return this.service.getRound(user, roundId, parsePageQuery(query));
   }
 
   @JsonBody()

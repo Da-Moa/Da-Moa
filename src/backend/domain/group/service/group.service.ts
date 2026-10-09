@@ -1,4 +1,3 @@
-import type { GroupListQueryDTO } from '../dto/req/group.request.dto';
 import { Injectable, Inject } from '@nestjs/common';
 import { isUUID } from 'class-validator';
 import { PrismaService } from '../../../global/database/prisma.service';
@@ -12,8 +11,7 @@ import {
   nowSeconds,
   onlyKeys,
   pageOf,
-  pagination,
-  queryParameters,
+  type SearchPageQuery,
   textInput,
   type Database,
   type Identity,
@@ -79,11 +77,9 @@ export class GroupService {
 
   async listGroups(
     access: Identity,
-    query: URLSearchParams | GroupListQueryDTO,
+    query: SearchPageQuery,
   ): Promise<Page<GroupListItem>> {
-    query = queryParameters(query);
-    const { limit, cursor } = pagination(query);
-    const search = query.has('q') ? textInput(query.get('q'), 100) : null;
+    const { limit, cursor, search } = query;
     return this.prisma.withDatabaseConnection(async (client) => {
       const account = await this.authorization.requireAccount(client, access);
       const page = pageOf(

@@ -7,7 +7,12 @@ export {
   isInviteToken,
   INVITE_TOKEN_LENGTH,
 } from './inviteTokenUtil';
-export { pageOf, pagination, queryParameters } from './pagenationUtil';
+export {
+  pageOf,
+  decodePageCursor,
+  type PageQuery,
+  type SearchPageQuery,
+} from './pagenationUtil';
 export { MutationExecutor, type Identity } from './idempotencyUtil';
 export { currentTimestamp as nowSeconds } from '../auth/authUtil';
 export {

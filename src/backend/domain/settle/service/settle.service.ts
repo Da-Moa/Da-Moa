@@ -1,7 +1,6 @@
 import { ReceiptStorage } from '../../../global/util/minio.util';
 import { MutationExecutor } from '../../../global/util/idempotencyUtil';
-import type { RoundListQueryDTO } from '../dto/req/settle.request.dto';
-import type { PageQueryDTO } from '../../../global/apiPayload/dto/req/page.request.dto';
+import type { RoundListQuery } from './roundList.query';
 import { Injectable, Inject } from '@nestjs/common';
 import { isUUID } from 'class-validator';
 import { PrismaService } from '../../../global/database/prisma.service';
@@ -21,8 +20,7 @@ import {
   nowSeconds,
   onlyKeys,
   pageOf,
-  pagination,
-  queryParameters,
+  type PageQuery,
   textInput,
   type Identity,
 } from '../../../global/util';
@@ -250,24 +248,10 @@ export class SettleService {
     };
   }
 
-  async listRounds(
-    access: Identity,
-    query: URLSearchParams | RoundListQueryDTO,
-    groupId?: string,
-  ) {
-    query = queryParameters(query);
+  async listRounds(access: Identity, query: RoundListQuery, groupId?: string) {
+    const { limit, cursor, status, search } = query;
     return this.prisma.withDatabaseConnection(async (client) => {
       const account = await this.authorization.requireAccount(client, access);
-      const { limit, cursor } = pagination(query);
-      const status = query.get('status');
-      const search = query.has('q') ? textInput(query.get('q'), 100) : null;
-      if (
-        status &&
-        !['active', 'RECORDING', 'CONFIRMED', 'LOCKED', 'COMPLETED'].includes(
-          status,
-        )
-      )
-        badInput();
       const rows = await this.repository.findRounds(
         client,
         account.id,
@@ -285,12 +269,11 @@ export class SettleService {
   async getRound(
     access: Identity,
     roundId: string,
-    query: URLSearchParams | PageQueryDTO,
+    query: PageQuery,
   ): Promise<RoundDetail> {
-    query = queryParameters(query);
+    const { limit, cursor } = query;
     return this.prisma.withDatabaseConnection(async (client) => {
       const account = await this.authorization.requireAccount(client, access);
-      const { limit, cursor } = pagination(query);
       const rows = await this.repository.findRoundDetail(
         client,
         roundId,

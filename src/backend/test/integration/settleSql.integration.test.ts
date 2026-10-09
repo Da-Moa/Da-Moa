@@ -204,10 +204,12 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
           [{ limit: '0' }, 'invalid_input'], [{ limit: '101' }, 'invalid_input'], [{ limit: '1.5' }, 'invalid_input'],
           [{ cursor: 'invalid' }, 'invalid_cursor'], [{ status: 'INVALID' }, 'invalid_input'], [{ q: '' }, 'invalid_input'],
         ] as const) {
-          await trace(1, 'connection', () => assert.rejects(listRounds(a, new URLSearchParams(input), groupId), (error: { code: string }) => error.code === expected))
-          await trace(1, 'connection', () => assert.rejects(listRounds({ ...a, userId: randomUUID() }, new URLSearchParams(input), groupId), (error: { code: string }) => error.code === 'unauthorized'))
+          await trace(0, 'connection', () => assert.rejects(listRounds(a, new URLSearchParams(input), groupId), (error: { code: string }) => error.code === expected))
         }
-        await trace(0, 'connection', () => assert.rejects(listRounds(null, new URLSearchParams({ limit: '0' }), groupId), (error: { code: string }) => error.code === 'unauthorized'))
+        // Invalid query text belongs to the DTO boundary. Account authorization
+        // still runs first inside the Service for every valid typed query.
+        await trace(1, 'connection', () => assert.rejects(listRounds({ ...a, userId: randomUUID() }, new URLSearchParams(), groupId), (error: { code: string }) => error.code === 'unauthorized'))
+        await trace(0, 'connection', () => assert.rejects(listRounds(null, new URLSearchParams(), groupId), (error: { code: string }) => error.code === 'unauthorized'))
       }
       assert.deepEqual((await trace(2, 'connection', () => listRounds(a, new URLSearchParams(), randomUUID()))).items, [])
       const empty = await trace(2, 'connection', () => getRound(a, round.id, new URLSearchParams()))
@@ -220,10 +222,10 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       for (const [input, expected] of [
         [{ limit: '0' }, 'invalid_input'], [{ limit: '101' }, 'invalid_input'], [{ cursor: 'invalid' }, 'invalid_cursor'],
       ] as const) {
-        await trace(1, 'connection', () => assert.rejects(getRound(a, round.id, new URLSearchParams(input)), (error: { code: string }) => error.code === expected))
-        await trace(1, 'connection', () => assert.rejects(getRound({ ...a, userId: randomUUID() }, round.id, new URLSearchParams(input)), (error: { code: string }) => error.code === 'unauthorized'))
+        await trace(0, 'connection', () => assert.rejects(getRound(a, round.id, new URLSearchParams(input)), (error: { code: string }) => error.code === expected))
       }
-      await trace(0, 'connection', () => assert.rejects(getRound(null, round.id, new URLSearchParams({ limit: '0' })), (error: { code: string }) => error.code === 'unauthorized'))
+      await trace(1, 'connection', () => assert.rejects(getRound({ ...a, userId: randomUUID() }, round.id, new URLSearchParams()), (error: { code: string }) => error.code === 'unauthorized'))
+      await trace(0, 'connection', () => assert.rejects(getRound(null, round.id, new URLSearchParams()), (error: { code: string }) => error.code === 'unauthorized'))
       await trace(2, 'connection', () => assert.rejects(getRound(a, randomUUID(), new URLSearchParams()), (error: { code: string }) => error.code === 'not_found'))
       const nonParticipant = await member('비참여 모임 멤버')
       await acceptInvite(nonParticipant, key(), invite.sharePath!.split('/').at(-1)!)

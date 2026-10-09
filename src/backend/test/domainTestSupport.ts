@@ -21,6 +21,37 @@ import { SettleService } from '../domain/settle/service/settle.service';
 import { AuthService } from '../global/auth/service/auth.service';
 import { AuthorizationService } from '../global/auth/service/authorization.service';
 import { UserRepository } from '../domain/user/repository/user.repository';
+import { createValidationPipe } from '../global/apiPayload/validation.pipe';
+import { PageQueryDTO } from '../global/apiPayload/dto/req/page.request.dto';
+import { GroupListQueryDTO } from '../domain/group/dto/req/group.request.dto';
+import {
+  RoundListQueryDTO,
+  parseRoundListQuery,
+} from '../domain/settle/dto/req/settle.request.dto';
+import {
+  parsePageQuery,
+  parseSearchPageQuery,
+} from '../global/apiPayload/pageQuery';
+
+// Existing domain fixtures describe raw query strings. Run the same Nest DTO
+// boundary here; production Services accept only the resulting typed query.
+async function testQuery<T extends PageQueryDTO>(
+  dto: Type<T>,
+  query: URLSearchParams,
+): Promise<T> {
+  const values: Record<string, string | string[]> = Object.create(null);
+  for (const [name, value] of query) {
+    const previous = values[name];
+    values[name] =
+      previous === undefined
+        ? value
+        : [...(Array.isArray(previous) ? previous : [previous]), value];
+  }
+  return createValidationPipe().transform(values, {
+    type: 'query',
+    metatype: dto,
+  });
+}
 
 @Module({
   imports: [
@@ -94,9 +125,14 @@ export async function requireGroupMembership(
 }
 
 export async function listGroups(
-  ...args: Parameters<GroupService['listGroups']>
+  access: Parameters<GroupService['listGroups']>[0],
+  query: URLSearchParams,
 ): Promise<Awaited<ReturnType<GroupService['listGroups']>>> {
-  return (await testProvider(GroupService)).listGroups(...args);
+  const parsed = await testQuery(GroupListQueryDTO, query);
+  return (await testProvider(GroupService)).listGroups(
+    access,
+    parseSearchPageQuery(parsed),
+  );
 }
 
 export async function getGroup(
@@ -142,15 +178,29 @@ export async function acceptInvite(
 }
 
 export async function listRounds(
-  ...args: Parameters<SettleService['listRounds']>
+  access: Parameters<SettleService['listRounds']>[0],
+  query: URLSearchParams,
+  groupId?: string,
 ): Promise<Awaited<ReturnType<SettleService['listRounds']>>> {
-  return (await testProvider(SettleService)).listRounds(...args);
+  const parsed = await testQuery(RoundListQueryDTO, query);
+  return (await testProvider(SettleService)).listRounds(
+    access,
+    parseRoundListQuery(parsed),
+    groupId,
+  );
 }
 
 export async function getRound(
-  ...args: Parameters<SettleService['getRound']>
+  access: Parameters<SettleService['getRound']>[0],
+  roundId: string,
+  query: URLSearchParams,
 ): Promise<Awaited<ReturnType<SettleService['getRound']>>> {
-  return (await testProvider(SettleService)).getRound(...args);
+  const parsed = await testQuery(PageQueryDTO, query);
+  return (await testProvider(SettleService)).getRound(
+    access,
+    roundId,
+    parsePageQuery(parsed),
+  );
 }
 
 export async function createRound(

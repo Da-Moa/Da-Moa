@@ -21,6 +21,8 @@ import { CURRENCY_CODES } from '../../../../../shared/domain/settle/money';
 import { MAX_GROUP_MEMBERS } from '../../../../../shared/domain/group/constants';
 import { SearchPageQueryDTO } from '../../../../global/apiPayload/dto/req/page.request.dto';
 import { settleErrors } from '../../code/settle.error.code';
+import type { RoundListQuery } from '../../service/roundList.query';
+import { parseSearchPageQuery } from '../../../../global/apiPayload/pageQuery';
 
 export class CreateRoundRequestDTO {
   @ApiProperty({ minLength: 1, maxLength: 100 })
@@ -193,5 +195,9 @@ export class RoundListQueryDTO extends SearchPageQueryDTO {
   })
   @ValidateIf((_, value) => value !== undefined)
   @IsIn(['active', 'RECORDING', 'CONFIRMED', 'LOCKED', 'COMPLETED'])
-  status?: string;
+  status?: Exclude<RoundListQuery['status'], null>;
+}
+
+export function parseRoundListQuery(query: RoundListQueryDTO): RoundListQuery {
+  return { ...parseSearchPageQuery(query), status: query.status ?? null };
 }
