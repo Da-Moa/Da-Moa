@@ -443,3 +443,18 @@ test('custom expense allocation documents exact original shares and total valida
     /최종화 전에는 CUSTOM도 null/,
   )
 })
+
+test('documented minor amounts accept exact integer strings and reject decimals', () => {
+  const schemas = openApiDocument.components.schemas
+  const amount = new RegExp(schemas.Expense.properties.amountMinor.pattern)
+  const balance = new RegExp(
+    schemas.CurrencyBalance.properties.balanceMinor.pattern,
+  )
+  assert.equal(amount.test('123'), true)
+  assert.equal(amount.test('0'), true)
+  assert.equal(amount.test('-1'), false)
+  assert.equal(amount.test('1.25'), false)
+  assert.equal(balance.test('-123'), true)
+  assert.equal(balance.test('123'), true)
+  assert.equal(balance.test('1.25'), false)
+})

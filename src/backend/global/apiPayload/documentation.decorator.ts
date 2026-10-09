@@ -11,11 +11,12 @@ import { ApiErrorResponseDTO } from './error.response.dto';
 export function ApiDataResponse(
   type: Type<unknown>,
   description = '요청 성공',
+  status = 200,
 ) {
   return applyDecorators(
     ApiExtraModels(type, ApiSuccessCode),
     ApiResponse({
-      status: 200,
+      status,
       description,
       schema: {
         type: 'object',

@@ -149,9 +149,7 @@ export class GroupController {
   })
   @ApiDataResponse(GroupMutationResult)
   @ApiErrors()
-  @ApiMutationHeaders(
-    '한 제출당 한 UUID. 네트워크·토큰 갱신 후 재시도에도 같은 키와 본문을 사용합니다.',
-  )
+  @ApiMutationHeaders()
   @ApiParam({
     name: 'groupId',
     required: true,
@@ -189,9 +187,7 @@ export class GroupController {
   })
   @ApiDataResponse(GroupMutationResult)
   @ApiErrors()
-  @ApiMutationHeaders(
-    '한 제출당 한 UUID. 네트워크·토큰 갱신 후 재시도에도 같은 키와 본문을 사용합니다.',
-  )
+  @ApiMutationHeaders()
   @ApiParam({
     name: 'groupId',
     required: true,
@@ -231,9 +227,7 @@ export class GroupController {
   })
   @ApiDataResponse(GroupMutationResult)
   @ApiErrors()
-  @ApiMutationHeaders(
-    '한 제출당 한 UUID. 네트워크·토큰 갱신 후 재시도에도 같은 키와 본문을 사용합니다.',
-  )
+  @ApiMutationHeaders()
   @ApiParam({
     name: 'groupId',
     required: true,
@@ -289,14 +283,12 @@ export class GroupController {
   @ApiOperation({
     summary: '초대를 명시적으로 수락',
     description:
-      'AUTH → 토큰 형식 검사 → 유효 초대/성공 기록 조회 → 세션 락 획득 → 조건부 멤버십·성공 기록 단일 SQL → 락 해제의 5회이며 명시적 트랜잭션은 없습니다. 기존 쓰기와 같은 advisory lock으로 정원을 보호하며 삽입 시 회원·초대·생성자·현재 정원을 다시 확인합니다. 새 키의 활성 멤버 중복 수락·동시 삽입 충돌은 409 group_already_member, 정원 초과는 409 group_member_limit_exceeded입니다. 이미 성공한 같은 키는 기존 결과를 반환합니다. 이탈자는 재참여할 수 있으며 기존 회차에는 자동 추가되지 않습니다.',
+      'AUTH → 토큰 형식 검사 → 유효 초대/성공 기록 조회 → BEGIN → transaction advisory lock 획득 → 조건부 멤버십·성공 기록 단일 SQL → COMMIT의 정상 SQL 6회입니다. 같은 키의 성공 재생은 AUTH·기록 조회 2회이며 트랜잭션을 시작하지 않습니다. COMMIT 또는 ROLLBACK에서 락을 자동 해제합니다. 기존 쓰기와 같은 advisory lock으로 정원을 보호하며 삽입 시 회원·초대·생성자·현재 정원을 다시 확인합니다. 새 키의 활성 멤버 중복 수락·동시 삽입 충돌은 409 group_already_member, 정원 초과는 409 group_member_limit_exceeded입니다. 이미 성공한 같은 키는 기존 결과를 반환합니다. 이탈자는 재참여할 수 있으며 기존 회차에는 자동 추가되지 않습니다.',
     tags: ['모임'],
   })
   @ApiDataResponse(GroupMutationResult)
   @ApiErrors()
-  @ApiMutationHeaders(
-    '한 제출당 한 UUID. 네트워크·토큰 갱신 후 재시도에도 같은 키와 본문을 사용합니다.',
-  )
+  @ApiMutationHeaders()
   @ApiParam({ name: 'token', required: true, schema: { type: 'string' } })
   async acceptInvite(
     @CurrentUser() user: AuthenticatedUser,

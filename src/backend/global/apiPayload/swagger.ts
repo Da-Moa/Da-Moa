@@ -11,6 +11,7 @@ import { legacyOpenApiDocument } from '../util/openapi';
 import { OpenApiService } from './openApi.service';
 import { GroupModule } from '../../domain/group';
 import { UserModule } from '../../domain/user/module/user.module';
+import { SettleModule } from '../../domain/settle/module/settle.module';
 
 function documentValidatedBodies(document: OpenAPIObject) {
   const seen = new Set<string>();
@@ -134,7 +135,7 @@ export function configureOpenApi(app: INestApplication) {
   const migrated = SwaggerModule.createDocument(
     app,
     new DocumentBuilder().setTitle('다모아 API').setVersion('2.0.0').build(),
-    { include: [GroupModule, UserModule] },
+    { include: [GroupModule, UserModule, SettleModule] },
   );
   Object.assign(document.paths, migrated.paths);
   documentValidatedBodies(document);
