@@ -35,3 +35,4 @@ test-account.txt
 
 # Generated Prisma client
 src/backend/generated/prisma/
+test-results/

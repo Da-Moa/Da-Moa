@@ -20,7 +20,8 @@
     "typecheck": "tsc --project tsconfig.check.json --noEmit --incremental false && tsc --project tsconfig.backend.json --noEmit --incremental false",
     "db:generate": "prisma generate",
     "postinstall": "prisma generate",
-    "build:backend": "prisma generate && nest build"
+    "build:backend": "prisma generate && nest build",
+    "test:smoke": "npm run build:backend && SWC_NODE_PROJECT=tsconfig.backend.json node --import @swc-node/register/esm-register --test --test-concurrency=1 src/backend/test/integration/routes.integration.test.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1142.0",
