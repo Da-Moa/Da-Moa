@@ -1,3 +1,4 @@
+import { assertServerRejects } from '../support/expectedErrorTestSupport';
 import { before } from 'node:test';
 import { getPrismaClient } from '../support/domainTestSupport.ts';
 import { addStoredReceipt as addReceipt } from '../support/receiptWorkerTestSupport';
@@ -1564,8 +1565,11 @@ test('정산 생명주기·권한·개인정보·금액·멱등성과 DB 경쟁�
         const drawKey = key(),
           drawBody = { expectedVersion: pending.version };
         try {
-          await assert.rejects(
-            roundCommand(a, drawKey, r.id, 'draw', drawBody),
+          await assertServerRejects(
+            t,
+            () => roundCommand(a, drawKey, r.id, 'draw', drawBody),
+            (error) =>
+              error.code === 'P0001' && error.message === 'integration failure',
           );
           assert.equal((await getSettlement(a, r.id)).finalized, false);
           assert.equal(

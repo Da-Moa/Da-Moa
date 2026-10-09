@@ -1,3 +1,4 @@
+import { withExpectedErrorLog } from '../support/expectedErrorTestSupport';
 import { ReceiptStorage } from '../../global/util/minio.util';
 import { ReceiptWorker } from '../../domain/settle/service/receiptWorker';
 import { SettleRepository } from '../../domain/settle/repository/settle.repository';
@@ -919,22 +920,23 @@ test('지출 요청 실패가 지출·버전·재시도 메타데이터를 롤�
       [actor.userId],
     );
     await client.query(rows[0].ddl);
-    const logger = t.mock.method(console, 'error', () => {});
-    const failed = await request(
-      `rounds/${roundId}/expenses`,
-      actor.accessToken,
-      'POST',
-      {
-        currency: 'KRW',
-        description: '실패한 저장',
-        amount: '1000',
-        payerId: actor.userId,
-        splitMode: 'ALL',
-        expectedVersion: 1,
-      },
+    const { result: failed } = await withExpectedErrorLog(
+      t,
+      (label, error) =>
+        label === 'Unhandled server error' &&
+        error.code === '23514' &&
+        error.constraint === 'nest_http_reject_mutation',
+      () =>
+        request(`rounds/${roundId}/expenses`, actor.accessToken, 'POST', {
+          currency: 'KRW',
+          description: '실패한 저장',
+          amount: '1000',
+          payerId: actor.userId,
+          splitMode: 'ALL',
+          expectedVersion: 1,
+        }),
     );
     assert.equal(failed.status, 503);
-    assert.ok(logger.mock.callCount() > 0);
     const prisma = app.get(PrismaService).client;
     assert.equal(
       await prisma.expenses.count({ where: { round_id: roundId } }),

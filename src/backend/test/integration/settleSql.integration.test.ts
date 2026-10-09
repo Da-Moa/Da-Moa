@@ -1,3 +1,7 @@
+import {
+  assertServerRejects,
+  withExpectedErrorLog,
+} from '../support/expectedErrorTestSupport';
 import { before } from 'node:test';
 import { getPrismaClient } from '../support/domainTestSupport.ts';
 import { drainReceiptQueue } from '../support/receiptWorkerTestSupport';
@@ -946,8 +950,9 @@ test('정산 API가 실제 SQL 횟수·트랜잭션 순서·분기·재시도를
       );
       try {
         await trace(4, 'session', () =>
-          assert.rejects(
-            createRound(a, rejectedKey, group.id, body),
+          assertServerRejects(
+            t,
+            () => createRound(a, rejectedKey, group.id, body),
             (error: { code: string; constraint: string }) =>
               error.code === '23514' && error.constraint === constraint,
           ),
@@ -1459,11 +1464,13 @@ test('정산 API가 실제 SQL 횟수·트랜잭션 순서·분기·재시도를
       );
       try {
         await trace(6, 'expense', () =>
-          assert.rejects(
-            saveExpense(a, failedExpenseKey, round.id, {
-              ...expenseBody,
-              expectedVersion: version,
-            }),
+          assertServerRejects(
+            t,
+            () =>
+              saveExpense(a, failedExpenseKey, round.id, {
+                ...expenseBody,
+                expectedVersion: version,
+              }),
             (error: { code: string; constraint: string }) =>
               error.code === '23514' && error.constraint === expenseConstraint,
           ),
@@ -1728,19 +1735,21 @@ test('정산 API가 실제 SQL 횟수·트랜잭션 순서·분기·재시도를
           );
           try {
             await trace(5, 'patch', () =>
-              assert.rejects(
-                saveExpense(
-                  a,
-                  failureKey,
-                  patchRound.id,
-                  {
-                    amount: '200',
-                    splitMode: 'SELECTED',
-                    participantIds: [a.userId],
-                    expectedVersion: patchVersion,
-                  },
-                  original.id,
-                ),
+              assertServerRejects(
+                t,
+                () =>
+                  saveExpense(
+                    a,
+                    failureKey,
+                    patchRound.id,
+                    {
+                      amount: '200',
+                      splitMode: 'SELECTED',
+                      participantIds: [a.userId],
+                      expectedVersion: patchVersion,
+                    },
+                    original.id,
+                  ),
                 (error: { code: string }) => error.code === '23514',
               ),
             );
@@ -1943,15 +1952,17 @@ test('정산 API가 실제 SQL 횟수·트랜잭션 순서·분기·재시도를
               );
               try {
                 await trace(6, 'delete', () =>
-                  assert.rejects(
-                    deleteExpense(
-                      actor,
-                      failureKey,
-                      deletionRound.id,
-                      original.id,
-                      request,
-                      () => assert.fail('rollback must not publish'),
-                    ),
+                  assertServerRejects(
+                    t,
+                    () =>
+                      deleteExpense(
+                        actor,
+                        failureKey,
+                        deletionRound.id,
+                        original.id,
+                        request,
+                        () => assert.fail('rollback must not publish'),
+                      ),
                     (error: { code: string }) => error.code === '23514',
                   ),
                 );
@@ -1976,6 +1987,7 @@ test('정산 API가 실제 SQL 횟수·트랜잭션 순서·분기·재시도를
               }
 
               let cleanups = 0;
+              const cleanupError = new Error('test receipt cleanup failure');
               const send = t.mock.method(
                 S3Client.prototype,
                 'send',
@@ -1984,32 +1996,36 @@ test('정산 API가 실제 SQL 횟수·트랜잭션 순서·분기·재시도를
                     if (args[0] instanceof DeleteObjectCommand) {
                       assert.equal(statements.at(-1), 'COMMIT');
                       cleanups++;
-                      if (actor === a)
-                        return Promise.reject(
-                          new Error('test receipt cleanup failure'),
-                        );
+                      if (actor === a) return Promise.reject(cleanupError);
                     }
                     return Reflect.apply(target, receiver, args);
                   },
                 }),
               );
-              const errors = t.mock.method(console, 'error', () => {});
               try {
-                const result = await trace(6, 'delete', () =>
-                  deleteExpense(
-                    actor,
-                    requestKey,
-                    deletionRound.id,
-                    original.id,
-                    request,
-                    (audience) => {
-                      assert.equal(audience.groupId, group.id);
-                      assert.deepEqual(
-                        new Set(audience.userIds),
-                        new Set(body.participantIds),
-                      );
-                    },
-                  ),
+                const { result } = await withExpectedErrorLog(
+                  t,
+                  (label, _key, error) =>
+                    label === 'receipt_cleanup_failed' &&
+                    error === cleanupError,
+                  () =>
+                    trace(6, 'delete', () =>
+                      deleteExpense(
+                        actor,
+                        requestKey,
+                        deletionRound.id,
+                        original.id,
+                        request,
+                        (audience) => {
+                          assert.equal(audience.groupId, group.id);
+                          assert.deepEqual(
+                            new Set(audience.userIds),
+                            new Set(body.participantIds),
+                          );
+                        },
+                      ),
+                    ),
+                  actor === a ? 1 : 0,
                 );
                 assert.equal(result.version, request.expectedVersion + 1);
                 assert.deepEqual(
@@ -2039,7 +2055,6 @@ test('정산 API가 실제 SQL 횟수·트랜잭션 순서·분기·재시도를
                   ),
                 );
                 assert.equal(cleanups, 1);
-                assert.equal(errors.mock.callCount(), actor === a ? 1 : 0);
                 const current = await getRound(
                   a,
                   deletionRound.id,
@@ -2075,7 +2090,6 @@ test('정산 API가 실제 SQL 횟수·트랜잭션 순서·분기·재시도를
                   );
               } finally {
                 send.mock.restore();
-                errors.mock.restore();
                 await storage.send(new DeleteObjectCommand(head));
               }
             }
@@ -2298,15 +2312,17 @@ test('정산 API가 실제 SQL 횟수·트랜잭션 순서·분기·재시도를
       );
       try {
         await trace(3, 'exclude', () =>
-          assert.rejects(
-            excludeMember(
-              a,
-              key(),
-              round.id,
-              c.userId,
-              { expectedVersion: version },
-              () => assert.fail('failed save must not publish'),
-            ),
+          assertServerRejects(
+            t,
+            () =>
+              excludeMember(
+                a,
+                key(),
+                round.id,
+                c.userId,
+                { expectedVersion: version },
+                () => assert.fail('failed save must not publish'),
+              ),
             (error: { code: string }) => error.code === '23514',
           ),
         );
@@ -2480,14 +2496,16 @@ test('정산 API가 실제 SQL 횟수·트랜잭션 순서·분기·재시도를
           );
           try {
             await trace(6, 'confirm', () =>
-              assert.rejects(
-                roundCommand(
-                  b,
-                  requestKey,
-                  confirmation.id,
-                  'confirm',
-                  request,
-                ),
+              assertServerRejects(
+                t,
+                () =>
+                  roundCommand(
+                    b,
+                    requestKey,
+                    confirmation.id,
+                    'confirm',
+                    request,
+                  ),
                 (error: { code: string }) => error.code === '23514',
               ),
             );
@@ -2655,15 +2673,17 @@ test('정산 API가 실제 SQL 횟수·트랜잭션 순서·분기·재시도를
               );
               try {
                 await trace(3, 'reopen', () =>
-                  assert.rejects(
-                    roundCommand(
-                      b,
-                      requestKey,
-                      confirmation.id,
-                      'reopen',
-                      request,
-                      () => assert.fail('failed save must not publish'),
-                    ),
+                  assertServerRejects(
+                    t,
+                    () =>
+                      roundCommand(
+                        b,
+                        requestKey,
+                        confirmation.id,
+                        'reopen',
+                        request,
+                        () => assert.fail('failed save must not publish'),
+                      ),
                     (error: { code: string }) => error.code === '23514',
                   ),
                 );
@@ -3113,10 +3133,17 @@ test('정산 API가 실제 SQL 횟수·트랜잭션 순서·분기·재시도를
           );
           try {
             await trace(2, 'complete', () =>
-              assert.rejects(
-                roundCommand(a, requestKey, round.id, 'complete', request, () =>
-                  assert.fail('failed save must not publish'),
-                ),
+              assertServerRejects(
+                t,
+                () =>
+                  roundCommand(
+                    a,
+                    requestKey,
+                    round.id,
+                    'complete',
+                    request,
+                    () => assert.fail('failed save must not publish'),
+                  ),
                 (error: { code: string }) => error.code === '23514',
               ),
             );
@@ -3287,10 +3314,12 @@ test('정산 API가 실제 SQL 횟수·트랜잭션 순서·분기·재시도를
       );
       try {
         await trace(6, 'cancel', () =>
-          assert.rejects(
-            roundCommand(a, failedCancelKey, cancelled.id, 'cancel', {
-              expectedVersion: 1,
-            }),
+          assertServerRejects(
+            t,
+            () =>
+              roundCommand(a, failedCancelKey, cancelled.id, 'cancel', {
+                expectedVersion: 1,
+              }),
             (error: { code: string; constraint: string }) =>
               error.code === '23514' && error.constraint === cancelConstraint,
           ),
@@ -3581,15 +3610,17 @@ test('정산 API가 실제 SQL 횟수·트랜잭션 순서·분기·재시도를
           );
           try {
             await trace(3, 'force-complete', () =>
-              assert.rejects(
-                roundCommand(
-                  a,
-                  requestKey,
-                  even.id,
-                  'force-complete',
-                  request,
-                  () => assert.fail('failed save must not publish'),
-                ),
+              assertServerRejects(
+                t,
+                () =>
+                  roundCommand(
+                    a,
+                    requestKey,
+                    even.id,
+                    'force-complete',
+                    request,
+                    () => assert.fail('failed save must not publish'),
+                  ),
                 (error: { code: string }) => error.code === '23514',
               ),
             );

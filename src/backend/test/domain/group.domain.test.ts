@@ -1,3 +1,4 @@
+import { assertServerRejects } from '../support/expectedErrorTestSupport';
 import { mockPoolConnection, queryText } from '../support/dbTestSupport.ts';
 import { before } from 'node:test';
 import { getPrismaClient } from '../support/domainTestSupport.ts';
@@ -392,8 +393,9 @@ test('모임 조회·생성·초대·탈퇴의 SQL 횟수와 원자적 재시도
         `ALTER TABLE group_members ADD CONSTRAINT ${constraint} CHECK (group_id <> '${rejectedKey}') NOT VALID`,
       );
       try {
-        await assert.rejects(
-          createGroup(owner, rejectedKey, body),
+        await assertServerRejects(
+          t,
+          () => createGroup(owner, rejectedKey, body),
           (error: { code: string; constraint: string }) =>
             error.code === '23514' && error.constraint === constraint,
         );
@@ -673,8 +675,9 @@ test('모임 조회·생성·초대·탈퇴의 SQL 횟수와 원자적 재시도
       );
       try {
         await trace(5, 'session', () =>
-          assert.rejects(
-            acceptInvite(outsider, failedAcceptKey, token),
+          assertServerRejects(
+            t,
+            () => acceptInvite(outsider, failedAcceptKey, token),
             (error: { code: string }) => error.code === '23514',
           ),
         );
@@ -946,10 +949,12 @@ test('모임 조회·생성·초대·탈퇴의 SQL 횟수와 원자적 재시도
         `ALTER TABLE mutation_requests ADD CONSTRAINT ${inviteConstraint} CHECK (request_key <> '${failedReplacementKey}') NOT VALID`,
       );
       try {
-        await assert.rejects(
-          createInvite(owner, failedReplacementKey, group.id, {
-            replaceInviteId: invite.id,
-          }),
+        await assertServerRejects(
+          t,
+          () =>
+            createInvite(owner, failedReplacementKey, group.id, {
+              replaceInviteId: invite.id,
+            }),
           (error: { code: string }) => error.code === '23514',
         );
         assert.equal(
@@ -1014,8 +1019,9 @@ test('모임 조회·생성·초대·탈퇴의 SQL 횟수와 원자적 재시도
       );
       try {
         await trace(3, null, () =>
-          assert.rejects(
-            revokeInvite(owner, failedRevokeKey, group.id, replaced.id),
+          assertServerRejects(
+            t,
+            () => revokeInvite(owner, failedRevokeKey, group.id, replaced.id),
             (error: { code: string }) => error.code === '23514',
           ),
         );
@@ -1136,8 +1142,9 @@ test('모임 조회·생성·초대·탈퇴의 SQL 횟수와 원자적 재시도
         `ALTER TABLE mutation_requests ADD CONSTRAINT ${departureConstraint} CHECK (request_key <> '${failedDepartureKey}') NOT VALID`,
       );
       try {
-        await assert.rejects(
-          leaveGroup(owner, failedDepartureKey, group.id),
+        await assertServerRejects(
+          t,
+          () => leaveGroup(owner, failedDepartureKey, group.id),
           (error: { code: string }) => error.code === '23514',
         );
         assert.equal(

@@ -1,3 +1,4 @@
+import { assertServerRejects } from '../support/expectedErrorTestSupport';
 import { testProvider } from '../support/domainTestSupport';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -248,37 +249,6 @@ test('정산 전송이 일정한 SQL 횟수로 정확한 금액을 일괄 확정
     payer: 0,
   } as const;
 
-  const assertLoggedRejection = async (
-    work: () => Promise<unknown>,
-    expected: (error: unknown) => boolean,
-  ) => {
-    const original = console.error;
-    const errors: unknown[] = [];
-    const logger = t.mock.method(console, 'error', (...args: unknown[]) => {
-      if (args[0] === 'Unhandled server error' && expected(args[1]))
-        errors.push(args[1]);
-      else original.apply(console, args);
-    });
-    try {
-      await assert.rejects(work, (error) => {
-        assert.ok(expected(error), '예상한 저장 실패가 발생해야 한다');
-        assert.equal(
-          errors.length,
-          1,
-          '예외 처리기가 실패를 한 번 기록해야 한다',
-        );
-        assert.equal(
-          errors[0],
-          error,
-          '기록된 오류와 요청의 실패가 같아야 한다',
-        );
-        return true;
-      });
-    } finally {
-      logger.mock.restore();
-    }
-  };
-
   await t.test(
     '지출 1건·회원 2명의 정산을 SQL 1회로 저장하고 재시도 시 다시 저장하지 않는다',
     async () => {
@@ -360,7 +330,8 @@ test('정산 전송이 일정한 SQL 횟수로 정확한 금액을 일괄 확정
           ),
       );
       try {
-        await assertLoggedRejection(
+        await assertServerRejects(
+          t,
           () => send(round, key),
           (error) =>
             !!error &&
@@ -392,7 +363,8 @@ test('정산 전송이 일정한 SQL 횟수로 정확한 금액을 일괄 확정
         },
       );
       try {
-        await assertLoggedRejection(
+        await assertServerRejects(
+          t,
           () => send(round, key),
           (error) => error === injectedError,
         );

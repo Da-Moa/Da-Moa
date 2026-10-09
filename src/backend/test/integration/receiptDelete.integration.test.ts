@@ -1,3 +1,7 @@
+import {
+  assertServerRejects,
+  withExpectedErrorLog,
+} from '../support/expectedErrorTestSupport';
 import { before } from 'node:test';
 import { getPrismaClient } from '../support/domainTestSupport.ts';
 import { addStoredReceipt as addReceipt } from '../support/receiptWorkerTestSupport';
@@ -124,7 +128,6 @@ test('영수증 삭제가 인증·권한 조회·원자적 삭제를 거치고 �
       statements.push(sql);
       events.push(/FROM "public"\."users" WHERE/.test(sql) ? 'AUTH' : 'SQL');
     });
-    t.mock.method(console, 'error', () => {});
     t.mock.method(
       S3Client.prototype,
       'send',
@@ -420,16 +423,18 @@ test('영수증 삭제가 인증·권한 조회·원자적 삭제를 거치고 �
         CREATE TRIGGER reject_receipt_deletion BEFORE INSERT ON mutation_requests FOR EACH ROW EXECUTE FUNCTION reject_receipt_deletion()`);
         try {
           await trace(['AUTH', 'SQL', 'SQL'], () =>
-            assert.rejects(
-              removeReceipt(
-                owner,
-                ticket,
-                f.round.id,
-                f.expense.id,
-                f.receipt.id,
-                body,
-                audience,
-              ),
+            assertServerRejects(
+              t,
+              () =>
+                removeReceipt(
+                  owner,
+                  ticket,
+                  f.round.id,
+                  f.expense.id,
+                  f.receipt.id,
+                  body,
+                  audience,
+                ),
               code('P0001'),
             ),
           );
@@ -465,17 +470,22 @@ test('영수증 삭제가 인증·권한 조회·원자적 삭제를 거치고 �
         }
         failDelete = true;
         try {
-          const result = await trace(
-            ['AUTH', 'SQL', 'SQL', 'DELETE', 'PUBLISH'],
+          const { result } = await withExpectedErrorLog(
+            t,
+            (label, _key, error) =>
+              label === 'receipt_cleanup_failed' &&
+              error.message === 'test cleanup failure',
             () =>
-              removeReceipt(
-                owner,
-                ticket,
-                f.round.id,
-                f.expense.id,
-                f.receipt.id,
-                body,
-                audience,
+              trace(['AUTH', 'SQL', 'SQL', 'DELETE', 'PUBLISH'], () =>
+                removeReceipt(
+                  owner,
+                  ticket,
+                  f.round.id,
+                  f.expense.id,
+                  f.receipt.id,
+                  body,
+                  audience,
+                ),
               ),
           );
           assert.equal(

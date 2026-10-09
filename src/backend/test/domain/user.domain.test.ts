@@ -1,3 +1,4 @@
+import { assertServerRejects } from '../support/expectedErrorTestSupport';
 import {
   mockPoolConnection,
   queryText,
@@ -278,8 +279,9 @@ test('탈퇴 검사 전에 락을 획득하고 커밋·롤백 시 트랜잭션 �
       return borrowed;
     });
     await trace(6, () =>
-      assert.rejects(
-        withdrawAccount(owner),
+      assertServerRejects(
+        t,
+        () => withdrawAccount(owner),
         (error) => (error as { code: string }).code === '22012',
       ),
     );

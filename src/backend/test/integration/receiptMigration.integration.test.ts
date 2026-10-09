@@ -1,3 +1,4 @@
+import { assertServerRejects } from '../support/expectedErrorTestSupport';
 import { before } from 'node:test';
 import { getPrismaClient } from '../support/domainTestSupport.ts';
 import { addStoredReceipt as addReceipt } from '../support/receiptWorkerTestSupport';
@@ -127,8 +128,9 @@ test('기존 영수증 마이그레이션이 이미지를 보존하고 지출 �
     const receiptId = await seed(original.id!);
     const deleteKey = key(),
       deleteBody = { expectedVersion: original.version! };
-    await assert.rejects(
-      deleteExpense(a, deleteKey, round.id, empty.id!, deleteBody),
+    await assertServerRejects(
+      t,
+      () => deleteExpense(a, deleteKey, round.id, empty.id!, deleteBody),
       (error: unknown) => (error as { code: string }).code === '42703',
     );
     await applyMigrations(client);
