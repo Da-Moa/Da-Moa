@@ -3,7 +3,6 @@ import {
   type CanActivate,
   type ExecutionContext,
 } from '@nestjs/common';
-import { RequestCookies } from '@edge-runtime/cookies';
 import { HttpResponseException } from '../../apiPayload/handler/global.exception.handler';
 import { clearAuthCookies } from '../controller/authCookies';
 import { HttpResponse, type HttpRequest } from '../../apiPayload/httpContext';
@@ -75,17 +74,15 @@ export function nativeJwtGuard(
 ): Response | null {
   const pathname = new URL(request.originalUrl, 'http://localhost').pathname;
   const policy = apiJwtPolicy(request.method, pathname);
-  const refreshCookie =
+  const refreshCookie: unknown =
     policy === 'refresh' || policy === 'logout'
-      ? new RequestCookies(
-          new Headers({ cookie: request.headers.cookie ?? '' }),
-        ).get(REFRESH_TOKEN_COOKIE_NAME)?.value
+      ? request.cookies?.[REFRESH_TOKEN_COOKIE_NAME]
       : undefined;
   return authorizeApiRequest(
     request.method,
     pathname,
     request.headers.authorization ?? null,
-    refreshCookie,
+    typeof refreshCookie === 'string' ? refreshCookie : undefined,
     authenticated,
   );
 }

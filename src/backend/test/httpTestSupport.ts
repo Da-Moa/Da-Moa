@@ -2,6 +2,7 @@ import { testProvider } from './domainTestSupport';
 import 'reflect-metadata';
 import { EventEmitter } from 'node:events';
 import { response as expressResponseMethods } from 'express';
+import cookieParser from 'cookie-parser';
 import { Readable } from 'node:stream';
 import {
   PATH_METADATA,
@@ -154,6 +155,7 @@ export async function dispatch(
         }),
       } as unknown as ExecutionContext;
       try {
+        cookieParser()(nodeRequest, response, () => {});
         jwtGuard.canActivate(context);
         originGuard.canActivate(context);
         await bodyInterceptor.intercept(context, {

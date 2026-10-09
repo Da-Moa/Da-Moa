@@ -23,7 +23,67 @@ import {
   createAccessToken,
   createRefreshToken,
   REFRESH_TOKEN_COOKIE_NAME,
+  RETURN_TO_COOKIE_NAME,
+  createReturnToCookie,
 } from '../../global/auth/native';
+
+test('cookie-parser supplies refresh authentication and rejects non-string, expired and tampered cookies over actual Nest HTTP', async (t) => {
+  const previous = process.env.AUTH_JWT_SECRET;
+  process.env.AUTH_JWT_SECRET = 'cookie-parser-test-secret-at-least-32-bytes';
+  const { app } = await createBackend();
+  t.after(async () => {
+    await app.close();
+    if (previous === undefined) delete process.env.AUTH_JWT_SECRET;
+    else process.env.AUTH_JWT_SECRET = previous;
+  });
+  await app.listen(0, '127.0.0.1');
+  const origin = await app.getUrl();
+  const refresh = createRefreshToken('cookie-user', 'cookie-session');
+  const post = (path: string, cookie?: string) =>
+    fetch(`${origin}/api/auth/${path}`, {
+      method: 'POST',
+      headers: { origin, ...(cookie === undefined ? {} : { cookie }) },
+      signal: AbortSignal.timeout(10000),
+    });
+  for (const path of ['access-token', 'refresh', 'logout']) {
+    const encoded = await post(
+      path,
+      `unrelated=value; ${REFRESH_TOKEN_COOKIE_NAME}=${refresh.replace(/\./g, '%2E')}`,
+    );
+    assert.equal(encoded.status, 200, `${path}: URL-encoded cookie`);
+    await encoded.arrayBuffer();
+    for (const value of [
+      undefined,
+      '',
+      '%ZZ',
+      `${refresh}tampered`,
+      encodeURIComponent('j:{"token":"forged"}'),
+      encodeURIComponent('j:["forged"]'),
+      encodeURIComponent('j:123'),
+      createRefreshToken('cookie-user', 'cookie-session', undefined, 1, 1),
+    ]) {
+      const invalid = await post(
+        path,
+        value === undefined
+          ? undefined
+          : `${REFRESH_TOKEN_COOKIE_NAME}=${value}`,
+      );
+      assert.equal(invalid.status, 401, `${path}: ${String(value)}`);
+      await invalid.arrayBuffer();
+    }
+    for (const [value, expected] of [
+      [`${refresh}; ${REFRESH_TOKEN_COOKIE_NAME}=invalid`, 200],
+      [`invalid; ${REFRESH_TOKEN_COOKIE_NAME}=${refresh}`, 401],
+    ] as const) {
+      const duplicate = await post(
+        path,
+        `${REFRESH_TOKEN_COOKIE_NAME}=${value}`,
+      );
+      assert.equal(duplicate.status, expected, 'the first cookie name wins');
+      await duplicate.arrayBuffer();
+    }
+  }
+});
 
 test('Nest JSON parser preserves byte limits, UTF-8, object shape and native Body DTOs after authentication', async (t) => {
   const previous = process.env.AUTH_JWT_SECRET;
@@ -360,10 +420,15 @@ test('Nest HTTP routes enforce JWT before body parsing, preserve cookies, and di
     'POST',
     '{"bankCode":"004","accountNumber":"001234","accountHolder":"사용자","expectedBankVersion":1}',
     true,
+    {
+      cookie: `${RETURN_TO_COOKIE_NAME}=${createReturnToCookie('/home/rounds/audit', 'cookie-state').replace(/\./g, '%2E')}`,
+    },
   );
   assert.equal(onboarding.status, 200);
   assert.equal(onboarding.headers.getSetCookie().length, 3);
-  assert.ok((await onboarding.json()).data.accessToken);
+  const onboardingPayload = await onboarding.json();
+  assert.ok(onboardingPayload.data.accessToken);
+  assert.equal(onboardingPayload.data.returnTo, '/home/rounds/audit');
   assert.equal(
     (
       await request(

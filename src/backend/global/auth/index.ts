@@ -8,6 +8,7 @@ export {
   type Account,
 } from './service/authorization.service';
 export { jwtGuard } from './guard/jwt.guard';
+export { Cookies } from './decorator/cookies.decorator';
 export {
   CurrentUser,
   type AuthenticatedUser,

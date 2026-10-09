@@ -7,6 +7,7 @@ import { createValidationPipe } from '../global/apiPayload/validation.pipe';
 import { NestFactory } from '@nestjs/core';
 import type { INestApplication } from '@nestjs/common';
 import { AppModule } from './app.module';
+import cookieParser from 'cookie-parser';
 
 export async function createBackend(
   beforeInit?: (app: INestApplication) => Promise<void>,
@@ -18,6 +19,7 @@ export async function createBackend(
   });
   const express = app.getHttpAdapter().getInstance();
   express.disable('x-powered-by');
+  app.use(cookieParser());
   app.useGlobalPipes(createValidationPipe());
   try {
     await beforeInit?.(app);

@@ -1,5 +1,4 @@
 import { RequiredIdempotencyKey } from '../../../global/apiPayload/requiredHeader.decorator';
-import { RequestCookies } from '@edge-runtime/cookies';
 import {
   JsonBody,
   RequestBodyLimit,
@@ -10,12 +9,11 @@ import {
   Post,
   Put,
   Inject,
-  Req,
   Res,
   Body,
   HttpCode,
 } from '@nestjs/common';
-import type { Request, Response as ServerResponse } from 'express';
+import type { Response as ServerResponse } from 'express';
 import { after } from '../../../global/apiPayload/httpContext';
 import { nativeCookieResponse } from '../../../global/auth/controller/authCookies';
 import { ApiSuccess } from '../../../global/apiPayload/apiResponse.interceptor';
@@ -31,6 +29,7 @@ import {
   clearReturnToCookie,
   readReturnToCookie,
   CurrentUser,
+  Cookies,
   type AuthenticatedUser,
 } from '../../../global/auth';
 import { RealtimePublisher } from '../../../global/util/invalidationUtil';
@@ -60,16 +59,12 @@ export class UserController {
   @HttpCode(200)
   async onboarding(
     @CurrentUser() user: AuthenticatedUser,
-    @Req() request: Request,
+    @Cookies(RETURN_TO_COOKIE_NAME) returnToCookie: string | undefined,
     @Body()
     body: OnboardingRequestDTO,
     @Res({ passthrough: true }) response: ServerResponse,
   ) {
-    const returnTo = readReturnToCookie(
-      new RequestCookies(
-        new Headers({ cookie: request.headers.cookie ?? '' }),
-      ).get(RETURN_TO_COOKIE_NAME)?.value,
-    );
+    const returnTo = readReturnToCookie(returnToCookie);
     const session = await this.operations.completeOnboarding(user, body);
     after(() =>
       this.publisher.publishBankInvalidation(session.userId, (id) =>
