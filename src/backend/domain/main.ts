@@ -1,5 +1,5 @@
 import {
-  configureRequestSchemas,
+  configureOpenApi,
   configureSwaggerUi,
 } from '../global/apiPayload/swagger';
 import 'reflect-metadata';
@@ -25,7 +25,7 @@ export async function createBackend(
     await beforeInit?.(app);
     configureSwaggerUi(app);
     await app.init();
-    configureRequestSchemas(app);
+    configureOpenApi(app);
     return { app, handle: express };
   } catch (error) {
     await app.close();

@@ -1,9 +1,14 @@
-import { Controller, Get } from '@nestjs/common'
-import { openApiDocument } from '../../util/openapi'
+import { Controller, Get, Inject } from '@nestjs/common';
+import { ApiExcludeController } from '@nestjs/swagger';
+import { OpenApiService } from '../openApi.service';
 
+@ApiExcludeController()
 @Controller()
 export class ApiController {
-  @Get('api/openapi.json')
-  openapi() { return openApiDocument }
+  constructor(@Inject(OpenApiService) private readonly docs: OpenApiService) {}
 
+  @Get('api/openapi.json')
+  openapi() {
+    return this.docs.getDocument();
+  }
 }

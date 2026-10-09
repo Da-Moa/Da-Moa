@@ -132,6 +132,8 @@ export class ExpenseRequestDTO extends VersionRequestDTO {
     minItems: 1,
     maxItems: MAX_GROUP_MEMBERS,
     uniqueItems: true,
+    description:
+      'SELECTED 생성 시 필수이며 수정 시 생략하면 이전 부담자를 유지합니다. ALL은 서버가 회차의 제외되지 않은 전원으로 결정. CUSTOM에서는 보내지 않습니다.',
   })
   @ValidateIf((_, value) => value !== undefined)
   @IsArray({ context: settleErrors.INVALID_PARTICIPANTS })
@@ -150,6 +152,8 @@ export class ExpenseRequestDTO extends VersionRequestDTO {
     type: () => [CustomShareRequestDTO],
     minItems: 1,
     maxItems: MAX_GROUP_MEMBERS,
+    description:
+      'CUSTOM 생성·전환 시 필수. 제외되지 않은 부담자별 정확한 금액이며 userId 중복은 금지합니다. 합계는 총 amount와 같아야 합니다. 기존 CUSTOM 수정에서 생략하면 이전 부담금을 유지합니다. ALL·SELECTED에서는 보내지 않습니다.',
   })
   @ValidateIf((_, value) => value !== undefined)
   @IsArray({ context: settleErrors.CUSTOM_SHARES_REQUIRED })
@@ -162,32 +166,32 @@ export class ExpenseRequestDTO extends VersionRequestDTO {
   customShares?: CustomShareRequestDTO[];
 }
 export class CreateExpenseRequestDTO extends ExpenseRequestDTO {
-  @ApiProperty({ enum: CURRENCY_CODES })
+  @ApiProperty({ required: true, enum: CURRENCY_CODES })
   @ValidateIf(() => true)
   @IsIn(CURRENCY_CODES, { context: settleErrors.UNSUPPORTED_EXPENSE_CURRENCY })
   declare currency: Currency;
 
-  @ApiProperty({ minLength: 1, maxLength: 500 })
+  @ApiProperty({ required: true, minLength: 1, maxLength: 500 })
   @ValidateIf(() => true)
   @IsString()
   @Matches(/\S/)
   @TrimmedLength(0, 500)
   declare description: string;
 
-  @ApiProperty({ type: String, example: '10.25' })
+  @ApiProperty({ required: true, type: String, example: '10.25' })
   @ValidateIf(() => true)
   @IsString({ context: settleErrors.INVALID_AMOUNT })
   @Matches(/^\d+(\.\d{1,2})?$/, { context: settleErrors.INVALID_AMOUNT })
   declare amount: string;
 
-  @ApiProperty({ maxLength: 128 })
+  @ApiProperty({ required: true, maxLength: 128 })
   @ValidateIf(() => true)
   @IsString({ context: settleErrors.INVALID_PARTICIPANTS })
   @TrimmedLength(1, 128)
   @MaxLength(128, { context: settleErrors.INVALID_PARTICIPANTS })
   declare payerId: string;
 
-  @ApiProperty({ enum: ['ALL', 'SELECTED', 'CUSTOM'] })
+  @ApiProperty({ required: true, enum: ['ALL', 'SELECTED', 'CUSTOM'] })
   @ValidateIf(() => true)
   @IsIn(['ALL', 'SELECTED', 'CUSTOM'], {
     context: settleErrors.INVALID_SPLIT_MODE,

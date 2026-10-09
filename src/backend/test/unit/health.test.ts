@@ -24,7 +24,7 @@ type HealthProbes = HealthWorkerProbes & {
   database: () => Promise<unknown>;
   minio: () => Promise<unknown>;
 };
-import { openApiDocument } from '../../global/util/openapi';
+import { legacyOpenApiDocument as openApiDocument } from '../../global/util/openapi';
 
 let app: INestApplication;
 let origin: string;

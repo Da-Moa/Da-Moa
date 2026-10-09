@@ -4,8 +4,42 @@ import {
   SwaggerModule,
   type OpenAPIObject,
   type OperationObject,
+  type ReferenceObject,
+  type SchemaObject,
 } from '@nestjs/swagger';
-import { openApiDocument } from '../util/openapi';
+import { legacyOpenApiDocument } from '../util/openapi';
+import { OpenApiService } from './openApi.service';
+import { GroupModule } from '../../domain/group';
+import { UserModule } from '../../domain/user/module/user.module';
+
+function documentValidatedBodies(document: OpenAPIObject) {
+  const seen = new Set<string>();
+  const visit = (schema: SchemaObject | ReferenceObject) => {
+    if ('$ref' in schema) {
+      if (seen.has(schema.$ref)) return;
+      seen.add(schema.$ref);
+      const name = schema.$ref.split('/').at(-1)!;
+      const model = document.components?.schemas?.[name];
+      if (!model || '$ref' in model) return;
+      // Swagger does not infer the global ValidationPipe's
+      // forbidNonWhitelisted setting from property decorators.
+      if (model.type === 'object' && model.properties)
+        model.additionalProperties = false;
+      visit(model);
+      return;
+    }
+    if (schema.items) visit(schema.items);
+    for (const property of Object.values(schema.properties ?? {}))
+      visit(property);
+  };
+  for (const item of Object.values(document.paths))
+    for (const method of ['post', 'put', 'patch', 'delete'] as const) {
+      const body = item[method]?.requestBody;
+      if (!body || '$ref' in body) continue;
+      for (const content of Object.values(body.content))
+        if (content.schema) visit(content.schema);
+    }
+}
 
 export function configureSwaggerUi(app: INestApplication) {
   // The init asset is public; the actual document remains behind the Nest JWT guard.
@@ -36,14 +70,19 @@ export function configureSwaggerUi(app: INestApplication) {
             };
           };
           const url = new URL(request.url, browser.location.origin);
-          if (url.origin === browser.location.origin && url.pathname === '/api/openapi.json') {
+          if (
+            url.origin === browser.location.origin &&
+            url.pathname === '/api/openapi.json'
+          ) {
             let token = browser.localStorage.getItem('da_moa_access');
             const bootstrap = await fetch('/api/auth/access-token', {
               method: 'POST',
               credentials: 'same-origin',
             });
             if (bootstrap.ok) {
-              const result = await bootstrap.json() as { data?: { accessToken?: string } };
+              const result = (await bootstrap.json()) as {
+                data?: { accessToken?: string };
+              };
               if (typeof result.data?.accessToken === 'string') {
                 token = result.data.accessToken;
                 browser.localStorage.setItem('da_moa_access', token);
@@ -59,12 +98,14 @@ export function configureSwaggerUi(app: INestApplication) {
 }
 
 // Keep the documented auth/SQL/response contracts; derive request schemas from the actual DTOs.
-export function configureRequestSchemas(app: INestApplication) {
+export function configureOpenApi(app: INestApplication) {
   const generated = SwaggerModule.createDocument(
     app,
     new DocumentBuilder().setTitle('다모아 API').setVersion('2.0.0').build(),
   );
-  const document = openApiDocument as unknown as OpenAPIObject;
+  const document = structuredClone(
+    legacyOpenApiDocument,
+  ) as unknown as OpenAPIObject;
   Object.assign(document.components!.schemas!, generated.components?.schemas);
   for (const [path, operations] of Object.entries(generated.paths)) {
     for (const method of ['get', 'post', 'put', 'patch', 'delete'] as const) {
@@ -90,4 +131,12 @@ export function configureRequestSchemas(app: INestApplication) {
       }
     }
   }
+  const migrated = SwaggerModule.createDocument(
+    app,
+    new DocumentBuilder().setTitle('다모아 API').setVersion('2.0.0').build(),
+    { include: [GroupModule, UserModule] },
+  );
+  Object.assign(document.paths, migrated.paths);
+  documentValidatedBodies(document);
+  app.get(OpenApiService).configure(document);
 }

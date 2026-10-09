@@ -15,7 +15,6 @@ const status: Schema = { type: 'string', enum: ['RECORDING', 'CONFIRMED', 'LOCKE
 const timestamp: Schema = { type: 'integer', format: 'int64', description: 'UTC epoch seconds' }
 const nullableTimestamp: Schema = { ...timestamp, nullable: true }
 const profileImage: Schema = { type: 'string', format: 'uri', nullable: true, description: '활성 회원의 최신 카카오 프로필 이미지 URL. 탈퇴했거나 이미지가 없으면 null.' }
-const bankFields = { bankName: { type: 'string', minLength: 1, maxLength: 100 }, accountNumber: { type: 'string', minLength: 1, maxLength: 100, description: '구분자 없는 원본 계좌번호. 선행 0을 보존합니다.' }, formattedAccountNumber: { type: 'string', nullable: true, description: '선택 은행의 규칙으로 저장한 표시용 계좌번호. 이전에 등록한 계좌는 null일 수 있습니다.' }, accountHolder: { type: 'string', minLength: 1, maxLength: 100 } }
 const bankVersion: Schema = { type: 'integer', minimum: 0 }
 const bankInputFields = {
   bankCode: { type: 'string', pattern: '^\\d{3}$', description: '지원 금융기관의 표준 코드' },
@@ -57,7 +56,6 @@ const domainResponses = {
     content: { 'application/json': { schema: ref('ApiError') } },
   },
 }
-const groupFields = { id, creatorId: { ...id, description: '모임 생성자 ID. 초대와 모임 관리를 담당합니다.' }, name: string, createdAt: timestamp }
 const roundFields = {
   id, groupId: id, groupName: string, name: string, status, version: integer, createdAt: timestamp,
   finalizedAt: nullableTimestamp, completedAt: nullableTimestamp,
@@ -69,20 +67,8 @@ const domainSchemas = {
   CurrencyBalance: object({ currency, balanceMinor: { type: 'string', pattern: '^-?\\d+$' } }, ['currency', 'balanceMinor']),
   RoundStatus: status,
   MinorAmount: minor,
-  ApiError: object({
-    error: { type: 'string', example: 'stale_round', description: 'invalid_input, invalid_amount, custom_share_total_mismatch, expense_amount_limit_exceeded, round_total_limit_exceeded, round_currency_limit_exceeded, invalid_participants, unsupported_currency, unauthorized, forbidden, onboarding_required, not_found, stale_round, invalid_round_state, idempotency_conflict, empty_expenses, pending_settlement_checks, member_exclusion_blocked, minimum_participants, group_member_limit_exceeded, unfinished_rounds, unfinished_group_rounds, unsupported_receipt_type, receipt_too_large, receipt_pending, rate_limited, storage_unavailable 등' },
-    message: string,
-    code: { type: 'string', description: '공통 예외에서 error와 같은 enum 코드' },
-    detail: { type: 'object', nullable: true, additionalProperties: true },
-    details: { type: 'object', additionalProperties: true, description: '현재 버전, 제외 차단 관련 지출 또는 탈퇴를 막는 회차 등. 계좌·인증 토큰은 포함하지 않음.' },
-  }, ['error', 'message']),
   BankAccount: { ...object(bankInputFields, bankInputRequired), additionalProperties: false },
   CurrentBankAccount: object({ bankName: { type: 'string', nullable: true }, accountNumber: { type: 'string', nullable: true }, formattedAccountNumber: { type: 'string', nullable: true, description: '저장된 표시용 번호. 이전에 등록한 계좌는 null일 수 있습니다.' }, accountHolder: { type: 'string', nullable: true }, verifiedAt: { ...nullableTimestamp, description: 'null이면 계좌번호와 함께 “확인되지 않은 계좌입니다.”를 표시합니다.' } }, ['bankName', 'accountNumber', 'formattedAccountNumber', 'accountHolder', 'verifiedAt']),
-  Me: object({ id, displayName: { type: 'string', nullable: true }, email: { type: 'string', nullable: true }, profileImageUrl: profileImage, purpose: { type: 'string', enum: ['app', 'onboarding'] }, deletedAt: nullableTimestamp, onboardingCompletedAt: nullableTimestamp, bankVersion, bankAccount: { type: 'object', nullable: true, properties: { ...bankFields, bankCode: { type: 'string', nullable: true }, verifiedAt: nullableTimestamp }, description: '본인의 현재 대표 계좌. verifiedAt=null이면 “확인되지 않은 계좌입니다.”를 표시합니다. 계좌는 직접 입력하며 자동 확인을 제공하지 않습니다.' } }, ['id', 'displayName', 'email', 'profileImageUrl', 'purpose', 'deletedAt', 'onboardingCompletedAt', 'bankAccount', 'bankVersion']),
-  Group: object(groupFields, Object.keys(groupFields)),
-  GroupListItem: object({ ...groupFields, memberCount: { type: 'integer', minimum: 1, maximum: MAX_GROUP_MEMBERS }, memberPreview: { ...array(object({ userId: id, displayName: string, profileImageUrl: profileImage }, ['userId', 'displayName', 'profileImageUrl'])), maxItems: 5 } }, [...Object.keys(groupFields), 'memberCount', 'memberPreview']),
-  GroupMember: object({ userId: id, displayName: string, excludedAt: nullableTimestamp }, ['userId', 'displayName', 'excludedAt']),
-  GroupDetail: object({ ...groupFields, members: { ...array(ref('GroupMember')), maxItems: MAX_GROUP_MEMBERS, description: '활성 멤버만 포함하며 생성자가 첫 번째입니다.' }, isCreator: { type: 'boolean', description: '조회 사용자가 현재 활성 모임 생성자인지 여부' }, invites: array(object({ id, expiresAt: timestamp }, ['id', 'expiresAt'])) }, [...Object.keys(groupFields), 'members', 'isCreator', 'invites']),
   Round: object(roundFields, Object.keys(roundFields)),
   RoundMember: object({ userId: id, displayName: string, profileImageUrl: profileImage, excludedAt: nullableTimestamp }, ['userId', 'displayName', 'profileImageUrl', 'excludedAt']),
   Expense: object({ id, authorId: id, payerId: id, description: string, currency, amountMinor: minor, splitMode: expenseFields.splitMode, participantIds: array(id), baseShareMinor: { ...minor, nullable: true }, remainderUnits: { type: 'integer', minimum: 0, nullable: true }, shares: array(object({ userId: id, assignedAmountMinor: { ...minor, nullable: true, description: 'CUSTOM에서 지정한 원본 부담금. 균등 분배에서는 null이며 재오픈해도 원본은 유지됩니다.' }, amountMinor: { ...minor, nullable: true, description: '최종 저장된 부담금. 최종화 전에는 CUSTOM도 null입니다.' }, receivedRemainder: { type: 'boolean', nullable: true } }, ['userId', 'assignedAmountMinor', 'amountMinor', 'receivedRemainder'])), receipts: array(ref('Receipt')), createdAt: timestamp, updatedAt: timestamp }, ['id', 'authorId', 'payerId', 'description', 'currency', 'amountMinor', 'splitMode', 'participantIds', 'baseShareMinor', 'remainderUnits', 'shares', 'receipts', 'createdAt', 'updatedAt']),
@@ -95,7 +81,6 @@ const domainSchemas = {
   IncomingTransfer: object({ currency, senderId: id, displayName: string, profileImageUrl: profileImage, amountMinor: minor, receivedAt: nullableTimestamp }, ['currency', 'senderId', 'displayName', 'profileImageUrl', 'amountMinor', 'receivedAt']),
   SettlementConfirmation: object({ userId: id, displayName: string, profileImageUrl: profileImage, checkedAt: nullableTimestamp }, ['userId', 'displayName', 'profileImageUrl', 'checkedAt']),
   Settlement: object({ roundId: id, name: string, groupName: string, status, version: integer, isCreator: { type: 'boolean', description: '조회 사용자가 이 회차의 생성자인지 여부' }, finalized: { type: 'boolean' }, balances: { ...array(ref('CurrencyBalance')), maxItems: 5, description: '최종 통화별 부담액 − 결제액. 최종 저장 전에는 빈 배열.' }, checkedAt: nullableTimestamp, checkRequired: { type: 'boolean', description: '조회 사용자가 한 건 이상 수취하는지 여부' }, checkedCount: { type: 'integer', minimum: 0, description: '모든 수취 건을 확인한 수취인 수' }, requiredCount: { type: 'integer', minimum: 0, description: '한 건 이상 수취하는 사용자 수' }, allChecked: { type: 'boolean', description: '모든 송금 건의 수취 확인 여부. 송금 건이 없으면 true.' }, confirmations: { ...array(ref('SettlementConfirmation')), description: '수취인별 이름 스냅샷, 활성 카카오 프로필, 전체 수취 완료 시각. 한 건이라도 미확인이면 checkedAt은 null입니다.' }, outgoing: { ...array(ref('OutgoingTransfer')), description: '조회 사용자가 아직 보내야 하는 미확인 송금. 수취 확인 시 제외되고 확인 해제 시 복원됩니다.' }, incoming: array(ref('IncomingTransfer')), sharePath: { type: 'string', nullable: true, example: '/settlements/00000000-0000-4000-8000-000000000001', description: '최종 저장 후 제공하며 이전에는 null. 로그인한 본인의 안내를 조회하는 경로이며 초대 링크가 아님.' } }, ['roundId', 'name', 'groupName', 'status', 'version', 'isCreator', 'finalized', 'balances', 'checkedAt', 'checkRequired', 'checkedCount', 'requiredCount', 'allChecked', 'confirmations', 'outgoing', 'incoming', 'sharePath']),
-  GroupPage: object({ items: array(ref('GroupListItem')), nextCursor: { type: 'string', nullable: true } }, ['items', 'nextCursor']),
   RoundPage: object({ items: array(ref('Round')), nextCursor: { type: 'string', nullable: true } }, ['items', 'nextCursor']),
 }
 
@@ -129,25 +114,10 @@ function healthOperation(summary: string, names: string[]) {
   return { tags: ['상태'], summary, description: '인증 없이 조회합니다. 결과를 캐시하지 않으며 내부 오류·연결 정보는 반환하지 않습니다.', security: [], responses: { '200': { description: '모든 검사 정상', ...response }, ...(dependencyCheck ? { '503': { description: '하나 이상의 의존 서비스 장애', ...response } } : {}) } }
 }
 const domainPaths = {
-  '/api/me': { get: operation('계정', '본인 프로필·가입 상태·계좌 조회', { response: ref('Me'), description: 'app 또는 onboarding 목적의 JWT로 본인 데이터만 조회합니다. 일반 기능은 가입 완료 회원의 app JWT가 필요합니다.' }) },
-  '/api/me/onboarding': { post: operation('계정', '계좌 저장 후 가입·명시적 재가입 완료', { response: object({ id, returnTo: string, accessToken: string }, ['id', 'returnTo', 'accessToken']), request: { ...object({ ...bankInputFields, confirmRejoin: { type: 'boolean', description: '탈퇴 계정의 명시적 재가입 동의' } }, bankInputRequired), additionalProperties: false }, parameters: [mutationParameters[0]], description: '은행·계좌번호·예금주를 직접 입력해 가입을 완료합니다. 계좌·가입 상태를 원자적으로 저장하고 새 app JWT를 발급하며 기존 모임·관리 권한은 복구하지 않습니다. 토큰 응답 유실은 카카오 재로그인으로 복구합니다.' }) },
-  '/api/me/bank-account': { put: operation('계정', '대표 계좌 저장', { mutation: true, request: ref('BankAccount'), response: object({ id, bankVersion }, ['id', 'bankVersion']), description: 'AUTH 회원 조회 후 입력을 검증하고 expectedBankVersion이 일치하는 활성 회원의 계좌만 조건부 UPDATE합니다. 트랜잭션·명시적 락 없이 SQL 2회이며 갱신 실패는 409 bank_account_conflict입니다. 같은 버전의 재전송도 409이며 최신 내 정보를 다시 조회해야 합니다. 요청 키 형식만 검증하고 성공 기록은 조회·저장하지 않습니다. 계좌가 바뀌면 기존 확인 이력을 초기화하고, 진행 중 정산도 계좌 교체를 막지 않습니다.' }) },
-  '/api/groups': {
-    get: operation('모임', '활성 모임 목록', { response: ref('GroupPage'), parameters: [pageParameters[0], { ...pageParameters[1], description: '모임 ID 내림차순 서버 발급 커서. 조회에는 id만 사용하며 기존 커서 형식의 createdAt은 호환을 위해 유지합니다.' }, groupSearchParameter], description: 'Node JWT Guard를 먼저 통과한 뒤 트랜잭션 없이 AUTH 회원 조회 → 모임·활성 멤버 ID 조회 → Set으로 중복 제거한 회원 프로필 조회, 총 SQL 3회입니다. 모임 ID 내림차순으로 limit+1개를 먼저 선택한 뒤 멤버를 집계합니다. q는 제목 ILIKE 부분 검색이며 %, _, 역슬래시는 문자 그대로 찾습니다. 빈 목록은 프로필 조회를 생략해 2회입니다.' }),
-    post: operation('모임', '모임 생성', { parameters: [{ ...mutationParameters[1], schema: id, description: '모임 PK로 사용할 UUIDv7. 같은 키 재전송은 409로 거절합니다.' }, mutationParameters[0]], request: { ...object({ name: string }, ['name']), additionalProperties: false }, description: 'JWT·회원 상태를 확인한 뒤 UUIDv7 Idempotency-Key를 모임 PK로 사용합니다. 명시적 트랜잭션 없이 모임·생성자 멤버십을 한 SQL로 저장하고 총 AUTH+생성 2회입니다. 같은 PK는 409 group_already_exists로 거절하며 멱등 기록 조회·저장은 하지 않습니다.' }),
-  },
-  '/api/groups/{groupId}': {
-    get: operation('모임', '모임 상세 정보', { response: ref('GroupDetail'), description: 'JWT 회원 조회 1회 → 모임·활성 group_members·users를 JOIN하여 멤버 이름까지 조회하고 본인의 참여 여부 비교 1회 → 생성자인 경우에만 유효 초대 조회 1회입니다. 명시적 트랜잭션 없이 일반 멤버는 SQL 2회, 생성자는 3회이며 멤버 목록을 함께 반환하며 회차는 포함하지 않습니다. 초대 원문 링크는 최초 발급 응답에서만 제공합니다.' }),
-    delete: operation('모임', '모임 나가기 또는 없애기', { mutation: true, description: '일반 참여자는 본인이 참여 중인 미종료 회차가 없을 때 현재 멤버십의 leftAt을 기록하고 나갑니다. 모임 생성자는 본인 참여 여부와 무관하게 모임 전체의 모든 회차가 종료된 경우에만 모든 멤버십을 종료하고 초대를 폐기합니다. 완료된 회차와 모임 이름은 과거 정산 조회를 위해 보존합니다.' }),
-  },
   '/api/groups/{groupId}/rounds': {
     get: operation('모임', '본인 참여 권한이 있는 모임 회차 목록', { response: ref('RoundPage'), parameters: [...pageParameters, roundSearchParameter] }),
     post: operation('모임', '선택한 멤버로 기록 시작', { parameters: [{ ...mutationParameters[1], schema: id, description: '회차 PK로 사용할 UUIDv7 ticket. Idempotency-Key 헤더로 전달하며 같은 키 재전송은 409로 거절합니다.' }, mutationParameters[0]], request: { ...object({ name: string, participantIds: { type: 'array', items: id, minItems: 2, maxItems: MAX_GROUP_MEMBERS, uniqueItems: true, description: '현재 활성 모임 멤버 중 요청자 자신을 반드시 포함합니다.' } }, ['name', 'participantIds']), additionalProperties: false }, description: '공용 세션 advisory lock 획득 → AUTH 내 정보 조회 → 이름·참여자·UUIDv7 ticket 검증 → 단일 조건부 SQL로 회차와 참여자 저장 → 같은 연결에서 락 해제의 SQL 4회입니다. 모임 이탈·닫기·회원 탈퇴와 같은 락으로 AUTH부터 저장까지 보호하며 실패 시에도 해제하고 해제 결과가 불확실하면 연결을 폐기합니다. 명시적 트랜잭션·멱등 성공 기록 없이 ticket을 PK로 사용하며 중복 PK는 409 round_already_exists입니다. 없는/탈퇴한 요청자는 401 unauthorized, 비멤버·없는 모임은 404 not_found, 비활성·외부 참여자는 400 invalid_participants입니다. 응답 유실 후 같은 ticket 재시도도 409이며 회차 목록에서 결과를 확인합니다. 모임 이탈·회원 탈퇴와는 저장 SQL의 스냅샷 기준으로 검사하며 직렬화하지 않습니다. 모든 활성 모임 참여자가 요청자 자신을 포함한 최소 2명을 선택해 회차를 만들 수 있습니다. 요청자가 회차 생성자가 되어 해당 회차 수명주기와 전체 지출을 관리하며, 모임 생성자는 필수 참여자가 아닙니다. 회차 생성 요청에는 통화를 받지 않습니다. 각 지출에서 지원 통화를 선택하고 기록 단계에서 변경할 수 있으며 한 회차에 최대 5개 통화를 기록합니다. 미완료 회차가 있어도 생성할 수 있습니다.' }),
   },
-  '/api/groups/{groupId}/invites': { post: operation('모임', '7일 유효 초대 발급·재발급', { mutation: true, request: object({ replaceInviteId: id }), description: '모임 생성자가 발급하며 원문 링크는 최초 응답에서만 제공합니다. 같은 키 재시도는 inviteId와 linkUnavailable을 반환합니다. 새 키와 replaceInviteId로 이전 초대를 폐기하며 다시 발급합니다.' }) },
-  '/api/groups/{groupId}/invites/{inviteId}': { delete: operation('모임', '모임 생성자가 초대 폐기', { mutation: true }) },
-  '/api/invites/{token}': { get: operation('모임', '인증 후 초대 모임 미리보기', { response: object({ groupId: id, groupName: string, isMember: { type: 'boolean' }, expiresAt: timestamp }, ['groupId', 'groupName', 'isMember', 'expiresAt']), description: '조회만으로 멤버십을 생성하지 않습니다. 만료·폐기되었거나 활성 모임 생성자가 없는 초대는 거부합니다.' }) },
-  '/api/invites/{token}/accept': { post: operation('모임', '초대를 명시적으로 수락', { mutation: true, description: 'AUTH → 토큰 형식 검사 → 유효 초대/성공 기록 조회 → 세션 락 획득 → 조건부 멤버십·성공 기록 단일 SQL → 락 해제의 5회이며 명시적 트랜잭션은 없습니다. 기존 쓰기와 같은 advisory lock으로 정원을 보호하며 삽입 시 회원·초대·생성자·현재 정원을 다시 확인합니다. 새 키의 활성 멤버 중복 수락·동시 삽입 충돌은 409 group_already_member, 정원 초과는 409 group_member_limit_exceeded입니다. 이미 성공한 같은 키는 기존 결과를 반환합니다. 이탈자는 재참여할 수 있으며 기존 회차에는 자동 추가되지 않습니다.' }) },
   '/api/rounds': { get: operation('정산', '본인 참여 이력으로 회차 목록 조회', { response: ref('RoundPage'), parameters: [...pageParameters, roundSearchParameter, { name: 'status', in: 'query', schema: { type: 'string', enum: ['active', 'RECORDING', 'CONFIRMED', 'LOCKED', 'COMPLETED'] } }], description: '현재 모임 멤버십과 무관하게 본인 참여 이력이 있는 회차를 조회합니다. 다른 회차·통화 금액을 합산하지 않습니다.' }) },
   '/api/rounds/{roundId}': {
     get: operation('정산', '회차·지출·참여 내역 조회', { response: ref('RoundDetail'), parameters: pageParameters, description: 'creatorId는 회차 생성자, groupCreatorId는 모임 생성자이며 isCreator는 조회 사용자가 회차 생성자인지를 뜻합니다. 같은 DB 스냅샷의 원본과 버전을 반환합니다. 회차 참여자의 이름과 활성 회원의 최신 카카오 프로필 이미지를 반환하며 탈퇴자의 이미지는 null입니다. 최종화 전에는 각 지출의 균등 기본 몫과 개별 지정 부담금을 회차 전체에서 상계한 예상 송금 관계와 미배분 나머지 금액을, 최종화 뒤에는 저장된 최종 관계를 반환합니다. 송금 관계는 조회 사용자가 보내거나 받는 행만 포함하며 계좌정보는 반환하지 않습니다.' }),
@@ -177,7 +147,8 @@ const documentedDomainPaths = Object.fromEntries(Object.entries(domainPaths).map
   ...operations,
 }]))
 
-export const openApiDocument = {
+// Remaining domains are migrated to Controller metadata in separate units.
+export const legacyOpenApiDocument = {
   // ponytail: keep Swagger UI on its Turbopack-safe resolver; use a static bundle before adopting OpenAPI 3.1-only schemas.
   openapi: '3.0.3',
   info: {
@@ -292,31 +263,6 @@ export const openApiDocument = {
           '401': { $ref: '#/components/responses/Unauthorized' },
           '429': { $ref: '#/components/responses/RateLimited' },
           '403': { $ref: '#/components/responses/Forbidden' },
-        },
-      },
-    },
-    '/api/auth/withdraw': {
-      post: {
-        tags: ['인증'],
-        summary: '회원 탈퇴',
-        description: 'BEGIN → advisory transaction lock 획득 → AUTH → 미종료 참여 회차 조회 → 조건부 소프트 삭제·모임 이탈 단일 SQL → COMMIT의 6회입니다. 모임 탈퇴와 같은 락을 사용하며 성공 시 COMMIT, 실패 시 ROLLBACK으로 락을 자동 해제합니다. 참여 이력이 있는 미종료 회차가 있으면 제외 여부와 무관하게 409 unfinished_rounds로 차단합니다. deletedAt과 활성 멤버십 종료를 원자적으로 저장하고 클라이언트 토큰·쿠키를 삭제합니다. 동일 카카오 재가입 시 같은 ID·과거 기록을 유지하고 이전 모임·관리 권한은 복원하지 않습니다.',
-        parameters: [
-          {
-            name: 'Origin',
-            in: 'header',
-            required: true,
-            schema: { type: 'string', format: 'uri' },
-            description: '현재 서비스 origin과 정확히 일치해야 합니다.',
-          },
-        ],
-        security: [{ accessBearer: [] }],
-        responses: {
-          '200': { description: '탈퇴 완료', content: { 'application/json': { schema: success(object({ ok: { type: 'boolean' } }, ['ok'])) } } },
-          '401': { $ref: '#/components/responses/Unauthorized' },
-          '429': { $ref: '#/components/responses/RateLimited' },
-          '403': { $ref: '#/components/responses/Forbidden' },
-          '409': { $ref: '#/components/responses/DomainFailure' },
-          '503': { $ref: '#/components/responses/DomainFailure' },
         },
       },
     },
