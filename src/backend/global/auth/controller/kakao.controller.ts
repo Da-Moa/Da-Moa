@@ -3,9 +3,9 @@ import type { Request, Response } from 'express';
 import { nodeRequestOrigin } from '../../apiPayload/http';
 import { Cookies } from '../decorator/cookies.decorator';
 import { KakaoAuthService } from '../service/kakaoAuth.service';
+import { KakaoOidcClient } from '../service/kakaoOidc.client';
 import {
   authCookieOptions,
-  createKakaoAuthorizationRequest,
   createRedirectUriCookie,
   createReturnToCookie,
   getKakaoAuthenticationConfig,
@@ -37,10 +37,11 @@ function requestBase(request: Request) {
 export class KakaoController {
   constructor(
     @Inject(KakaoAuthService) private readonly service: KakaoAuthService,
+    @Inject(KakaoOidcClient) private readonly oidc: KakaoOidcClient,
   ) {}
 
   @Get('api/auth/kakao')
-  login(
+  async login(
     @Req() request: Request,
     @Query('returnTo') returnTo: unknown,
     @Res() response: Response,
@@ -48,7 +49,7 @@ export class KakaoController {
     response.setHeader('Cache-Control', 'private, no-store');
     try {
       const config = getKakaoAuthenticationConfig(nodeRequestOrigin(request));
-      const login = createKakaoAuthorizationRequest(config);
+      const login = await this.oidc.authorize(config);
       const options = authCookieOptions(OIDC_MAX_AGE_SECONDS);
       // Compute signatures before writing any cookie so failed configuration writes none.
       const redirectCookie = createRedirectUriCookie(

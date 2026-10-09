@@ -4,6 +4,7 @@ import { request as httpRequest } from 'node:http';
 export async function requestTestServer(
   origin: string,
   request: Request,
+  timeoutMilliseconds = 10_000,
 ): Promise<Response> {
   const source = new URL(request.url);
   const body = request.body
@@ -38,7 +39,7 @@ export async function requestTestServer(
       },
     );
     outgoing.on('error', reject);
-    outgoing.setTimeout(10000, () =>
+    outgoing.setTimeout(timeoutMilliseconds, () =>
       outgoing.destroy(new Error('Isolated HTTP request timed out')),
     );
     outgoing.end(body);

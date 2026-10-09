@@ -110,19 +110,17 @@ test('Kakao callbacks keep the selected URI for localhost and LAN and reject unt
       ).toString('base64url');
       const content = `${header}.${payload}`;
       const idToken = `${content}.${sign('RSA-SHA256', Buffer.from(content), privateKey).toString('base64url')}`;
-      return new Response(
-        JSON.stringify({
-          access_token: 'test-provider-token',
-          id_token: idToken,
-        }),
-      );
+      return Response.json({
+        access_token: 'test-provider-token',
+        id_token: idToken,
+        token_type: 'bearer',
+        expires_in: 600,
+      });
     }
     if (url.href === 'https://kauth.kakao.com/.well-known/jwks.json')
-      return new Response(JSON.stringify({ keys: [key] }));
+      return Response.json({ keys: [key] });
     if (url.href === 'https://kapi.kakao.com/v1/oidc/userinfo')
-      return new Response(
-        JSON.stringify({ sub: subject, nickname: '콜백 검증' }),
-      );
+      return Response.json({ sub: subject, nickname: '콜백 검증' });
     throw new Error(`Unexpected provider endpoint: ${url.pathname}`);
   }) as typeof fetch;
   const request = (

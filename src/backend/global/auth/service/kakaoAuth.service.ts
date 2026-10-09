@@ -1,16 +1,13 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { timingSafeEqual } from 'node:crypto';
 import {
-  exchangeKakaoAuthorizationCode,
   getKakaoConfig,
   getKakaoRedirectUris,
-  getKakaoUserProfile,
   readRedirectUriCookie,
   readReturnToCookie,
-  verifyKakaoIdToken,
   type KakaoProfile,
 } from '../authUtil';
 import { AuthService, type AuthSession } from './auth.service';
+import { KakaoOidcClient } from './kakaoOidc.client';
 
 export type KakaoCallbackCookies = {
   state?: string;
@@ -30,7 +27,10 @@ type CallbackResult =
 
 @Injectable()
 export class KakaoAuthService {
-  constructor(@Inject(AuthService) private readonly auth: AuthService) {}
+  constructor(
+    @Inject(AuthService) private readonly auth: AuthService,
+    @Inject(KakaoOidcClient) private readonly oidc: KakaoOidcClient,
+  ) {}
 
   async complete(
     origin: URL | null,
@@ -51,10 +51,6 @@ export class KakaoAuthService {
       !cookies.codeVerifier
     )
       return failure('failed');
-    const actual = Buffer.from(state),
-      expected = Buffer.from(cookies.state);
-    if (actual.length !== expected.length || !timingSafeEqual(actual, expected))
-      return failure('invalid');
     try {
       const redirectUri = readRedirectUriCookie(cookies.redirectUri, state);
       // Preserve logins started before the signed redirect-URI cookie existed.
@@ -65,20 +61,20 @@ export class KakaoAuthService {
       )
         return failure('invalid');
       const config = getKakaoConfig(origin, redirectUri ?? undefined);
-      const { accessToken, idToken } = await exchangeKakaoAuthorizationCode(
-        config,
-        code,
-        cookies.codeVerifier,
-      );
-      const subject = await verifyKakaoIdToken(idToken, config, cookies.nonce);
-      if (!subject) return failure('invalid');
+      const identity = await this.oidc.authenticate(config, code, state, {
+        state: cookies.state,
+        nonce: cookies.nonce,
+        codeVerifier: cookies.codeVerifier,
+      });
+      if (!identity) return failure('invalid');
+      const { accessToken, subject } = identity;
       let profile: KakaoProfile = {
         displayName: null,
         email: null,
         profileImageUrl: null,
       };
       try {
-        profile = await getKakaoUserProfile(accessToken, subject);
+        profile = await this.oidc.profile(config, accessToken, subject);
       } catch {
         // A verified ID token is sufficient; profile data is optional.
       }
