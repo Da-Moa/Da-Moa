@@ -1,3 +1,4 @@
+import { assertServerRejects } from '../support/expectedErrorTestSupport';
 import {
   mockPoolConnection,
   queryText,
@@ -31,7 +32,7 @@ import { getDatabasePool } from '../support/domainTestSupport.ts';
 import { getMeResponse as GET } from '../support/httpTestSupport.ts';
 import { getBankAccountResponse as PUT } from '../support/httpTestSupport.ts';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
-import { completeTestOnboarding } from './bankTestSupport.ts';
+import { completeTestOnboarding } from '../support/bankTestSupport.ts';
 import { uuidV7 } from '../../../shared/uuid.ts';
 import { createGroup } from '../support/domainTestSupport.ts';
 import { createRound } from '../support/domainTestSupport.ts';
@@ -48,7 +49,7 @@ if (
 process.env.DATABASE_URL = database;
 process.env.AUTH_JWT_SECRET ||= 'isolated-user-test-secret-at-least-32-bytes';
 
-test('unified Nonghyup input preserves institution codes and verified legacy accounts with two SQL writes', async (t) => {
+test('통합 농협 입력이 기관 코드와 기존 검증 계좌를 보존하고 SQL 2회로 저장한다', async (t) => {
   const client = createDatabaseClient(database);
   await client.connect();
   const previousLog = process.env.DB_QUERY_LOG;
@@ -133,7 +134,7 @@ test('unified Nonghyup input preserves institution codes and verified legacy acc
   }
 });
 
-test('withdrawal locks before checks and releases the transaction lock on commit and rollback', async (t) => {
+test('탈퇴 검사 전에 락을 획득하고 커밋·롤백 시 트랜잭션 락을 해제한다', async (t) => {
   const client = createDatabaseClient(database);
   await client.connect();
   const previousLog = process.env.DB_QUERY_LOG;
@@ -197,6 +198,7 @@ test('withdrawal locks before checks and releases the transaction lock on commit
       statements = [];
       const result = await work();
       assert.equal(statements.length, count, statements.join('\n'));
+      if (count === 0) return result;
       assert.equal(statements[0], 'BEGIN');
       assert.equal(
         statements[1],
@@ -231,7 +233,7 @@ test('withdrawal locks before checks and releases the transaction lock on commit
       await client.query('SELECT pg_advisory_unlock(1684106607)');
       return result;
     };
-    await trace(3, () =>
+    await trace(0, () =>
       assert.rejects(withdrawAccount(null), code('unauthorized')),
     );
     await trace(5, () =>
@@ -277,8 +279,9 @@ test('withdrawal locks before checks and releases the transaction lock on commit
       return borrowed;
     });
     await trace(6, () =>
-      assert.rejects(
-        withdrawAccount(owner),
+      assertServerRejects(
+        t,
+        () => withdrawAccount(owner),
         (error) => (error as { code: string }).code === '22012',
       ),
     );
@@ -336,7 +339,7 @@ test('withdrawal locks before checks and releases the transaction lock on commit
   }
 });
 
-test('GET /api/me uses one AUTH SELECT without transaction SQL for app, onboarding and rejected user states', async (t) => {
+test('내 정보 조회가 가입·온보딩·거부 상태별로 인증 SELECT 1회만 실행한다', async (t) => {
   const client = createDatabaseClient(database);
   await client.connect();
   const previousLog = process.env.DB_QUERY_LOG;
@@ -426,7 +429,7 @@ test('GET /api/me uses one AUTH SELECT without transaction SQL for app, onboardi
   }
 });
 
-test('bank account uses AUTH then validation then conditional UPDATE; one concurrent request wins and conflicts return 409', async (t) => {
+test('계좌 저장이 인증·검증·조건부 수정 순서를 지키고 동시 요청 중 하나만 성공한다', async (t) => {
   const client = createDatabaseClient(database);
   await client.connect();
   const previousLog = process.env.DB_QUERY_LOG;
@@ -622,7 +625,7 @@ test('bank account uses AUTH then validation then conditional UPDATE; one concur
   }
 });
 
-test('onboarding uses AUTH + conditional UPDATE; concurrent signup/rejoin has one winner even at the same timestamp', async (t) => {
+test('온보딩이 인증·조건부 수정으로 가입·재가입 경쟁에서 하나만 성공시킨다', async (t) => {
   const client = createDatabaseClient(database);
   await client.connect();
   const previousLog = process.env.DB_QUERY_LOG;
@@ -694,7 +697,7 @@ test('onboarding uses AUTH + conditional UPDATE; concurrent signup/rejoin has on
     const secret = process.env.AUTH_JWT_SECRET;
     delete process.env.AUTH_JWT_SECRET;
     try {
-      await trace(1, () =>
+      await trace(0, () =>
         assert.rejects(completeOnboarding(access, input), /AUTH_JWT_SECRET/),
       );
     } finally {

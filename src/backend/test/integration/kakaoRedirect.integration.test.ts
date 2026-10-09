@@ -3,10 +3,14 @@ import { getPrismaClient } from '../support/domainTestSupport.ts';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, randomUUID, sign } from 'node:crypto';
 import { test } from 'node:test';
-import { createBackend } from '../../domain/main';
+import {
+  createMockBackend,
+  mockFetch,
+  mockOrigin,
+} from '../support/mockHttpTestSupport';
 import { JwtService } from '@nestjs/jwt';
 import { ResponseCookies } from '@edge-runtime/cookies';
-import { requestTestServer } from '../support/actualHttpTestSupport.ts';
+import { requestMockServer } from '../support/mockHttpTestSupport.ts';
 import { KakaoAuthService } from '../../global/auth/service/kakaoAuth.service';
 import {
   OIDC_COOKIE_NAMES,
@@ -28,7 +32,7 @@ if (
 }
 process.env.DATABASE_URL = database;
 
-test('Kakao callbacks keep the selected URI for localhost and LAN and reject untrusted origins or cookies', async (t) => {
+test('카카오 콜백이 로컬·LAN의 선택된 URI를 유지하고 신뢰하지 않는 Origin·쿠키를 거부한다', async (t) => {
   const previous = Object.fromEntries(
     [
       'NODE_ENV',
@@ -43,7 +47,7 @@ test('Kakao callbacks keep the selected URI for localhost and LAN and reject unt
     KAKAO_REST_API_KEY: 'isolated-client-id',
   });
   const originalFetch = globalThis.fetch;
-  const { app } = await createBackend();
+  const { app } = await createMockBackend();
   t.after(() => app.close());
   const signer = t.mock.method(app.get(JwtService), 'sign');
   t.after(() =>
@@ -59,9 +63,9 @@ test('Kakao callbacks keep the selected URI for localhost and LAN and reject unt
       'HTTP callback uses the registered Kakao Auth Provider',
     ),
   );
-  await app.listen(0, '127.0.0.1');
-  const serverOrigin = await app.getUrl();
-  const login = (request: Request) => requestTestServer(serverOrigin, request);
+
+  const serverOrigin = mockOrigin(app);
+  const login = (request: Request) => requestMockServer(serverOrigin, request);
   const callback = login;
   const cookiesOf = (response: Response) =>
     new ResponseCookies(response.headers);

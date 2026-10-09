@@ -1,6 +1,7 @@
+import { assertServerRejects } from '../support/expectedErrorTestSupport';
 import { before } from 'node:test';
 import { getPrismaClient } from '../support/domainTestSupport.ts';
-import { addStoredReceipt as addReceipt } from './receiptWorkerTestSupport';
+import { addStoredReceipt as addReceipt } from '../support/receiptWorkerTestSupport';
 import { uuidV7 } from '../../../shared/uuid.ts';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
@@ -23,7 +24,7 @@ import {
   roundCommand,
   saveExpense,
 } from '../support/domainTestSupport.ts';
-import { completeTestOnboarding } from './bankTestSupport.ts';
+import { completeTestOnboarding } from '../support/bankTestSupport.ts';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
 
 const testUrl = process.env.TEST_DATABASE_URL;
@@ -39,7 +40,7 @@ process.env.AUTH_JWT_SECRET ||=
   'integration-only-not-a-production-secret-0123456789';
 const key = () => randomUUID();
 
-test('legacy receipt migration preserves images and restores expense deletion and object uploads', async (t) => {
+test('기존 영수증 마이그레이션이 이미지를 보존하고 지출 삭제·객체 업로드를 복구한다', async (t) => {
   const client = createDatabaseClient(testUrl);
   const schema = `receipt_upgrade_${key().replaceAll('-', '')}`;
   const previousUrl = process.env.DATABASE_URL;
@@ -127,8 +128,9 @@ test('legacy receipt migration preserves images and restores expense deletion an
     const receiptId = await seed(original.id!);
     const deleteKey = key(),
       deleteBody = { expectedVersion: original.version! };
-    await assert.rejects(
-      deleteExpense(a, deleteKey, round.id, empty.id!, deleteBody),
+    await assertServerRejects(
+      t,
+      () => deleteExpense(a, deleteKey, round.id, empty.id!, deleteBody),
       (error: unknown) => (error as { code: string }).code === '42703',
     );
     await applyMigrations(client);

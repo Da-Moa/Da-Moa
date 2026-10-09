@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { createBackend } from '../../domain/main';
+import {
+  createMockBackend,
+  mockFetch,
+  mockOrigin,
+} from '../support/mockHttpTestSupport';
 import { createDatabaseClient } from '../../global/database/db';
 import {
   createAccessToken,
@@ -11,7 +15,7 @@ import { GroupService } from '../../domain/group/service/group.service';
 import { SettleService } from '../../domain/settle/service/settle.service';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
 import { uuidV7 } from '../../../shared/uuid';
-import { completeTestOnboarding } from './bankTestSupport';
+import { completeTestOnboarding } from '../support/bankTestSupport';
 import {
   signInKakao,
   createGroup,
@@ -32,7 +36,7 @@ if (
 process.env.DATABASE_URL = database;
 process.env.AUTH_JWT_SECRET ||= 'isolated-pagination-secret-at-least-32-bytes';
 
-test('actual Nest pagination passes typed queries once and preserves cursor, search, authorization and SQL contracts', async (t) => {
+test('Nest 페이지 조회가 쿼리 DTO를 한 번 전달하고 커서·검색·권한·SQL 계약을 유지한다', async (t) => {
   const db = createDatabaseClient(database);
   await db.connect();
   try {
@@ -72,15 +76,15 @@ test('actual Nest pagination passes typed queries once and preserves cursor, sea
         participantIds: [owner.userId, guest.userId],
       }),
     );
-  const { app } = await createBackend();
+  const { app } = await createMockBackend();
   const previousLog = process.env.DB_QUERY_LOG;
   t.after(async () => {
     await app.close();
     if (previousLog === undefined) delete process.env.DB_QUERY_LOG;
     else process.env.DB_QUERY_LOG = previousLog;
   });
-  await app.listen(0, '127.0.0.1');
-  const origin = await app.getUrl();
+
+  const origin = mockOrigin(app);
   let calls = 0;
   const groupService = app.get(GroupService),
     settleService = app.get(SettleService);
@@ -132,7 +136,7 @@ test('actual Nest pagination passes typed queries once and preserves cursor, sea
     token: string | null = ownerSession.accessToken,
   ) => {
     statements = [];
-    const response = await fetch(`${origin}${path}`, {
+    const response = await mockFetch(app)(`${origin}${path}`, {
       headers: token ? { authorization: `Bearer ${token}` } : {},
       signal: AbortSignal.timeout(10000),
     });

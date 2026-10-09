@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { createServer } from 'node:http';
+import {
+  createMockBackend,
+  mockFetch,
+  mockOrigin,
+} from '../support/mockHttpTestSupport';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import cookieParser from 'cookie-parser';
@@ -21,7 +25,7 @@ import {
   requestRateLimitKinds,
 } from '../../global/rateLimit/native';
 
-test('token buckets isolate users/kinds, refill fractionally, debit atomically and prune only fully refilled entries', async () => {
+test('토큰 버킷이 사용자·종류를 격리하고 소수 단위 충전·원자적 차감·충전 완료 항목 정리를 수행한다', async () => {
   let time = 0;
   const buckets = createTokenBuckets(() => time);
   for (const kind of Object.keys(
@@ -98,7 +102,7 @@ test('token buckets isolate users/kinds, refill fractionally, debit atomically a
 });
 
 test(
-  'native HTTP guard limits before Controller, shares JWT identities and returns retry metadata without clearing cookies',
+  'HTTP Guard가 Controller 전에 요청을 제한하고 JWT 식별자·재시도 정보·쿠키를 유지한다',
   { timeout: 10000 },
   async () => {
     const previous = process.env.AUTH_JWT_SECRET;
@@ -109,30 +113,30 @@ test(
     const buckets = createTokenBuckets(() => time);
     const limiter = createRateLimitController(testTokens, buckets);
     const parseCookies = cookieParser();
-    const server = createServer((request, response) => {
-      parseCookies(request as Request, response as Response, () => {
-        if (limiter.handleRequest(request, response)) return;
-        const guarded = proxy(
-          new Request(`http://localhost${request.url}`, {
-            method: request.method,
-            headers: {
-              authorization: request.headers.authorization ?? '',
-              cookie: request.headers.cookie ?? '',
-            },
-          }),
-        );
-        if (guarded?.status === 401) {
-          response.writeHead(401).end();
-          return;
-        }
-        calls++;
-        response.writeHead(200).end();
+    const { app } = await createMockBackend(async (app) => {
+      app.use((request: Request, response: Response) => {
+        parseCookies(request as Request, response as Response, () => {
+          if (limiter.handleRequest(request, response)) return;
+          const guarded = proxy(
+            new Request(`http://localhost${request.url}`, {
+              method: request.method,
+              headers: {
+                authorization: request.headers.authorization ?? '',
+                cookie: request.headers.cookie ?? '',
+              },
+            }),
+          );
+          if (guarded?.status === 401) {
+            response.writeHead(401).end();
+            return;
+          }
+          calls++;
+          response.writeHead(200).end();
+        });
       });
     });
     try {
-      server.listen(0, '127.0.0.1');
-      await once(server, 'listening');
-      const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+      const origin = mockOrigin(app);
       const access = createAccessToken('a', 'first');
       const request = (
         path: string,
@@ -140,7 +144,7 @@ test(
         token = access,
         cookie = '',
       ) =>
-        fetch(`${origin}${path}`, {
+        mockFetch(app)(`${origin}${path}`, {
           method,
           headers: {
             authorization: `Bearer ${token}`,
@@ -272,7 +276,7 @@ test(
       assert.equal(invalidSocket.destroyed, true);
     } finally {
       limiter.close();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await app.close();
       if (previous === undefined) delete process.env.AUTH_JWT_SECRET;
       else process.env.AUTH_JWT_SECRET = previous;
     }

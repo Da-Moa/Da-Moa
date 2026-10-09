@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { request as nodeRequest } from 'node:http';
 import { GroupService } from '../../domain/group/service/group.service';
 import { SettleService } from '../../domain/settle/service/settle.service';
 import { UserService } from '../../domain/user/service/user.service';
@@ -18,7 +17,11 @@ import { TokenService } from '../../global/auth/service/token.service';
 import { AuthService } from '../../global/auth/service/auth.service';
 import { TestLoginRequestDTO } from '../../global/auth/dto/req/testLogin.request.dto';
 import { TestLoginBodyPipe } from '../../global/auth/pipe/testLoginBody.pipe';
-import { createBackend } from '../../domain/main';
+import {
+  createMockBackend,
+  mockFetch,
+  mockOrigin,
+} from '../support/mockHttpTestSupport';
 import {
   REFRESH_TOKEN_COOKIE_NAME,
   RETURN_TO_COOKIE_NAME,
@@ -29,7 +32,7 @@ import {
   createRefreshToken,
 } from '../support/legacyTokenTestSupport.ts';
 
-test('native form Body validates once after the test-login Guard and preserves limits and login responses over actual HTTP', async (t) => {
+test('로그인 Guard 이후 폼 본문을 한 번 검증하고 모의 요청에서 한도·로그인 응답을 유지한다', async (t) => {
   const previous = {
     NODE_ENV: process.env.NODE_ENV,
     AUTH_JWT_SECRET: process.env.AUTH_JWT_SECRET,
@@ -37,7 +40,7 @@ test('native form Body validates once after the test-login Guard and preserves l
   };
   Object.assign(process.env, { NODE_ENV: 'development' });
   process.env.AUTH_JWT_SECRET = 'native-form-test-secret-at-least-32-bytes';
-  const { app } = await createBackend();
+  const { app } = await createMockBackend();
   t.after(async () => {
     await app.close();
     for (const [key, value] of Object.entries(previous)) {
@@ -45,8 +48,8 @@ test('native form Body validates once after the test-login Guard and preserves l
       else process.env[key] = value;
     }
   });
-  await app.listen(0, '127.0.0.1');
-  const origin = await app.getUrl();
+
+  const origin = mockOrigin(app);
   const serviceCalls: unknown[] = [];
   t.mock.method(
     app.get(AuthService),
@@ -72,7 +75,7 @@ test('native form Body validates once after the test-login Guard and preserves l
     },
   );
   const post = (body: BodyInit, extra: Record<string, string> = {}) =>
-    fetch(`${origin}/api/auth/test-login`, {
+    mockFetch(app)(`${origin}/api/auth/test-login`, {
       method: 'POST',
       redirect: 'manual',
       signal: AbortSignal.timeout(10000),
@@ -142,29 +145,13 @@ test('native form Body validates once after the test-login Guard and preserves l
     (await post(oversized, { 'content-type': 'application/json' })).status,
     400,
   );
-  const streamed = await new Promise<number>((resolve, reject) => {
-    const outgoing = nodeRequest(
-      `${origin}/api/auth/test-login`,
-      {
-        method: 'POST',
-        headers: {
-          origin,
-          'content-type': 'application/x-www-form-urlencoded',
-        },
-      },
-      (incoming) => {
-        incoming.resume();
-        incoming.once('end', () => resolve(incoming.statusCode!));
-      },
-    );
-    outgoing.on('error', reject);
-    outgoing.setTimeout(10000, () =>
-      outgoing.destroy(new Error('Chunked form timed out')),
-    );
-    outgoing.write('key=');
-    outgoing.write('a'.repeat(4093));
-    outgoing.end();
-  });
+  const streamed = (
+    await mockFetch(app)(`${origin}/api/auth/test-login`, {
+      method: 'POST',
+      headers: { origin, 'content-type': 'application/x-www-form-urlencoded' },
+      chunks: ['key=', 'a'.repeat(4093)],
+    })
+  ).status;
   assert.equal(
     streamed,
     413,
@@ -185,20 +172,20 @@ test('native form Body validates once after the test-login Guard and preserves l
   );
 });
 
-test('cookie-parser supplies refresh authentication and rejects non-string, expired and tampered cookies over actual Nest HTTP', async (t) => {
+test('모의 Nest 요청의 쿠키 파서가 갱신 인증을 지원하고 잘못된 타입·만료·변조 쿠키를 거부한다', async (t) => {
   const previous = process.env.AUTH_JWT_SECRET;
   process.env.AUTH_JWT_SECRET = 'cookie-parser-test-secret-at-least-32-bytes';
-  const { app } = await createBackend();
+  const { app } = await createMockBackend();
   t.after(async () => {
     await app.close();
     if (previous === undefined) delete process.env.AUTH_JWT_SECRET;
     else process.env.AUTH_JWT_SECRET = previous;
   });
-  await app.listen(0, '127.0.0.1');
-  const origin = await app.getUrl();
+
+  const origin = mockOrigin(app);
   const refresh = createRefreshToken('cookie-user', 'cookie-session');
   const post = (path: string, cookie?: string) =>
-    fetch(`${origin}/api/auth/${path}`, {
+    mockFetch(app)(`${origin}/api/auth/${path}`, {
       method: 'POST',
       headers: { origin, ...(cookie === undefined ? {} : { cookie }) },
       signal: AbortSignal.timeout(10000),
@@ -243,17 +230,17 @@ test('cookie-parser supplies refresh authentication and rejects non-string, expi
   }
 });
 
-test('Nest JSON parser preserves byte limits, UTF-8, object shape and native Body DTOs after authentication', async (t) => {
+test('Nest JSON 파서가 인증 후 바이트 한도·UTF-8·객체 형태·본문 DTO를 유지한다', async (t) => {
   const previous = process.env.AUTH_JWT_SECRET;
   process.env.AUTH_JWT_SECRET = 'native-json-test-secret-at-least-32-bytes';
-  const { app } = await createBackend();
+  const { app } = await createMockBackend();
   t.after(async () => {
     await app.close();
     if (previous === undefined) delete process.env.AUTH_JWT_SECRET;
     else process.env.AUTH_JWT_SECRET = previous;
   });
-  await app.listen(0, '127.0.0.1');
-  const origin = await app.getUrl();
+
+  const origin = mockOrigin(app);
   const token = createAccessToken('json-user', 'json-session');
   let calls = 0;
   t.mock.method(
@@ -271,7 +258,7 @@ test('Nest JSON parser preserves byte limits, UTF-8, object shape and native Bod
     'idempotency-key': 'json-test-key',
   };
   const post = (body: BodyInit, extra: Record<string, string> = {}) =>
-    fetch(`${origin}/api/groups`, {
+    mockFetch(app)(`${origin}/api/groups`, {
       method: 'POST',
       signal: AbortSignal.timeout(10000),
       headers: { ...headers, ...extra },
@@ -316,7 +303,7 @@ test('Nest JSON parser preserves byte limits, UTF-8, object shape and native Bod
   );
   assert.equal(
     (
-      await fetch(`${origin}/api/me/onboarding`, {
+      await mockFetch(app)(`${origin}/api/me/onboarding`, {
         method: 'POST',
         headers,
         body: ' '.repeat(16385) + '{}',
@@ -329,7 +316,7 @@ test('Nest JSON parser preserves byte limits, UTF-8, object shape and native Bod
   assert.equal((await post(oversized)).status, 413);
   assert.equal(
     (
-      await fetch(`${origin}/api/groups`, {
+      await mockFetch(app)(`${origin}/api/groups`, {
         method: 'POST',
         headers: { origin },
         body: oversized,
@@ -338,22 +325,13 @@ test('Nest JSON parser preserves byte limits, UTF-8, object shape and native Bod
     401,
     'unauthorized oversized JSON is rejected by the Guard first',
   );
-  const streamed = await new Promise<number>((resolve, reject) => {
-    const request = nodeRequest(
-      `${origin}/api/groups`,
-      { method: 'POST', headers },
-      (response) => {
-        response.resume();
-        response.once('end', () => resolve(response.statusCode!));
-      },
-    );
-    request.on('error', reject);
-    request.setTimeout(10000, () =>
-      request.destroy(new Error('Chunked JSON request timed out')),
-    );
-    for (let i = 0; i < 17; i++) request.write(' '.repeat(65536));
-    request.end('{}');
-  });
+  const streamed = (
+    await mockFetch(app)(`${origin}/api/groups`, {
+      method: 'POST',
+      headers,
+      chunks: [...Array.from({ length: 17 }, () => ' '.repeat(65536)), '{}'],
+    })
+  ).status;
   assert.equal(
     streamed,
     413,
@@ -366,18 +344,18 @@ test('Nest JSON parser preserves byte limits, UTF-8, object shape and native Bod
   );
 });
 
-test('Nest HTTP routes enforce JWT before body parsing, preserve cookies, and dispatch each domain', async (t) => {
+test('Nest 경로가 본문 파싱 전에 JWT를 검증하고 쿠키·도메인 요청 전달을 유지한다', async (t) => {
   const previous = process.env.AUTH_JWT_SECRET;
   process.env.AUTH_JWT_SECRET =
     'isolated-nest-http-test-secret-at-least-32-bytes';
-  const { app } = await createBackend();
+  const { app } = await createMockBackend();
   t.after(async () => {
     await app.close();
     if (previous === undefined) delete process.env.AUTH_JWT_SECRET;
     else process.env.AUTH_JWT_SECRET = previous;
   });
-  await app.listen(0, '127.0.0.1');
-  const origin = await app.getUrl();
+
+  const origin = mockOrigin(app);
   const token = createAccessToken('unit-user', 'unit-session');
   const request = (
     path: string,
@@ -386,7 +364,7 @@ test('Nest HTTP routes enforce JWT before body parsing, preserve cookies, and di
     authenticated = false,
     extraHeaders: Record<string, string> = {},
   ) =>
-    fetch(`${origin}${path}`, {
+    mockFetch(app)(`${origin}${path}`, {
       method,
       headers: {
         origin,
@@ -599,7 +577,7 @@ test('Nest HTTP routes enforce JWT before body parsing, preserve cookies, and di
     ).status,
     413,
   );
-  const foreignOrigin = await fetch(`${origin}/api/groups`, {
+  const foreignOrigin = await mockFetch(app)(`${origin}/api/groups`, {
     method: 'POST',
     headers: {
       origin: 'https://foreign.example',
@@ -615,7 +593,7 @@ test('Nest HTTP routes enforce JWT before body parsing, preserve cookies, and di
     denied.headers.getSetCookie().every((value) => value.includes('Max-Age=0')),
   );
   const refresh = createRefreshToken('unit-user', 'unit-session');
-  const refreshed = await fetch(`${origin}/api/auth/refresh`, {
+  const refreshed = await mockFetch(app)(`${origin}/api/auth/refresh`, {
     method: 'POST',
     headers: { origin, cookie: `${REFRESH_TOKEN_COOKIE_NAME}=${refresh}` },
   });
@@ -640,7 +618,7 @@ test('Nest HTTP routes enforce JWT before body parsing, preserve cookies, and di
     /(?:^|;\s*)Secure(?:;|$)/.test(nativeRefreshCookie),
     process.env.NODE_ENV === 'production',
   );
-  const loggedOut = await fetch(`${origin}/api/auth/logout`, {
+  const loggedOut = await mockFetch(app)(`${origin}/api/auth/logout`, {
     method: 'POST',
     headers: { origin, cookie: `${REFRESH_TOKEN_COOKIE_NAME}=${refresh}` },
     body: '{invalid',
@@ -657,18 +635,18 @@ test('Nest HTTP routes enforce JWT before body parsing, preserve cookies, and di
   );
 });
 
-test('required idempotency headers reject absent and blank values before every mutation handler', async (t) => {
+test('필수 멱등성 헤더가 누락·빈 값을 모든 변경 Controller 호출 전에 거부한다', async (t) => {
   const previous = process.env.AUTH_JWT_SECRET;
   process.env.AUTH_JWT_SECRET =
     'required-header-unit-test-secret-at-least-32-bytes';
-  const { app } = await createBackend();
+  const { app } = await createMockBackend();
   t.after(async () => {
     await app.close();
     if (previous === undefined) delete process.env.AUTH_JWT_SECRET;
     else process.env.AUTH_JWT_SECRET = previous;
   });
-  await app.listen(0, '127.0.0.1');
-  const origin = await app.getUrl();
+
+  const origin = mockOrigin(app);
   const token = createAccessToken('unit-user', 'unit-session');
   const calls: unknown[][] = [];
   for (const [service, methods] of [
@@ -756,7 +734,7 @@ test('required idempotency headers reject absent and blank values before every m
   ];
   for (const [method, path, body] of cases)
     for (const value of [undefined, '', ' ']) {
-      const response = await fetch(`${origin}${path}`, {
+      const response = await mockFetch(app)(`${origin}${path}`, {
         method,
         headers: {
           origin,
@@ -787,7 +765,7 @@ test('required idempotency headers reject absent and blank values before every m
     0,
     'missing headers never reach services or their database calls',
   );
-  const accepted = await fetch(`${origin}/api/groups`, {
+  const accepted = await mockFetch(app)(`${origin}/api/groups`, {
     method: 'POST',
     headers: {
       origin,
@@ -804,7 +782,7 @@ test('required idempotency headers reject absent and blank values before every m
     'header-value',
     'the required-header decorator passes the original header to the service',
   );
-  const unauthenticated = await fetch(`${origin}/api/groups`, {
+  const unauthenticated = await mockFetch(app)(`${origin}/api/groups`, {
     method: 'POST',
     headers: { origin, 'Content-Type': 'application/json' },
     body: '{"name":"모임"}',

@@ -1,6 +1,10 @@
+import {
+  assertServerRejects,
+  withExpectedErrorLog,
+} from '../support/expectedErrorTestSupport';
 import { before } from 'node:test';
 import { getPrismaClient } from '../support/domainTestSupport.ts';
-import { drainReceiptQueue } from './receiptWorkerTestSupport';
+import { drainReceiptQueue } from '../support/receiptWorkerTestSupport';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
@@ -14,7 +18,11 @@ import {
   createAccessToken,
   readAccessToken,
 } from '../support/legacyTokenTestSupport.ts';
-import { createBackend } from '../../domain/main';
+import {
+  createMockBackend,
+  mockFetch,
+  mockOrigin,
+} from '../support/mockHttpTestSupport';
 import { SettleService } from '../../domain/settle/service/settle.service';
 import { CreateRoundRequestDTO } from '../../domain/settle/dto/req/settle.request.dto';
 import { MAX_GROUP_MEMBERS } from '../../../shared/domain/group/constants';
@@ -41,7 +49,7 @@ import {
 } from '../support/domainTestSupport.ts';
 import { createDatabaseClient } from '../../global/database/db.ts';
 import { uuidV7 } from '../../../shared/uuid.ts';
-import { completeTestOnboarding } from './bankTestSupport.ts';
+import { completeTestOnboarding } from '../support/bankTestSupport.ts';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
 
 const database = process.env.TEST_DATABASE_URL;
@@ -57,7 +65,7 @@ process.env.DATABASE_URL = database;
 process.env.AUTH_JWT_SECRET ||= 'isolated-settle-test-secret-at-least-32-bytes';
 const key = () => randomUUID();
 
-test('Settle public APIs preserve actual SQL counts, transaction order, branches and replay', async (t) => {
+test('정산 API가 실제 SQL 횟수·트랜잭션 순서·분기·재시도를 유지한다', async (t) => {
   const db = createDatabaseClient(database);
   await db.connect();
   const previous = process.env.DB_QUERY_LOG;
@@ -127,9 +135,13 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       assert.equal(
         statements.length,
         count +
-          (write === 'session' || (write === 'patch' && count >= 5) ? 1 : 0),
+          (count > 0 &&
+          (write === 'session' || (write === 'patch' && count >= 5))
+            ? 1
+            : 0),
         statements.join('\n'),
       );
+      if (count === 0) return result;
       if (write === 'receipt-delete') {
         assert.ok(
           statements.every(
@@ -534,14 +546,14 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         createRound(a, createKey, group.id, body),
       );
       await t.test(
-        'Round Body DTO validation rejects invalid input before SQL while canonical members and the write transaction stay unchanged',
+        '회차 DTO가 잘못된 입력을 SQL 전에 거부하고 참여자 정규화·쓰기 트랜잭션을 유지한다',
         async (ht) => {
-          const { app } = await createBackend();
+          const { app } = await createMockBackend();
           ht.after(async () => {
             await app.close();
           });
-          await app.listen(0, '127.0.0.1');
-          const origin = await app.getUrl(),
+
+          const origin = mockOrigin(app),
             service = app.get(SettleService);
           const token = createAccessToken(a.userId, a.sessionId);
           const create = service.createRound.bind(service);
@@ -564,7 +576,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
             authorization = `Bearer ${token}`,
           ) => {
             statements = [];
-            const response = await fetch(
+            const response = await mockFetch(app)(
               `${origin}/api/groups/${group.id}/rounds`,
               {
                 method: 'POST',
@@ -695,14 +707,14 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         ),
       );
       await t.test(
-        'every JSON settlement command validates version and nested fields before DB; valid typed input still reaches authorization and conflict checks',
+        '모든 JSON 정산 명령이 DB 전에 버전·중첩 필드를 검증하고 권한·충돌 검사로 이어진다',
         async (ht) => {
-          const { app } = await createBackend();
+          const { app } = await createMockBackend();
           ht.after(async () => {
             await app.close();
           });
-          await app.listen(0, '127.0.0.1');
-          const origin = await app.getUrl(),
+
+          const origin = mockOrigin(app),
             token = createAccessToken(a.userId, a.sessionId);
           const base = `/api/rounds/${round.id}`,
             expense = `${base}/expenses/${randomUUID()}`;
@@ -742,7 +754,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
             authorization = `Bearer ${token}`,
           ) => {
             statements = [];
-            const response = await fetch(`${origin}${path}`, {
+            const response = await mockFetch(app)(`${origin}${path}`, {
               method,
               headers: {
                 origin,
@@ -859,10 +871,10 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         ),
       );
       for (const [actor, ticket, input, expected, count] of [
-        [null, '', body, 'unauthorized', 2],
-        [{ ...a, userId: randomUUID() }, '', body, 'unauthorized', 3],
+        [null, '', body, 'unauthorized', 0],
+        [{ ...a, userId: randomUUID() }, uuidV7(), body, 'unauthorized', 3],
         [a, randomUUID(), body, 'invalid_request_key', 3],
-        [a, '', body, 'invalid_request_key', 3],
+        [a, '', body, 'invalid_request_key', 0],
         [
           a,
           uuidV7(),
@@ -938,8 +950,9 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       );
       try {
         await trace(4, 'session', () =>
-          assert.rejects(
-            createRound(a, rejectedKey, group.id, body),
+          assertServerRejects(
+            t,
+            () => createRound(a, rejectedKey, group.id, body),
             (error: { code: string; constraint: string }) =>
               error.code === '23514' && error.constraint === constraint,
           ),
@@ -1092,7 +1105,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         ),
       );
       await t.test(
-        'exclusion check runs AUTH, round authorization and one member/expense query without a transaction',
+        '참여자 제외 조회가 인증·회차 권한·회원과 지출 조회를 트랜잭션 없이 수행한다',
         async () => {
           for (const [actor, id, target, expected, count] of [
             [null, round.id, c.userId, 'unauthorized', 0],
@@ -1266,7 +1279,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         },
       );
       await t.test(
-        'concurrent exclusions preserve the version and minimum participant count without explicit locks',
+        '동시 참여자 제외가 명시적 락 없이 버전과 최소 참여자 수를 유지한다',
         async () => {
           const racing = await createRound(a, uuidV7(), group.id, body);
           const results = await Promise.allSettled(
@@ -1337,7 +1350,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         assert.rejects(
           saveExpense(
             { ...a, userId: randomUUID() },
-            '',
+            key(),
             round.id,
             expenseBody,
           ),
@@ -1451,11 +1464,13 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       );
       try {
         await trace(6, 'expense', () =>
-          assert.rejects(
-            saveExpense(a, failedExpenseKey, round.id, {
-              ...expenseBody,
-              expectedVersion: version,
-            }),
+          assertServerRejects(
+            t,
+            () =>
+              saveExpense(a, failedExpenseKey, round.id, {
+                ...expenseBody,
+                expectedVersion: version,
+              }),
             (error: { code: string; constraint: string }) =>
               error.code === '23514' && error.constraint === expenseConstraint,
           ),
@@ -1534,7 +1549,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       );
       version = updated.version!;
       await t.test(
-        'expense PATCH shares the write lock and atomically saves shares, version and replay',
+        '지출 수정이 쓰기 락을 공유하고 분배·버전·재시도 기록을 원자적으로 저장한다',
         async () => {
           const patchRound = await createRound(a, uuidV7(), group.id, body);
           const original = await saveExpense(b, key(), patchRound.id, {
@@ -1558,7 +1573,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
             assert.rejects(
               saveExpense(
                 { ...a, userId: randomUUID() },
-                '',
+                key(),
                 patchRound.id,
                 { expectedVersion: patchVersion },
                 original.id,
@@ -1720,19 +1735,21 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
           );
           try {
             await trace(5, 'patch', () =>
-              assert.rejects(
-                saveExpense(
-                  a,
-                  failureKey,
-                  patchRound.id,
-                  {
-                    amount: '200',
-                    splitMode: 'SELECTED',
-                    participantIds: [a.userId],
-                    expectedVersion: patchVersion,
-                  },
-                  original.id,
-                ),
+              assertServerRejects(
+                t,
+                () =>
+                  saveExpense(
+                    a,
+                    failureKey,
+                    patchRound.id,
+                    {
+                      amount: '200',
+                      splitMode: 'SELECTED',
+                      participantIds: [a.userId],
+                      expectedVersion: patchVersion,
+                    },
+                    original.id,
+                  ),
                 (error: { code: string }) => error.code === '23514',
               ),
             );
@@ -1817,7 +1834,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         },
       );
       await t.test(
-        'expense DELETE checks permissions before locking and commits one atomic deletion before receipt cleanup',
+        '지출 삭제가 락 전에 권한을 검사하고 영수증 정리 전에 원자적 삭제를 커밋한다',
         async () => {
           const storage = new S3Client({
             endpoint: process.env.MINIO_ENDPOINT,
@@ -1868,7 +1885,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
                 Bucket: process.env.MINIO_BUCKET!,
                 Key: objectKey,
               };
-              await trace(2, 'delete', () =>
+              await trace(0, 'delete', () =>
                 assert.rejects(
                   deleteExpense(
                     null,
@@ -1884,7 +1901,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
                 assert.rejects(
                   deleteExpense(
                     { ...a, userId: randomUUID() },
-                    '',
+                    key(),
                     deletionRound.id,
                     original.id,
                     request,
@@ -1935,15 +1952,17 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
               );
               try {
                 await trace(6, 'delete', () =>
-                  assert.rejects(
-                    deleteExpense(
-                      actor,
-                      failureKey,
-                      deletionRound.id,
-                      original.id,
-                      request,
-                      () => assert.fail('rollback must not publish'),
-                    ),
+                  assertServerRejects(
+                    t,
+                    () =>
+                      deleteExpense(
+                        actor,
+                        failureKey,
+                        deletionRound.id,
+                        original.id,
+                        request,
+                        () => assert.fail('rollback must not publish'),
+                      ),
                     (error: { code: string }) => error.code === '23514',
                   ),
                 );
@@ -1968,6 +1987,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
               }
 
               let cleanups = 0;
+              const cleanupError = new Error('test receipt cleanup failure');
               const send = t.mock.method(
                 S3Client.prototype,
                 'send',
@@ -1976,32 +1996,36 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
                     if (args[0] instanceof DeleteObjectCommand) {
                       assert.equal(statements.at(-1), 'COMMIT');
                       cleanups++;
-                      if (actor === a)
-                        return Promise.reject(
-                          new Error('test receipt cleanup failure'),
-                        );
+                      if (actor === a) return Promise.reject(cleanupError);
                     }
                     return Reflect.apply(target, receiver, args);
                   },
                 }),
               );
-              const errors = t.mock.method(console, 'error', () => {});
               try {
-                const result = await trace(6, 'delete', () =>
-                  deleteExpense(
-                    actor,
-                    requestKey,
-                    deletionRound.id,
-                    original.id,
-                    request,
-                    (audience) => {
-                      assert.equal(audience.groupId, group.id);
-                      assert.deepEqual(
-                        new Set(audience.userIds),
-                        new Set(body.participantIds),
-                      );
-                    },
-                  ),
+                const { result } = await withExpectedErrorLog(
+                  t,
+                  (label, _key, error) =>
+                    label === 'receipt_cleanup_failed' &&
+                    error === cleanupError,
+                  () =>
+                    trace(6, 'delete', () =>
+                      deleteExpense(
+                        actor,
+                        requestKey,
+                        deletionRound.id,
+                        original.id,
+                        request,
+                        (audience) => {
+                          assert.equal(audience.groupId, group.id);
+                          assert.deepEqual(
+                            new Set(audience.userIds),
+                            new Set(body.participantIds),
+                          );
+                        },
+                      ),
+                    ),
+                  actor === a ? 1 : 0,
                 );
                 assert.equal(result.version, request.expectedVersion + 1);
                 assert.deepEqual(
@@ -2031,7 +2055,6 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
                   ),
                 );
                 assert.equal(cleanups, 1);
-                assert.equal(errors.mock.callCount(), actor === a ? 1 : 0);
                 const current = await getRound(
                   a,
                   deletionRound.id,
@@ -2067,7 +2090,6 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
                   );
               } finally {
                 send.mock.restore();
-                errors.mock.restore();
                 await storage.send(new DeleteObjectCommand(head));
               }
             }
@@ -2186,7 +2208,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
           { ...a, userId: randomUUID() },
           round.id,
           c.userId,
-          '',
+          key(),
           { expectedVersion: version },
           'unauthorized',
           1,
@@ -2207,7 +2229,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
           '',
           { expectedVersion: version },
           'invalid_request_key',
-          1,
+          0,
         ],
         [
           b,
@@ -2290,15 +2312,17 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       );
       try {
         await trace(3, 'exclude', () =>
-          assert.rejects(
-            excludeMember(
-              a,
-              key(),
-              round.id,
-              c.userId,
-              { expectedVersion: version },
-              () => assert.fail('failed save must not publish'),
-            ),
+          assertServerRejects(
+            t,
+            () =>
+              excludeMember(
+                a,
+                key(),
+                round.id,
+                c.userId,
+                { expectedVersion: version },
+                () => assert.fail('failed save must not publish'),
+              ),
             (error: { code: string }) => error.code === '23514',
           ),
         );
@@ -2377,7 +2401,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       );
       version = excluded.version!;
       await t.test(
-        'confirm uses six statements regardless of expenses and preserves validation, rollback and replay',
+        '회차 확인이 지출 수와 무관하게 SQL 6회로 검증·롤백·재시도를 유지한다',
         async (t) => {
           const confirmation = await createRound(b, uuidV7(), group.id, {
             ...body,
@@ -2394,7 +2418,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
             ],
             [
               { ...b, userId: randomUUID() },
-              '',
+              key(),
               confirmation.id,
               { expectedVersion: 1 },
               'unauthorized',
@@ -2406,7 +2430,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
               confirmation.id,
               { expectedVersion: 1 },
               'invalid_request_key',
-              1,
+              0,
             ],
             [a, key(), confirmation.id, { expectedVersion: 1 }, 'forbidden', 4],
             [
@@ -2472,14 +2496,16 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
           );
           try {
             await trace(6, 'confirm', () =>
-              assert.rejects(
-                roundCommand(
-                  b,
-                  requestKey,
-                  confirmation.id,
-                  'confirm',
-                  request,
-                ),
+              assertServerRejects(
+                t,
+                () =>
+                  roundCommand(
+                    b,
+                    requestKey,
+                    confirmation.id,
+                    'confirm',
+                    request,
+                  ),
                 (error: { code: string }) => error.code === '23514',
               ),
             );
@@ -2578,7 +2604,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
             ),
           );
           await t.test(
-            'reopen uses AUTH then round then one atomic save without locks or replay',
+            '다시 열기가 인증·회차 조회·원자적 저장을 거치고 락·재시도 기록을 추가하지 않는다',
             async () => {
               const requestKey = key(),
                 request = { expectedVersion: result.version };
@@ -2593,13 +2619,13 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
                 ],
                 [
                   { ...b, userId: randomUUID() },
-                  '',
+                  key(),
                   confirmation.id,
                   { expectedVersion: 1 },
                   'unauthorized',
                   1,
                 ],
-                [b, '', confirmation.id, request, 'invalid_request_key', 1],
+                [b, '', confirmation.id, request, 'invalid_request_key', 0],
                 [
                   b,
                   key(),
@@ -2647,15 +2673,17 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
               );
               try {
                 await trace(3, 'reopen', () =>
-                  assert.rejects(
-                    roundCommand(
-                      b,
-                      requestKey,
-                      confirmation.id,
-                      'reopen',
-                      request,
-                      () => assert.fail('failed save must not publish'),
-                    ),
+                  assertServerRejects(
+                    t,
+                    () =>
+                      roundCommand(
+                        b,
+                        requestKey,
+                        confirmation.id,
+                        'reopen',
+                        request,
+                        () => assert.fail('failed save must not publish'),
+                      ),
                     (error: { code: string }) => error.code === '23514',
                   ),
                 );
@@ -2765,7 +2793,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         'already_excluded',
       );
       await t.test(
-        'settlement uses AUTH then one authorized query before finalization',
+        '정산 조회가 확정 전에 인증과 권한을 반영한 조회를 수행한다',
         async () => {
           for (const [actor, id, expected, count] of [
             [null, round.id, 'unauthorized', 0],
@@ -2830,7 +2858,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         ),
       );
       await t.test(
-        'draw uses AUTH then round then one atomic final save',
+        '추첨이 인증·회차 조회 후 최종 결과를 원자적으로 저장한다',
         async () => {
           const requestKey = key(),
             request = { expectedVersion: version };
@@ -2838,13 +2866,13 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
             [null, '', round.id, request, 'unauthorized', 0],
             [
               { ...a, userId: randomUUID() },
-              '',
+              key(),
               round.id,
               request,
               'unauthorized',
               1,
             ],
-            [a, '', round.id, request, 'invalid_request_key', 1],
+            [a, '', round.id, request, 'invalid_request_key', 0],
             [a, key(), round.id, { unexpected: true }, 'invalid_input', 0],
             [b, key(), round.id, request, 'forbidden', 2],
             [nonParticipant, key(), round.id, request, 'not_found', 2],
@@ -3038,7 +3066,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         setSettlementCheck(b, key(), round.id, checkBody),
       );
       await t.test(
-        'complete checks pending transfers inside one atomic save after AUTH; rejection and replay also use two queries',
+        '일반 종료가 인증 후 미수령 송금을 원자적으로 확인하고 거부·재시도도 SQL 2회로 처리한다',
         async () => {
           const requestKey = key(),
             request = { expectedVersion: version };
@@ -3046,13 +3074,13 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
             [null, '', round.id, request, 'unauthorized', 0],
             [
               { ...a, userId: randomUUID() },
-              '',
+              key(),
               round.id,
               request,
               'unauthorized',
               1,
             ],
-            [a, '', round.id, request, 'invalid_request_key', 1],
+            [a, '', round.id, request, 'invalid_request_key', 0],
             [a, key(), round.id, { unexpected: true }, 'invalid_input', 0],
             [b, key(), round.id, request, 'forbidden', 2],
             [nonParticipant, key(), round.id, request, 'not_found', 2],
@@ -3105,10 +3133,17 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
           );
           try {
             await trace(2, 'complete', () =>
-              assert.rejects(
-                roundCommand(a, requestKey, round.id, 'complete', request, () =>
-                  assert.fail('failed save must not publish'),
-                ),
+              assertServerRejects(
+                t,
+                () =>
+                  roundCommand(
+                    a,
+                    requestKey,
+                    round.id,
+                    'complete',
+                    request,
+                    () => assert.fail('failed save must not publish'),
+                  ),
                 (error: { code: string }) => error.code === '23514',
               ),
             );
@@ -3186,7 +3221,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         ),
       );
       await t.test(
-        'settlement omits accounts for non-KRW transfers in two SQL calls',
+        '외화 송금 정산 조회가 SQL 2회로 계좌 정보를 제외한다',
         async () => {
           const foreign = await createRound(a, uuidV7(), group.id, {
             ...body,
@@ -3231,17 +3266,18 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         }),
       );
       for (const [actor, count] of [
-        [null, 2],
+        [null, 0],
         [{ ...a, userId: randomUUID() }, 3],
       ] as const) {
         statements = [];
         await assert.rejects(
-          roundCommand(actor, '', cancelled.id, 'cancel', {
+          roundCommand(actor, key(), cancelled.id, 'cancel', {
             expectedVersion: 1,
           }),
           (error: { code: string }) => error.code === 'unauthorized',
         );
         assert.equal(statements.length, count);
+        if (count === 0) continue;
         assert.equal(statements[0], 'BEGIN');
         assert.equal(statements.at(-1), 'ROLLBACK');
         assert.ok(statements.every((sql) => !sql.includes('pg_advisory')));
@@ -3278,10 +3314,12 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       );
       try {
         await trace(6, 'cancel', () =>
-          assert.rejects(
-            roundCommand(a, failedCancelKey, cancelled.id, 'cancel', {
-              expectedVersion: 1,
-            }),
+          assertServerRejects(
+            t,
+            () =>
+              roundCommand(a, failedCancelKey, cancelled.id, 'cancel', {
+                expectedVersion: 1,
+              }),
             (error: { code: string; constraint: string }) =>
               error.code === '23514' && error.constraint === cancelConstraint,
           ),
@@ -3491,7 +3529,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         new Set([a.userId, b.userId]),
       );
       await t.test(
-        'force completion reads pending receivers and atomically saves status, version and replay in three queries',
+        '강제 종료가 SQL 3회로 미수령자를 조회하고 상태·버전·재시도 기록을 원자적으로 저장한다',
         async () => {
           const requestKey = key(),
             request = { expectedVersion: evenVersion };
@@ -3499,13 +3537,13 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
             [null, '', even.id, request, 'unauthorized', 0],
             [
               { ...a, userId: randomUUID() },
-              '',
+              key(),
               even.id,
               request,
               'unauthorized',
               1,
             ],
-            [a, '', even.id, request, 'invalid_request_key', 1],
+            [a, '', even.id, request, 'invalid_request_key', 0],
             [a, key(), even.id, { unexpected: true }, 'invalid_input', 0],
             [b, key(), even.id, request, 'forbidden', 2],
             [nonParticipant, key(), even.id, request, 'not_found', 2],
@@ -3572,15 +3610,17 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
           );
           try {
             await trace(3, 'force-complete', () =>
-              assert.rejects(
-                roundCommand(
-                  a,
-                  requestKey,
-                  even.id,
-                  'force-complete',
-                  request,
-                  () => assert.fail('failed save must not publish'),
-                ),
+              assertServerRejects(
+                t,
+                () =>
+                  roundCommand(
+                    a,
+                    requestKey,
+                    even.id,
+                    'force-complete',
+                    request,
+                    () => assert.fail('failed save must not publish'),
+                  ),
                 (error: { code: string }) => error.code === '23514',
               ),
             );

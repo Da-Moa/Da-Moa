@@ -134,7 +134,22 @@ npm run build
 
 빌드는 개발 서버를 종료한 상태에서 실행합니다. 빌드 결과를 로컬에서 실행하려면 `npm start`를 사용합니다.
 
-### DB·영수증 통합 테스트
+### 도메인·통합·백엔드 사용자 시나리오 테스트
+
+Docker를 실행한 뒤 아래 명령을 사용합니다. 각 명령은 임시 PostgreSQL을 자동으로 생성하고 테스트가 끝나거나 실패하면 해당 DB와 컨테이너를 삭제합니다. `test:all`은 DB 하나를 공유하며 계층별로 순서대로 실행합니다.
+
+```bash
+npm run test:domain
+npm run test:integration
+npm run test:scenario
+npm run test:all
+```
+
+Nest 앱은 포트를 열지 않고 모의 요청을 실제 라우터에 주입합니다. DB는 실제 PostgreSQL이며 카카오·스토리지·WebSocket 전송은 테스트 대역을 사용하므로 MinIO 서버는 필요하지 않습니다.
+
+CI처럼 `TEST_DATABASE_URL`을 직접 지정하면 자동 생성과 삭제를 생략합니다. 로컬 호스트의 이름에 `test`가 포함된 DB만 허용하며, 지정한 DB에는 실제 테스트 데이터를 저장합니다. 테스트 명령은 `.env.local`을 읽지 않습니다.
+
+### 실제 전송·브라우저 테스트용 DB와 스토리지
 
 위에서 만든 별도 테스트 DB와 개발용 버킷에서 분리한 MinIO 버킷을 사용합니다.
 
@@ -146,7 +161,7 @@ export MINIO_ENDPOINT='http://127.0.0.1:9000'
 export MINIO_BUCKET='da-moa-receipts-test'
 export MINIO_ACCESS_KEY='da_moa_local'
 export MINIO_SECRET_KEY='da_moa_minio_local'
-npm run test:integration
+npm run test:transport
 ```
 
 통합 테스트는 데이터를 실제로 저장합니다. 테스트 명령은 `.env.local`을 자동으로 읽지 않으므로 환경 변수를 직접 설정합니다.

@@ -22,7 +22,7 @@ const timestamp = 1000;
 const payload = (token: string) =>
   JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString());
 
-test('Nest JWT and previous codec accept each other with identical access/refresh claims and expiry boundaries', (t) => {
+test('Nest JWT와 기존 코덱이 동일한 클레임과 만료 경계로 서로의 토큰을 검증한다', (t) => {
   const jwt = new JwtService({ secret });
   const tokens = new TokenService(jwt);
   const sign = t.mock.method(jwt, 'sign');
@@ -88,7 +88,7 @@ test('Nest JWT and previous codec accept each other with identical access/refres
   );
 });
 
-test('Nest JWT keeps the previous malformed-token, signing-algorithm, application-claim and clock policy', () => {
+test('Nest JWT가 잘못된 토큰·서명 알고리즘·앱 클레임·시각 정책을 유지한다', () => {
   const tokens = new TokenService(new JwtService({ secret }));
   const claims = payload(
     createAccessToken('user-id', 'session-id', secret, timestamp),
@@ -162,7 +162,7 @@ test('Nest JWT keeps the previous malformed-token, signing-algorithm, applicatio
   }
 });
 
-test('stateless renewal shares sid, preserves purpose and never extends onboarding expiry', (t) => {
+test('무상태 토큰 갱신이 세션 ID·목적을 유지하고 온보딩 만료를 연장하지 않는다', (t) => {
   t.mock.method(Date, 'now', () => timestamp * 1000);
   const tokens = new TokenService(new JwtService({ secret }));
   for (const purpose of ['app', 'onboarding'] as const) {
@@ -206,7 +206,7 @@ test('stateless renewal shares sid, preserves purpose and never extends onboardi
   }
 });
 
-test('TokenModule initializes without a secret and its injected JWT provider resolves validated configuration per operation', async (t) => {
+test('토큰 모듈이 비밀 키 없이 초기화되고 각 작업에서 검증된 설정을 조회한다', async (t) => {
   const previous = process.env.AUTH_JWT_SECRET;
   t.after(() => {
     if (previous === undefined) delete process.env.AUTH_JWT_SECRET;

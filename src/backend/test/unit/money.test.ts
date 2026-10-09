@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { amountInputPattern, CURRENCY_CODES, expenseInputMaximum, formatAmountInput, formatMoney, minorLimit, minorToAmount, parseAmount, requireCurrency } from '../../../shared/domain/settle/money.ts'
 
-test('amount input adds thousands separators while preserving partial USD decimals', () => {
+test('금액 입력에 천 단위 구분자를 넣고 입력 중인 달러 소수 부분을 유지한다', () => {
   assert.equal(formatAmountInput('1234567', 'KRW'), '1,234,567')
   assert.equal(formatAmountInput('1,234,567', 'JPY'), '1,234,567')
   assert.equal(formatAmountInput('9007199254740993.01', 'USD'), '9,007,199,254,740,993.01')
@@ -12,7 +12,7 @@ test('amount input adds thousands separators while preserving partial USD decima
   assert.equal(formatAmountInput('-1', 'KRW'), null)
 })
 
-test('expense input clamps to the per-expense and remaining round limits', () => {
+test('지출 입력을 지출별 한도와 회차의 남은 한도에 맞춘다', () => {
   for (const currency of ['KRW', 'JPY'] as const) {
     const maximum = expenseInputMaximum('0', null, currency)
     assert.equal(maximum, 100_000_000n)
@@ -31,7 +31,7 @@ test('expense input clamps to the per-expense and remaining round limits', () =>
   assert.equal(formatAmountInput('1.', 'USD', usdMaximum), '1.')
 })
 
-test('currency decimals and amounts beyond Number precision remain exact', () => {
+test('통화 소수 자릿수와 숫자 정밀도 범위를 넘는 금액을 정확히 유지한다', () => {
   assert.equal(parseAmount('6000', 'KRW'), 6000n)
   assert.equal(parseAmount('1', 'JPY'), 1n)
   assert.equal(parseAmount('60', 'USD'), 6000n)
@@ -50,7 +50,7 @@ test('currency decimals and amounts beyond Number precision remain exact', () =>
   assert.equal(formatMoney('9'.repeat(300), 'JPY'), `${Array(100).fill('999').join(',')}엔`)
 })
 
-test('money boundaries reject invalid input instead of rounding or coercing', () => {
+test('잘못된 금액을 반올림·강제 변환 없이 거부한다', () => {
   for (const currency of CURRENCY_CODES) {
     for (const value of [0, 6000, NaN, Infinity, null, undefined, {}, '', ' ', ' 1', '1 ', '1\n', '1\r', '\t1', '0', '000', '-1', '+1', 'NaN', 'Infinity', '1e3', '1,000', '.01', '1.']) {
       assert.throws(() => parseAmount(value, currency), /invalid_amount/)
@@ -65,7 +65,7 @@ test('money boundaries reject invalid input instead of rounding or coercing', ()
   for (const value of ['1.5', 'NaN', 'Infinity', '', '1e3']) assert.throws(() => formatMoney(value, 'USD'), /invalid_amount/)
 })
 
-test('every supported currency preserves its ISO minor units through entry, limits and editing', () => {
+test('모든 지원 통화가 입력·한도·수정 과정에서 최소 화폐 단위를 유지한다', () => {
   for (const currency of CURRENCY_CODES) {
     const wholeUnits = ['KRW', 'JPY', 'VND'].includes(currency)
     const amount = wholeUnits ? '9007199254740993' : '9007199254740993.01'

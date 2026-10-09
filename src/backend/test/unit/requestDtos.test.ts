@@ -29,7 +29,7 @@ const expense = {
   ],
 };
 
-test('query DTOs convert numeric strings and enforce integer bounds with a default', async () => {
+test('조회 DTO가 숫자 문자열을 변환하고 기본값·정수 범위를 적용한다', async () => {
   assert.equal((await transform({ limit: '2' }, PageQueryDTO)).limit, 2);
   assert.equal((await transform({}, PageQueryDTO)).limit, 20);
   for (const limit of ['0', '101', '1.5', 'NaN'])
@@ -39,7 +39,7 @@ test('query DTOs convert numeric strings and enforce integer bounds with a defau
     );
 });
 
-test('expense DTOs transform nested shares and distinguish required creation from partial updates', async () => {
+test('지출 DTO가 중첩 분배를 변환하고 필수 생성 필드와 부분 수정 필드를 구분한다', async () => {
   const result = await transform(expense, CreateExpenseRequestDTO);
   assert.ok(result instanceof CreateExpenseRequestDTO);
   assert.ok(result.customShares);
@@ -70,7 +70,7 @@ test('expense DTOs transform nested shares and distinguish required creation fro
   );
 });
 
-test('JSON DTOs reject coerced versions, booleans and amounts while preserving domain error codes', async () => {
+test('JSON DTO가 버전·불리언·금액의 강제 변환을 거부하고 도메인 오류 코드를 유지한다', async () => {
   for (const expectedVersion of [
     '1',
     true,
@@ -100,7 +100,7 @@ test('JSON DTOs reject coerced versions, booleans and amounts while preserving d
   );
 });
 
-test('bank DTOs retain account leading zeroes and reject unknown fields and numeric-string versions', async () => {
+test('계좌 DTO가 선행 0을 유지하고 알 수 없는 필드·문자열 버전을 거부한다', async () => {
   const input = {
     bankCode: '004',
     accountNumber: '001234',

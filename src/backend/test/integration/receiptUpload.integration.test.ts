@@ -1,3 +1,8 @@
+import {
+  assertServerRejects,
+  withExpectedErrorLog,
+} from '../support/expectedErrorTestSupport';
+import { format } from 'node:util';
 import { before } from 'node:test';
 import { getPrismaClient } from '../support/domainTestSupport.ts';
 import assert from 'node:assert/strict';
@@ -28,9 +33,9 @@ import {
   removeReceipt,
   saveExpense,
 } from '../support/domainTestSupport.ts';
-import { completeTestOnboarding } from './bankTestSupport.ts';
+import { completeTestOnboarding } from '../support/bankTestSupport.ts';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
-import { drainReceiptQueue } from './receiptWorkerTestSupport';
+import { drainReceiptQueue } from '../support/receiptWorkerTestSupport';
 
 const testUrl = process.env.TEST_DATABASE_URL;
 if (
@@ -62,7 +67,7 @@ async function member() {
   )!;
 }
 
-test('receipt queue authorizes before reading and persists atomically after one admission query; a new worker resumes, retries and cleans deleted receipts', async (t) => {
+test('영수증 큐가 읽기 전 권한을 검사하고 원자적으로 저장하며 새 워커가 재개·재시도·정리한다', async (t) => {
   const db = createDatabaseClient(testUrl);
   await db.connect();
   const originalLog = process.env.DB_QUERY_LOG,
@@ -71,6 +76,30 @@ test('receipt queue authorizes before reading and persists atomically after one 
     putKeys: string[] = [],
     deleteKeys: string[] = [],
     failPut = false;
+  const uploadError = new Error('test unavailable MinIO');
+  const drainFailedJob = async (jobId: string | number) => {
+    const { calls } = await withExpectedErrorLog(
+      t,
+      (...args) => {
+        if (args[0] === 'receipt_upload_failed' && args[1] === uploadError)
+          return true;
+        const message = format(...args);
+        return (
+          message.startsWith('[worker(') &&
+          message.includes(`ERROR: Failed task ${jobId} (store_receipt,`) &&
+          message.includes(
+            "with error '영수증을 저장할 수 없어요. 같은 요청 키로 다시 시도해 주세요'",
+          )
+        );
+      },
+      () => drainReceiptQueue(),
+      2,
+    );
+    assert.equal(
+      calls.filter(([label]) => label === 'receipt_upload_failed').length,
+      1,
+    );
+  };
   let holdPut: ((objectKey: string) => Promise<void>) | undefined;
   try {
     await applyMigrations(db);
@@ -121,7 +150,7 @@ test('receipt queue authorizes before reading and persists atomically after one 
           putKeys.push(command.input.Key!);
           assert.deepEqual(command.input.Body, bytes);
           await holdPut?.(command.input.Key!);
-          if (failPut) throw new Error('test unavailable MinIO');
+          if (failPut) throw uploadError;
         }
         if (command instanceof DeleteObjectCommand)
           deleteKeys.push(command.input.Key!);
@@ -143,7 +172,7 @@ test('receipt queue authorizes before reading and persists atomically after one 
     await assert.rejects(
       addReceipt(
         { ...owner, userId: key() },
-        '',
+        key(),
         round.id,
         expense.id,
         upload(),
@@ -229,7 +258,7 @@ test('receipt queue authorizes before reading and persists atomically after one 
     assert.deepEqual(events, ['AUTH', 'SQL', 'READ', 'SQL']);
     assert.equal(published, 1);
     assert.equal(putKeys.length, 0);
-    await drainReceiptQueue();
+    await drainFailedJob(jobs.rows[0].id);
     assert.equal(
       (
         await db.query(
@@ -265,7 +294,7 @@ test('receipt queue authorizes before reading and persists atomically after one 
         '@swc-node/register/esm-register',
         '--input-type=module',
         '-e',
-        "const m=await import('./src/backend/test/integration/receiptWorkerTestSupport.ts');await m.drainReceiptQueue()",
+        "const m=await import('./src/backend/test/support/receiptWorkerTestSupport.ts');await m.drainReceiptQueue()",
       ],
       { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] },
     );
@@ -389,7 +418,7 @@ test('receipt queue authorizes before reading and persists atomically after one 
       await failureUtils.release();
     }
     failPut = true;
-    await drainReceiptQueue();
+    await drainFailedJob(failedJob.id);
     failPut = false;
     assert.equal(
       (
@@ -420,8 +449,9 @@ test('receipt queue authorizes before reading and persists atomically after one 
     await db.query(`CREATE FUNCTION reject_receipt_queue() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'test queue rollback'; END $$;
       CREATE TRIGGER reject_receipt_queue BEFORE INSERT ON expense_receipts FOR EACH ROW EXECUTE FUNCTION reject_receipt_queue()`);
     try {
-      await assert.rejects(
-        addReceipt(author, key(), round.id, expense.id, upload()),
+      await assertServerRejects(
+        t,
+        () => addReceipt(author, key(), round.id, expense.id, upload()),
         code('P0001'),
       );
       assert.equal(

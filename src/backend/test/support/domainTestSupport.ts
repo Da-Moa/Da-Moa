@@ -1,7 +1,11 @@
-import { RuntimeModule } from '../../global/runtime/runtime.module';
+import assert from 'node:assert/strict';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomUUID } from 'node:crypto';
+import { AppError } from '../../global/apiPayload/errors';
+import { createAccessToken } from './legacyTokenTestSupport';
+import { getSessionSecret } from '../../global/auth/authConfig';
+import { injectMockRequest, mockOrigin } from './mockHttpTestSupport';
 import type { Database } from '../../global/database/db';
-import { GroupModule } from '../../domain/group/module/group.module';
-import { SettleModule } from '../../domain/settle/module/settle.module';
 import { PrismaService } from '../../global/database/prisma.service';
 import { databaseRows } from '../../global/database/rowMapping';
 import {
@@ -10,11 +14,8 @@ import {
 } from './inspectionDatabase';
 import 'reflect-metadata';
 import { after } from 'node:test';
-import { NestFactory } from '@nestjs/core';
-import { Module, type Type } from '@nestjs/common';
-import { UserModule } from '../../domain/user/module/user.module';
-import { AuthModule } from '../../global/auth/module/auth.module';
-import { HealthModule } from '../../domain/health/module/health.module';
+import { createMockBackend } from './mockHttpTestSupport';
+import type { Type } from '@nestjs/common';
 import { UserService } from '../../domain/user/service/user.service';
 import { GroupService } from '../../domain/group/service/group.service';
 import {
@@ -24,89 +25,170 @@ import {
 import { AuthService } from '../../global/auth/service/auth.service';
 import { AuthorizationService } from '../../global/auth/service/authorization.service';
 import { UserRepository } from '../../domain/user/repository/user.repository';
-import { createValidationPipe } from '../../global/apiPayload/validation.pipe';
-import { PageQueryDTO } from '../../global/apiPayload/dto/req/page.request.dto';
-import {
-  CreateGroupRequestDTO,
-  CreateInviteRequestDTO,
-  GroupListQueryDTO,
-} from '../../domain/group/dto/req/group.request.dto';
-import {
-  BankAccountRequestDTO,
-  OnboardingRequestDTO,
-} from '../../domain/user/dto/req/user.request.dto';
-import { objectBody } from '../../global/util/mutations';
-import {
-  CreateRoundRequestDTO,
-  CreateExpenseRequestDTO,
-  ExpenseRequestDTO,
-  VersionRequestDTO,
-  ReceiptUploadRequestDTO,
-  SettlementCheckRequestDTO,
-  RoundListQueryDTO,
-  parseRoundListQuery,
-} from '../../domain/settle/dto/req/settle.request.dto';
-import {
-  parsePageQuery,
-  parseSearchPageQuery,
-} from '../../global/apiPayload/pageQuery';
-
-// Existing domain fixtures describe raw query strings. Run the same Nest DTO
-// boundary here; production Services accept only the resulting typed query.
-async function testQuery<T extends PageQueryDTO>(
-  dto: Type<T>,
-  query: URLSearchParams,
-): Promise<T> {
-  const values: Record<string, string | string[]> = Object.create(null);
-  for (const [name, value] of query) {
-    const previous = values[name];
-    values[name] =
-      previous === undefined
-        ? value
-        : [...(Array.isArray(previous) ? previous : [previous]), value];
-  }
-  return createValidationPipe().transform(values, {
-    type: 'query',
-    metatype: dto,
+type Observation = {
+  method: string;
+  capture?: (...values: any[]) => void;
+  result?: any;
+  error?: unknown;
+};
+const requests = new AsyncLocalStorage<Observation>();
+async function apiCall(
+  method: string,
+  access: Parameters<UserService['getMe']>[0],
+  path: string,
+  verb = 'GET',
+  body?: unknown,
+  key?: string,
+  capture?: (...values: any[]) => void,
+  chunks?: AsyncIterable<Uint8Array | string>,
+  contentType?: string,
+) {
+  const app = await testApplication(),
+    origin = mockOrigin(app);
+  const observation: Observation = { method, capture };
+  const token = access
+    ? createAccessToken(
+        access.userId,
+        access.sessionId,
+        getSessionSecret(),
+        Math.floor(Date.now() / 1000),
+        600,
+        access.purpose,
+      )
+    : null;
+  return requests.run(observation, async () => {
+    const response = await injectMockRequest(app, `${origin}/api/${path}`, {
+      method: verb,
+      headers: {
+        origin,
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        ...(key ? { 'idempotency-key': key } : {}),
+        ...(contentType || body !== undefined
+          ? { 'content-type': contentType ?? 'application/json' }
+          : {}),
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      chunks,
+    });
+    if (!response.ok) {
+      const payload = await response.json();
+      // SQL rollback tests retain the original service failure after the real Filter ran.
+      throw (
+        observation.error ??
+        new AppError(
+          response.status,
+          payload.code ?? payload.error,
+          payload.message ?? '로그인이 필요합니다',
+          payload.details ?? payload.detail,
+        )
+      );
+    }
+    if (method === 'getReceipt') {
+      assert.deepEqual(
+        Buffer.from(await response.arrayBuffer()),
+        Buffer.from(observation.result.content),
+      );
+    } else {
+      const payload = await response.json();
+      if (method === 'completeOnboarding') {
+        assert.equal(payload.data.id, observation.result.userId);
+        assert.equal(payload.data.accessToken, observation.result.accessToken);
+        assert.ok(
+          response.headers
+            .getSetCookie()
+            .some((cookie) => cookie.startsWith('da_moa_refresh=')),
+        );
+      } else if (method !== 'withdrawAccount')
+        assert.deepEqual(
+          payload.data,
+          JSON.parse(JSON.stringify(observation.result)),
+        );
+    }
+    return observation.result;
   });
 }
 
-async function testBody<T>(dto: Type<T>, input: unknown): Promise<T> {
-  return createValidationPipe().transform(objectBody(input), {
-    type: 'body',
-    metatype: dto,
+let context: ReturnType<typeof createMockBackend> | undefined;
+export async function testApplication() {
+  context ??= createMockBackend(async (app) => {
+    // Observe real service calls per request, including concurrent SQL regressions.
+    for (const type of [UserService, GroupService, SettleService]) {
+      const service = app.get(type as Type<any>);
+      for (const method of Object.getOwnPropertyNames(
+        Object.getPrototypeOf(service),
+      )) {
+        if (
+          ![
+            'completeOnboarding',
+            'updateBankAccount',
+            'withdrawAccount',
+            'getMe',
+            'listGroups',
+            'getGroup',
+            'createGroup',
+            'leaveGroup',
+            'createInvite',
+            'revokeInvite',
+            'getInvite',
+            'acceptInvite',
+            'listRounds',
+            'getRound',
+            'createRound',
+            'createExpense',
+            'updateExpense',
+            'deleteExpense',
+            'checkExclusion',
+            'excludeMember',
+            'roundCommand',
+            'setSettlementCheck',
+            'getSettlement',
+            'admitReceipt',
+            'saveReceipt',
+            'removeReceipt',
+            'getReceipt',
+          ].includes(method)
+        )
+          continue;
+        const original = service[method].bind(service);
+        service[method] = async (...args: any[]) => {
+          const observation = requests.getStore();
+          if (
+            observation?.method === method &&
+            observation.capture &&
+            typeof args.at(-1) === 'function'
+          ) {
+            const capture = args.at(-1);
+            args[args.length - 1] = (...values: any[]) => {
+              capture(...values);
+              observation.capture!(...values);
+            };
+          }
+          try {
+            const result = await original(...args);
+            if (observation?.method === method) observation.result = result;
+            return result;
+          } catch (error) {
+            if (observation) observation.error = error;
+            throw error;
+          }
+        };
+      }
+    }
   });
+  return (await context).app;
 }
-
-@Module({
-  imports: [
-    RuntimeModule,
-    UserModule,
-    GroupModule,
-    SettleModule,
-    AuthModule,
-    HealthModule,
-  ],
-})
-class DomainTestModule {}
-let context:
-  ReturnType<typeof NestFactory.createApplicationContext> | undefined;
 export async function testProvider<T>(token: Type<T>): Promise<T> {
-  context ??= NestFactory.createApplicationContext(DomainTestModule, {
-    logger: ['error'],
-  });
-  return (await context).get(token);
+  return (await testApplication()).get(token);
 }
 after(async () => {
-  if (context) await (await context).close();
+  if (context) await (await context).app.close();
 });
 
 export async function completeOnboarding(
   access: Parameters<UserService['completeOnboarding']>[0],
   input: unknown,
 ): Promise<Awaited<ReturnType<UserService['completeOnboarding']>>> {
-  const body = await testBody(OnboardingRequestDTO, input);
-  return (await testProvider(UserService)).completeOnboarding(access, body);
+  return apiCall('completeOnboarding', access, 'me/onboarding', 'POST', input);
 }
 
 export async function updateBankAccount(
@@ -114,20 +196,26 @@ export async function updateBankAccount(
   key: string,
   input: unknown,
 ): Promise<Awaited<ReturnType<UserService['updateBankAccount']>>> {
-  const body = await testBody(BankAccountRequestDTO, input);
-  return (await testProvider(UserService)).updateBankAccount(access, key, body);
+  return apiCall(
+    'updateBankAccount',
+    access,
+    'me/bank-account',
+    'PUT',
+    input,
+    key,
+  );
 }
 
 export async function withdrawAccount(
   ...args: Parameters<UserService['withdrawAccount']>
 ): Promise<Awaited<ReturnType<UserService['withdrawAccount']>>> {
-  return (await testProvider(UserService)).withdrawAccount(...args);
+  return apiCall('withdrawAccount', args[0], 'auth/withdraw', 'POST');
 }
 
 export async function getMe(
   ...args: Parameters<UserService['getMe']>
 ): Promise<Awaited<ReturnType<UserService['getMe']>>> {
-  return (await testProvider(UserService)).getMe(...args);
+  return apiCall('getMe', args[0], 'me');
 }
 
 export async function findOrCreateKakaoUser(
@@ -158,17 +246,13 @@ export async function listGroups(
   access: Parameters<GroupService['listGroups']>[0],
   query: URLSearchParams,
 ): Promise<Awaited<ReturnType<GroupService['listGroups']>>> {
-  const parsed = await testQuery(GroupListQueryDTO, query);
-  return (await testProvider(GroupService)).listGroups(
-    access,
-    parseSearchPageQuery(parsed),
-  );
+  return apiCall('listGroups', access, `groups?${query}`);
 }
 
 export async function getGroup(
   ...args: Parameters<GroupService['getGroup']>
 ): Promise<Awaited<ReturnType<GroupService['getGroup']>>> {
-  return (await testProvider(GroupService)).getGroup(...args);
+  return apiCall('getGroup', args[0], `groups/${encodeURIComponent(args[1])}`);
 }
 
 export async function createGroup(
@@ -177,11 +261,13 @@ export async function createGroup(
   body: unknown,
   captureAudience?: Parameters<GroupService['createGroup']>[3],
 ): Promise<Awaited<ReturnType<GroupService['createGroup']>>> {
-  const parsed = await testBody(CreateGroupRequestDTO, body);
-  return (await testProvider(GroupService)).createGroup(
+  return apiCall(
+    'createGroup',
     access,
+    'groups',
+    'POST',
+    body,
     key,
-    parsed,
     captureAudience,
   );
 }
@@ -189,7 +275,15 @@ export async function createGroup(
 export async function leaveGroup(
   ...args: Parameters<GroupService['leaveGroup']>
 ): Promise<Awaited<ReturnType<GroupService['leaveGroup']>>> {
-  return (await testProvider(GroupService)).leaveGroup(...args);
+  return apiCall(
+    'leaveGroup',
+    args[0],
+    `groups/${encodeURIComponent(args[2])}`,
+    'DELETE',
+    undefined,
+    args[1],
+    args[3],
+  );
 }
 
 export async function createInvite(
@@ -199,12 +293,13 @@ export async function createInvite(
   body: unknown,
   captureAudience?: Parameters<GroupService['createInvite']>[4],
 ): Promise<Awaited<ReturnType<GroupService['createInvite']>>> {
-  const parsed = await testBody(CreateInviteRequestDTO, body);
-  return (await testProvider(GroupService)).createInvite(
+  return apiCall(
+    'createInvite',
     access,
+    `groups/${encodeURIComponent(groupId)}/invites`,
+    'POST',
+    body,
     key,
-    groupId,
-    parsed,
     captureAudience,
   );
 }
@@ -212,19 +307,39 @@ export async function createInvite(
 export async function revokeInvite(
   ...args: Parameters<GroupService['revokeInvite']>
 ): Promise<Awaited<ReturnType<GroupService['revokeInvite']>>> {
-  return (await testProvider(GroupService)).revokeInvite(...args);
+  return apiCall(
+    'revokeInvite',
+    args[0],
+    `groups/${encodeURIComponent(args[2])}/invites/${encodeURIComponent(args[3])}`,
+    'DELETE',
+    undefined,
+    args[1],
+    args[4],
+  );
 }
 
 export async function getInvite(
   ...args: Parameters<GroupService['getInvite']>
 ): Promise<Awaited<ReturnType<GroupService['getInvite']>>> {
-  return (await testProvider(GroupService)).getInvite(...args);
+  return apiCall(
+    'getInvite',
+    args[0],
+    `invites/${encodeURIComponent(args[1])}`,
+  );
 }
 
 export async function acceptInvite(
   ...args: Parameters<GroupService['acceptInvite']>
 ): Promise<Awaited<ReturnType<GroupService['acceptInvite']>>> {
-  return (await testProvider(GroupService)).acceptInvite(...args);
+  return apiCall(
+    'acceptInvite',
+    args[0],
+    `invites/${encodeURIComponent(args[2])}/accept`,
+    'POST',
+    undefined,
+    args[1],
+    args[3],
+  );
 }
 
 export async function listRounds(
@@ -232,11 +347,10 @@ export async function listRounds(
   query: URLSearchParams,
   groupId?: string,
 ): Promise<Awaited<ReturnType<SettleService['listRounds']>>> {
-  const parsed = await testQuery(RoundListQueryDTO, query);
-  return (await testProvider(SettleService)).listRounds(
+  return apiCall(
+    'listRounds',
     access,
-    parseRoundListQuery(parsed),
-    groupId,
+    `${groupId ? `groups/${encodeURIComponent(groupId)}/rounds` : 'rounds'}?${query}`,
   );
 }
 
@@ -245,11 +359,10 @@ export async function getRound(
   roundId: string,
   query: URLSearchParams,
 ): Promise<Awaited<ReturnType<SettleService['getRound']>>> {
-  const parsed = await testQuery(PageQueryDTO, query);
-  return (await testProvider(SettleService)).getRound(
+  return apiCall(
+    'getRound',
     access,
-    roundId,
-    parsePageQuery(parsed),
+    `rounds/${encodeURIComponent(roundId)}?${query}`,
   );
 }
 
@@ -260,12 +373,13 @@ export async function createRound(
   body: unknown,
   captureAudience?: Parameters<SettleService['createRound']>[4],
 ): Promise<Awaited<ReturnType<SettleService['createRound']>>> {
-  const parsed = await testBody(CreateRoundRequestDTO, body);
-  return (await testProvider(SettleService)).createRound(
+  return apiCall(
+    'createRound',
     access,
+    `groups/${encodeURIComponent(groupId)}/rounds`,
+    'POST',
+    body,
     key,
-    groupId,
-    parsed,
     captureAudience,
   );
 }
@@ -278,21 +392,13 @@ export async function saveExpense(
   expenseId?: string,
   captureAudience?: Parameters<SettleService['createExpense']>[4],
 ): Promise<Awaited<ReturnType<SettleService['createExpense']>>> {
-  const service = await testProvider(SettleService);
-  if (expenseId)
-    return service.updateExpense(
-      access,
-      key,
-      roundId,
-      await testBody(ExpenseRequestDTO, body),
-      expenseId,
-      captureAudience,
-    );
-  return service.createExpense(
+  return apiCall(
+    expenseId ? 'updateExpense' : 'createExpense',
     access,
+    `rounds/${encodeURIComponent(roundId)}/expenses${expenseId ? '/' + encodeURIComponent(expenseId) : ''}`,
+    expenseId ? 'PATCH' : 'POST',
+    body,
     key,
-    roundId,
-    await testBody(CreateExpenseRequestDTO, body),
     captureAudience,
   );
 }
@@ -305,13 +411,13 @@ export async function deleteExpense(
   body: unknown,
   captureAudience?: Parameters<SettleService['deleteExpense']>[5],
 ): Promise<Awaited<ReturnType<SettleService['deleteExpense']>>> {
-  const parsed = await testBody(VersionRequestDTO, body);
-  return (await testProvider(SettleService)).deleteExpense(
+  return apiCall(
+    'deleteExpense',
     access,
+    `rounds/${encodeURIComponent(roundId)}/expenses/${encodeURIComponent(expenseId)}`,
+    'DELETE',
+    body,
     key,
-    roundId,
-    expenseId,
-    parsed,
     captureAudience,
   );
 }
@@ -319,7 +425,11 @@ export async function deleteExpense(
 export async function checkExclusion(
   ...args: Parameters<SettleService['checkExclusion']>
 ): Promise<Awaited<ReturnType<SettleService['checkExclusion']>>> {
-  return (await testProvider(SettleService)).checkExclusion(...args);
+  return apiCall(
+    'checkExclusion',
+    args[0],
+    `rounds/${encodeURIComponent(args[1])}/members/${encodeURIComponent(args[2])}/exclusion-check`,
+  );
 }
 
 export async function excludeMember(
@@ -330,13 +440,13 @@ export async function excludeMember(
   body: unknown,
   captureAudience?: Parameters<SettleService['excludeMember']>[5],
 ): Promise<Awaited<ReturnType<SettleService['excludeMember']>>> {
-  const parsed = await testBody(VersionRequestDTO, body);
-  return (await testProvider(SettleService)).excludeMember(
+  return apiCall(
+    'excludeMember',
     access,
+    `rounds/${encodeURIComponent(roundId)}/members/${encodeURIComponent(targetId)}/exclude`,
+    'POST',
+    body,
     key,
-    roundId,
-    targetId,
-    parsed,
     captureAudience,
   );
 }
@@ -349,13 +459,13 @@ export async function roundCommand(
   body: unknown,
   captureAudience?: Parameters<SettleService['roundCommand']>[5],
 ): Promise<Awaited<ReturnType<SettleService['roundCommand']>>> {
-  const parsed = await testBody(VersionRequestDTO, body);
-  return (await testProvider(SettleService)).roundCommand(
+  return apiCall(
+    'roundCommand',
     access,
+    `rounds/${encodeURIComponent(roundId)}${action === 'cancel' ? '' : '/' + action}`,
+    action === 'cancel' ? 'DELETE' : 'POST',
+    body,
     key,
-    roundId,
-    action,
-    parsed,
     captureAudience,
   );
 }
@@ -367,12 +477,13 @@ export async function setSettlementCheck(
   body: unknown,
   captureAudience?: Parameters<SettleService['setSettlementCheck']>[4],
 ): Promise<Awaited<ReturnType<SettleService['setSettlementCheck']>>> {
-  const parsed = await testBody(SettlementCheckRequestDTO, body);
-  return (await testProvider(SettleService)).setSettlementCheck(
+  return apiCall(
+    'setSettlementCheck',
     access,
+    `rounds/${encodeURIComponent(roundId)}/settlement-check`,
+    'POST',
+    body,
     key,
-    roundId,
-    parsed,
     captureAudience,
   );
 }
@@ -380,11 +491,15 @@ export async function setSettlementCheck(
 export async function getSettlement(
   ...args: Parameters<SettleService['getSettlement']>
 ): Promise<Awaited<ReturnType<SettleService['getSettlement']>>> {
-  return (await testProvider(SettleService)).getSettlement(...args);
+  return apiCall(
+    'getSettlement',
+    args[0],
+    `rounds/${encodeURIComponent(args[1])}/settlement`,
+  );
 }
 
-// Legacy direct fixtures enter through the same typed metadata validation as
-// native multipart HTTP; upload overloads do not exist in production Services.
+// Fixture overloads encode a lazy multipart stream for the registered Controller.
+// Production Services still receive only the parsed upload.
 export async function addReceipt(
   access: Parameters<SettleService['admitReceipt']>[0],
   key: string,
@@ -402,27 +517,35 @@ export async function addReceipt(
         captureAudience?: Parameters<SettleService['saveReceipt']>[2],
       ]
 ): Promise<Awaited<ReturnType<SettleService['saveReceipt']>>> {
-  const service = await testProvider(SettleService);
-  const admission = await service.admitReceipt(access, key, roundId, expenseId);
-  const upload: ReceiptUpload =
-    typeof input[0] === 'function'
-      ? await input[0]()
-      : {
-          expectedVersion: input[0],
-          bytes: input[1] as Uint8Array,
-          type: input[2] as string,
-        };
-  const body = await testBody(ReceiptUploadRequestDTO, {
-    expectedVersion: upload.expectedVersion,
-  });
-  const captureAudience =
-    typeof input[0] === 'function'
-      ? (input[1] as Parameters<SettleService['saveReceipt']>[2])
-      : input[3];
-  return service.saveReceipt(
-    admission,
-    { ...upload, expectedVersion: body.expectedVersion },
-    captureAudience,
+  const boundary = `mock-${randomUUID()}`;
+  const capture = typeof input[0] === 'function' ? input[1] : input[3];
+  const chunks = {
+    async *[Symbol.asyncIterator]() {
+      const upload: ReceiptUpload =
+        typeof input[0] === 'function'
+          ? await input[0]()
+          : {
+              expectedVersion: input[0],
+              bytes: input[1] as Uint8Array,
+              type: input[2] as string,
+            };
+      const name = upload.name ?? `receipt.${upload.type.split('/')[1]}`;
+      yield `--${boundary}\r\nContent-Disposition: form-data; name="expectedVersion"\r\n\r\n${upload.expectedVersion}\r\n`;
+      yield `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${name}"\r\nContent-Type: ${upload.type}\r\n\r\n`;
+      yield Buffer.from(upload.bytes);
+      yield `\r\n--${boundary}--\r\n`;
+    },
+  };
+  return apiCall(
+    'saveReceipt',
+    access,
+    `rounds/${encodeURIComponent(roundId)}/expenses/${encodeURIComponent(expenseId)}/receipts`,
+    'POST',
+    undefined,
+    key,
+    capture as ((...values: any[]) => void) | undefined,
+    chunks,
+    `multipart/form-data; boundary=${boundary}`,
   );
 }
 
@@ -435,14 +558,13 @@ export async function removeReceipt(
   body: unknown,
   captureAudience?: Parameters<SettleService['removeReceipt']>[6],
 ): Promise<Awaited<ReturnType<SettleService['removeReceipt']>>> {
-  const parsed = await testBody(VersionRequestDTO, body);
-  return (await testProvider(SettleService)).removeReceipt(
+  return apiCall(
+    'removeReceipt',
     access,
+    `rounds/${encodeURIComponent(roundId)}/expenses/${encodeURIComponent(expenseId)}/receipts/${encodeURIComponent(receiptId)}`,
+    'DELETE',
+    body,
     key,
-    roundId,
-    expenseId,
-    receiptId,
-    parsed,
     captureAudience,
   );
 }
@@ -450,7 +572,11 @@ export async function removeReceipt(
 export async function getReceipt(
   ...args: Parameters<SettleService['getReceipt']>
 ): Promise<Awaited<ReturnType<SettleService['getReceipt']>>> {
-  return (await testProvider(SettleService)).getReceipt(...args);
+  return apiCall(
+    'getReceipt',
+    args[0],
+    `receipts/${encodeURIComponent(args[1])}`,
+  );
 }
 
 export async function signInKakao(

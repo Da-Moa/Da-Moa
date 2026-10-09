@@ -17,7 +17,7 @@ const row = {
 }
 const client = (rows: object[]) => ({ prisma: { users: { findFirst: async () => rows[0] ?? null } } }) as unknown as Database
 
-test('authorization checks account state without querying session validity', async () => {
+test('권한 검사가 세션 유효성 조회 없이 계정 상태를 확인한다', async () => {
   const unauthorized = (error: unknown) => error instanceof AppError && error.status === 401
   const onboarding = (error: unknown) => error instanceof AppError && error.code === 'onboarding_required'
   await assert.rejects(requireAccount(client([row]), null), unauthorized)

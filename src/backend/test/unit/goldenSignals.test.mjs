@@ -7,7 +7,7 @@ import { collectDatabaseMetrics, httpMetrics, trackHttpResponse } from '../../gl
 import { AppError } from '../../global/apiPayload/errors.ts'
 import { errorResponse } from '../support/nativeResponseTestSupport.ts'
 
-test('golden signal counters preserve query behavior and omit failed DB capacity samples', async t => {
+test('핵심 지표 계측이 쿼리 동작을 유지하고 실패한 DB 용량 표본을 제외한다', async t => {
   t.mock.method(Client.prototype, 'connect', async () => {})
   t.mock.method(Client.prototype, 'end', async () => {})
   let failure = false

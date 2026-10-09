@@ -1,9 +1,6 @@
 import type { AccessToken } from '../../global/auth/native.ts';
-import {
-  completeOnboarding,
-  updateBankAccount,
-} from '../support/domainTestSupport.ts';
-import { getAccount } from '../support/domainTestSupport.ts';
+import { completeOnboarding, updateBankAccount } from './domainTestSupport.ts';
+import { getAccount } from './domainTestSupport.ts';
 
 type BankFixture = {
   bankName: string;

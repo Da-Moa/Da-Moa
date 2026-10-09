@@ -15,7 +15,7 @@ import {
   signInKakao,
   testProvider,
 } from '../support/domainTestSupport';
-import { completeTestOnboarding } from './bankTestSupport';
+import { completeTestOnboarding } from '../support/bankTestSupport';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
 import { uuidV7 } from '../../../shared/uuid';
 
@@ -28,7 +28,7 @@ if (
   throw new Error('An isolated local test database is required');
 process.env.DATABASE_URL = url;
 
-test('registered Prisma repositories preserve SQL counts, version races, replay and database error rollback', async (t) => {
+test('Prisma Repository가 SQL 횟수·버전 경쟁·재시도·DB 오류 롤백을 유지한다', async (t) => {
   const db = createDatabaseClient(url);
   await db.connect();
   t.after(() => db.end());
@@ -86,7 +86,7 @@ test('registered Prisma repositories preserve SQL counts, version races, replay 
   };
 
   await t.test(
-    'a model read is one SELECT and competing conditional updates have one winner',
+    '모델 조회는 SELECT 1회이며 경쟁하는 조건부 수정 중 하나만 성공한다',
     async () => {
       assert.equal(
         await trace(1, () => settle.hasRemainder(client, round.id)),
@@ -118,7 +118,7 @@ test('registered Prisma repositories preserve SQL counts, version races, replay 
   );
 
   await t.test(
-    'model writes preserve unique and foreign-key SQLSTATE and constraint names',
+    '모델 저장이 고유키·외래키 SQLSTATE와 제약 이름을 유지한다',
     async () => {
       const key = randomUUID();
       await trace(1, () =>
@@ -169,7 +169,7 @@ test('registered Prisma repositories preserve SQL counts, version races, replay 
   );
 
   await t.test(
-    'a CHECK failure rolls back the preceding model update; successful replay skips work',
+    'CHECK 제약 실패가 앞선 모델 수정을 롤백하고 성공한 재시도는 작업을 생략한다',
     async () => {
       const key = randomUUID(),
         payload = { expectedVersion: 2 };

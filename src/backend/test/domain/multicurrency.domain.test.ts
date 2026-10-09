@@ -27,7 +27,7 @@ import type {
   ExpenseRequestDTO,
 } from '../../../shared/domain/settle/index.ts';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
-import { completeTestOnboarding } from './bankTestSupport.ts';
+import { completeTestOnboarding } from '../support/bankTestSupport.ts';
 
 const testUrl = process.env.TEST_DATABASE_URL;
 if (
@@ -61,7 +61,7 @@ async function member(name: string) {
   return readAccessToken(session.accessToken)!;
 }
 
-test('expense currencies enforce five slots, exact per-currency totals and independent receipt confirmation', async (t) => {
+test('최대 5개 통화의 정확한 금액과 통화별 독립적인 수령 확인을 검증한다', async (t) => {
   const db = createDatabaseClient(testUrl!);
   await db.connect();
   try {
@@ -92,7 +92,7 @@ test('expense currencies enforce five slots, exact per-currency totals and indep
       });
 
     await t.test(
-      'creation rejects round currency; missing and unsupported expense currency fail before writes',
+      '회차 통화와 누락·미지원 지출 통화를 저장 전에 거부한다',
       async () => {
         await assert.rejects(
           createRound(a, uuidV7(), group.id, {
@@ -123,7 +123,7 @@ test('expense currencies enforce five slots, exact per-currency totals and indep
     );
 
     await t.test(
-      'sixth currency rejected; editing the last old expense frees its slot; deletion also frees a slot',
+      '여섯 번째 통화를 거부하고 마지막 지출 수정·삭제 시 통화 슬롯을 반환한다',
       async () => {
         const r = await round(),
           expenses = [];
@@ -219,7 +219,7 @@ test('expense currencies enforce five slots, exact per-currency totals and indep
     );
 
     await t.test(
-      'concurrent fifth/sixth currency additions and edits have one version winner',
+      '다섯 번째·여섯 번째 통화의 동시 추가·수정 중 하나만 성공한다',
       async () => {
         for (const editing of [false, true]) {
           const r = await round();
@@ -263,7 +263,7 @@ test('expense currencies enforce five slots, exact per-currency totals and indep
     );
 
     await t.test(
-      'currency changes require explicit custom amounts and retain author permissions',
+      '통화 변경에 명시적인 개별 분배 금액을 요구하고 작성자 권한을 유지한다',
       async () => {
         const r = await round();
         const expense = await saveExpense(a, randomUUID(), r.id, {
@@ -327,7 +327,7 @@ test('expense currencies enforce five slots, exact per-currency totals and indep
 
     for (const remainder of [false, true])
       await t.test(
-        `same sender/receiver confirmations are independent per currency; draw=${remainder}`,
+        `동일 송금자·수령인의 수령 확인을 통화별로 분리한다 (나머지: ${remainder ? '있음' : '없음'})`,
         async () => {
           const r = await round();
           await add(r.id, 'KRW', remainder ? '1001' : '1000');

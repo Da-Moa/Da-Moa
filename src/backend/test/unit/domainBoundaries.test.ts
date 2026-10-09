@@ -48,7 +48,7 @@ function reachable(file: string, seen = new Set<string>()): Set<string> {
   return seen
 }
 
-test('frontend and shared runtime graphs cannot reach backend; backend cannot reach frontend or app', () => {
+test('프론트·공유 모듈과 백엔드의 런타임 의존성을 분리한다', () => {
   for (const [file, source] of sources) {
     const client = source.statements.some(statement => ts.isExpressionStatement(statement) && ts.isStringLiteral(statement.expression) && statement.expression.text === 'use client')
     if (client || file.includes('/frontend/') || file.includes('/shared/') || file.includes('/app/')) {
@@ -59,7 +59,7 @@ test('frontend and shared runtime graphs cannot reach backend; backend cannot re
   }
 })
 
-test('domain controllers/services delegate SQL to repositories and Prisma owns business connections', () => {
+test('Controller·Service는 SQL을 Repository에 위임하고 Prisma가 업무 연결을 관리한다', () => {
   for (const domain of ['group', 'user', 'settle']) for (const area of ['controller', 'service']) {
     const source = readFileSync(`src/backend/domain/${domain}/${area}/${domain}.${area}.ts`, 'utf8')
     assert.doesNotMatch(source, /\.query\s*\(/)
@@ -72,7 +72,7 @@ test('domain controllers/services delegate SQL to repositories and Prisma owns b
   assert.match(readFileSync('prisma/schema.prisma', 'utf8'), /provider\s*=\s*"postgresql"/)
 })
 
-test('Nest owns backend routes and guards; transport/common UI retain their responsibilities', () => {
+test('Nest는 라우팅·Guard를 맡고 전송 계층·공통 UI는 각자의 책임을 유지한다', () => {
   assert.ok(!files.some(file => file.includes('/app/') && file.endsWith('/route.ts')))
   assert.match(readFileSync('src/backend/domain/app.module.ts', 'utf8'), /provide: APP_GUARD, useClass: JwtGuard/)
   for (const file of ['src/backend/global/util/invalidationUtil.ts', 'src/backend/global/websocket/controller/wsController.mjs']) {
@@ -86,7 +86,7 @@ test('Nest owns backend routes and guards; transport/common UI retain their resp
   assert.doesNotMatch(readFileSync('src/backend/domain/user/controller/user.controller.ts', 'utf8'), /cookies\.set/)
 })
 
-test('business routes use one HTTP mapping per controller method and class providers', () => {
+test('Controller 메서드마다 HTTP 경로 하나를 연결하고 클래스 Provider를 사용한다', () => {
   for (const domain of ['group', 'settle', 'health', 'user']) {
     const controller = readFileSync(`src/backend/domain/${domain}/controller/${domain}.controller.ts`, 'utf8')
     assert.doesNotMatch(controller, /@All|handle\(/)
@@ -95,7 +95,7 @@ test('business routes use one HTTP mapping per controller method and class provi
 })
 
 
-test('backend runtime imports remain acyclic after module wiring', () => {
+test('모듈 연결 후에도 백엔드 런타임 import에 순환 의존성이 없다', () => {
   const completed = new Set<string>()
   const active: string[] = []
   const visit = (file: string) => {

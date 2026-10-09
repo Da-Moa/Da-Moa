@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { createBackend } from '../../domain/main';
+import {
+  createMockBackend,
+  mockFetch,
+  mockOrigin,
+} from '../support/mockHttpTestSupport';
 import { SettleService } from '../../domain/settle/service/settle.service';
 import {
   CreateExpenseRequestDTO,
@@ -16,7 +20,7 @@ import {
   createRound,
   signInKakao,
 } from '../support/domainTestSupport';
-import { completeTestOnboarding } from './bankTestSupport';
+import { completeTestOnboarding } from '../support/bankTestSupport';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
 import { uuidV7 } from '../../../shared/uuid';
 
@@ -29,7 +33,7 @@ if (
   throw new Error('An isolated local test database is required');
 process.env.DATABASE_URL = url;
 
-test('expense HTTP separates create/update DTOs, preserves trimmed UTF-16 limits and hashes original field values for replay', async (t) => {
+test('지출 생성·수정 DTO를 분리하고 이름 길이와 원문 기반 멱등성 검증을 유지한다', async (t) => {
   const db = createDatabaseClient(url);
   await db.connect();
   t.after(() => db.end());
@@ -60,10 +64,10 @@ test('expense HTTP separates create/update DTOs, preserves trimmed UTF-16 limits
     name: '지출 경계',
     participantIds: [a.userId, b.userId],
   });
-  const { app } = await createBackend();
+  const { app } = await createMockBackend();
   t.after(() => app.close());
-  await app.listen(0, '127.0.0.1');
-  const origin = await app.getUrl();
+
+  const origin = mockOrigin(app);
   const service = app.get(SettleService);
   for (const [method, dto] of [
     ['createExpense', CreateExpenseRequestDTO],
@@ -107,7 +111,7 @@ test('expense HTTP separates create/update DTOs, preserves trimmed UTF-16 limits
     key = randomUUID(),
   ) => {
     sql = [];
-    const response = await fetch(
+    const response = await mockFetch(app)(
       `${origin}/api/rounds/${round.id}/expenses${expenseId ? `/${expenseId}` : ''}`,
       {
         method: expenseId ? 'PATCH' : 'POST',

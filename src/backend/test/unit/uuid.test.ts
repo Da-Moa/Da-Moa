@@ -8,7 +8,7 @@ import { AppError } from '../../global/apiPayload/errors';
 const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto')!;
 afterEach(() => Object.defineProperty(globalThis, 'crypto', originalCrypto));
 
-test('UUIDv4 and UUIDv7 work when HTTP origins expose only getRandomValues', () => {
+test('HTTP 환경에 getRandomValues만 있어도 UUIDv4·UUIDv7을 생성한다', () => {
   const getRandomValues = crypto.getRandomValues.bind(crypto);
   Object.defineProperty(globalThis, 'crypto', {
     configurable: true,
@@ -25,7 +25,7 @@ test('UUIDv4 and UUIDv7 work when HTTP origins expose only getRandomValues', () 
   }
 });
 
-test('UUIDv7 carries a millisecond timestamp, version/variant and random suffix', () => {
+test('UUIDv7에 밀리초 시각·버전·변형·무작위 접미사를 담는다', () => {
   const before = Date.now();
   const ids = Array.from({ length: 1000 }, () => uuidV7());
   const after = Date.now();
@@ -37,7 +37,7 @@ test('UUIDv7 carries a millisecond timestamp, version/variant and random suffix'
   }
 });
 
-test('mutation keys accept UUID versions 1 through 8 and preserve invalid-key errors', () => {
+test('변경 키가 UUID 버전 1~8을 허용하고 잘못된 키 오류를 유지한다', () => {
   const ticket = uuidV7(),
     payload = { amount: '1000' };
   const digest = mutationDigest(ticket, payload);

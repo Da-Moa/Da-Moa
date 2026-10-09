@@ -3,7 +3,7 @@ import test from 'node:test';
 import { dispatch as GET } from '../support/httpTestSupport';
 import { createAccessToken } from '../support/legacyTokenTestSupport.ts';
 
-test('Settle dispatch preserves routes, origin, JSON and multipart validation before DB work', async (t) => {
+test('정산 요청 전달이 DB 작업 전에 경로·Origin·JSON·multipart 검증을 유지한다', async (t) => {
   const previous = process.env.AUTH_JWT_SECRET;
   process.env.AUTH_JWT_SECRET =
     'isolated-settle-unit-test-secret-at-least-32-bytes';

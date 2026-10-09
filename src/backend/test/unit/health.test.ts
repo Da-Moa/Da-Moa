@@ -9,7 +9,11 @@ import {
 } from '../../domain/health/service/health.service';
 import { createAccessToken } from '../support/legacyTokenTestSupport.ts';
 import { PrismaService } from '../../global/database/prisma.service';
-import { createBackend } from '../../domain/main';
+import {
+  createMockBackend,
+  mockFetch,
+  mockOrigin,
+} from '../support/mockHttpTestSupport';
 import type { INestApplication } from '@nestjs/common';
 import type {
   ReferenceObject,
@@ -38,7 +42,7 @@ const previousSecret = process.env.AUTH_JWT_SECRET;
 before(async () => {
   process.env.AUTH_JWT_SECRET =
     'health-controller-unit-test-secret-at-least-32-bytes';
-  ({ app } = await createBackend());
+  ({ app } = await createMockBackend());
   const repository = app.get(HealthRepository);
   repository.checkDatabase = async () => {
     await probes.database!();
@@ -50,8 +54,8 @@ before(async () => {
   const worker = app.get<HealthWorkerProbes>(HEALTH_WORKER_PROBES);
   worker.worker = () => probes.worker!();
   worker.workerReady = () => probes.workerReady!();
-  await app.listen(0, '127.0.0.1');
-  origin = await app.getUrl();
+
+  origin = mockOrigin(app);
 });
 after(async () => {
   await app?.close();
@@ -61,10 +65,12 @@ after(async () => {
 
 const healthResponse = (scope: HealthScope, checks: Partial<HealthProbes>) => {
   probes = checks;
-  return fetch(`${origin}/api/health${scope === 'overall' ? '' : '/' + scope}`);
+  return mockFetch(app)(
+    `${origin}/api/health${scope === 'overall' ? '' : '/' + scope}`,
+  );
 };
 
-test('worker liveness skips dependencies and readiness reports each failure without exposing errors', async () => {
+test('워커 생존 확인은 의존성을 생략하고 준비 상태는 장애 원인을 노출하지 않는다', async () => {
   for (const failed of [undefined, 'worker', 'database', 'minio'] as const) {
     const calls: string[] = [];
     const probe = async (name: string) => {
@@ -101,7 +107,7 @@ test('worker liveness skips dependencies and readiness reports each failure with
   ]) {
     assert.equal(
       (
-        await fetch(`${origin}/api/health/${check.join('/')}`, {
+        await mockFetch(app)(`${origin}/api/health/${check.join('/')}`, {
           headers: {
             authorization: `Bearer ${createAccessToken('health-user', 'health-session')}`,
           },
@@ -120,7 +126,7 @@ test('worker liveness skips dependencies and readiness reports each failure with
   }
 });
 
-test('individual health checks only probe the selected dependency and report failures', async () => {
+test('개별 헬스 확인이 선택한 의존성만 검사하고 장애를 보고한다', async () => {
   for (const scope of ['database', 'minio'] as const) {
     for (const up of [true, false]) {
       const calls: string[] = [];
@@ -156,7 +162,7 @@ test('individual health checks only probe the selected dependency and report fai
   }
 });
 
-test('liveness skips dependencies and overall health reports each failure', async () => {
+test('생존 확인은 의존성을 생략하고 전체 헬스 확인은 모든 장애를 보고한다', async () => {
   let databaseChecks = 0;
   let minioUp = false;
   const probes = {
@@ -207,13 +213,17 @@ test('liveness skips dependencies and overall health reports each failure', asyn
   assert.equal(overall.headers.get('Cache-Control'), 'no-store');
 });
 
-test('health routes require MinIO read and write quorum', async () => {
+test('저장소 헬스 확인에 읽기·쓰기 정족수를 요구한다', async () => {
   const live = await GET(new Request('http://localhost/api/health/live'), {
     params: Promise.resolve({ check: ['live'] }),
   });
   assert.equal(live.status, 200);
   const unknown = await GET(
-    new Request('http://localhost/api/health/unknown'),
+    new Request('http://localhost/api/health/unknown', {
+      headers: {
+        authorization: `Bearer ${createAccessToken('health-user', 'health-session')}`,
+      },
+    }),
     { params: Promise.resolve({ check: ['unknown'] }) },
   );
   assert.equal(unknown.status, 404);
@@ -265,7 +275,7 @@ test('health routes require MinIO read and write quorum', async () => {
   }
 });
 
-test('every Nest health route calls its matching service method for GET and HEAD', async (t) => {
+test('모든 Nest 헬스 경로가 GET·HEAD에서 대응하는 Service 메서드를 호출한다', async (t) => {
   const service = app.get(HealthService);
   const calls: string[] = [];
   const methods = {
@@ -285,7 +295,9 @@ test('every Nest health route calls its matching service method for GET and HEAD
   for (const [path, name] of Object.entries(methods)) {
     for (const method of ['GET', 'HEAD']) {
       calls.length = 0;
-      const response = await fetch(`${origin}/api/health${path}`, { method });
+      const response = await mockFetch(app)(`${origin}/api/health${path}`, {
+        method,
+      });
       assert.equal(response.status, 503);
       assert.equal(response.headers.get('Cache-Control'), 'no-store');
       assert.deepEqual(calls, [name]);
@@ -299,7 +311,7 @@ test('every Nest health route calls its matching service method for GET and HEAD
   }
 });
 
-test('synchronous probe errors become down results and concurrent failures are retained', async () => {
+test('동기 검사 오류를 장애 상태로 변환하고 동시 장애 결과를 모두 유지한다', async () => {
   const service = new HealthService(
     {
       checkDatabase: () => {

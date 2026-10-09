@@ -20,7 +20,7 @@ process.env.DATABASE_URL = url;
 process.env.AUTH_JWT_SECRET ||=
   'prisma-integration-only-secret-at-least-32-bytes';
 
-test('Prisma models read migrated accounts and transactions roll back model writes', async (t) => {
+test('Prisma 모델이 마이그레이션된 계좌를 조회하고 트랜잭션 실패 시 수정을 롤백한다', async (t) => {
   const native = createDatabaseClient(url);
   await native.connect();
   t.after(() => native.end());

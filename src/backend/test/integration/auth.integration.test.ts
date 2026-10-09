@@ -37,7 +37,7 @@ import { applyMigrations } from '../../../../scripts/migrations.mjs';
 import {
   completeTestOnboarding as completeOnboarding,
   updateTestBankAccount as updateBankAccount,
-} from './bankTestSupport.ts';
+} from '../support/bankTestSupport.ts';
 
 const testUrl = process.env.TEST_DATABASE_URL;
 if (
@@ -399,7 +399,7 @@ before(async () => {
   }
 });
 
-test('onboarding purpose, bank normalization, version conflicts, stateless authentication, and historical migration', async () => {
+test('온보딩 토큰·계좌 정규화·버전 충돌·무상태 인증·과거 데이터 마이그레이션을 검증한다', async () => {
   const subject = `integration-${randomUUID()}`;
   const limited = await signInKakao(subject, profile);
   const limitedAccess = accessOf(limited);
@@ -467,7 +467,7 @@ test('onboarding purpose, bank normalization, version conflicts, stateless authe
   assert.equal((await getAccount(access)).id, app.userId);
 });
 
-test('withdrawal checks all unfinished history including excluded members; rejoin preserves identity but never memberships', async () => {
+test('제외된 회원의 미완료 이력도 탈퇴를 차단하고 재가입 시 기존 모임을 복구하지 않는다', async () => {
   const owner = await newAccount();
   const participant = await newAccount();
   const third = await newAccount();
@@ -645,7 +645,7 @@ test('withdrawal checks all unfinished history including excluded members; rejoi
   );
 });
 
-test('refresh JWTs can be reused without stored sessions and preserve onboarding purpose', async () => {
+test('저장된 세션 없이 갱신 JWT를 재사용하고 온보딩 목적을 유지한다', async () => {
   const tokens = await testProvider(TokenService);
   const user = await newAccount();
   const refresh = readRefreshToken(user.session.refreshToken)!;
@@ -685,7 +685,7 @@ test('refresh JWTs can be reused without stored sessions and preserve onboarding
   await assert.rejects(getAccount(limitedAccess, true), codeIs('unauthorized'));
 });
 
-test('sign-in racing withdrawal cannot leave a API access for a deleted account', async () => {
+test('로그인과 탈퇴가 경쟁해도 탈퇴 계정에 API 접근 권한을 남기지 않는다', async () => {
   const user = await newAccount();
   const [login] = await Promise.all([
     signInKakao(user.subject, profile),

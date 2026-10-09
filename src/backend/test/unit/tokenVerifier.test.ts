@@ -3,7 +3,11 @@ import test from 'node:test';
 import { PassThrough } from 'node:stream';
 import { JwtService } from '@nestjs/jwt';
 import type { Request, Response, NextFunction } from 'express';
-import { createBackend } from '../../domain/main';
+import {
+  createMockBackend,
+  mockFetch,
+  mockOrigin,
+} from '../support/mockHttpTestSupport';
 import { UserService } from '../../domain/user/service/user.service';
 import { RealtimeUserRepository } from '../../domain/user/native';
 import { TokenService } from '../../global/auth/service/token.service';
@@ -15,7 +19,7 @@ import {
 } from '../support/legacyTokenTestSupport';
 import { REFRESH_TOKEN_COOKIE_NAME } from '../../global/auth/native';
 
-test('actual HTTP Guard, runtime limiter and WebSocket authorization use the same registered JWT verifier', async (t) => {
+test('모의 요청 Guard·요청 제한기·WebSocket 권한 검사가 동일한 JWT 검증기를 사용한다', async (t) => {
   const previous = process.env.AUTH_JWT_SECRET;
   process.env.AUTH_JWT_SECRET =
     'registered-verifier-test-secret-at-least-32-bytes';
@@ -23,15 +27,15 @@ test('actual HTTP Guard, runtime limiter and WebSocket authorization use the sam
     if (previous === undefined) delete process.env.AUTH_JWT_SECRET;
     else process.env.AUTH_JWT_SECRET = previous;
   });
-  const { app } = await createBackend(async (app) => {
+  const { app } = await createMockBackend(async (app) => {
     const limiter = app.get(RateLimitService);
     app.use((request: Request, response: Response, next: NextFunction) => {
       if (!limiter.handleRequest(request, response)) next();
     });
   });
   t.after(() => app.close());
-  await app.listen(0, '127.0.0.1');
-  const origin = await app.getUrl();
+
+  const origin = mockOrigin(app);
   const tokens = app.get(TokenService);
   const verifier = t.mock.method(app.get(JwtService), 'verify');
   const principal = {
@@ -60,7 +64,7 @@ test('actual HTTP Guard, runtime limiter and WebSocket authorization use the sam
   const limiter = app.get(RateLimitService);
   const realtime = app.get(RealtimeAuthorizationService);
   const getMe = async (token: string) => {
-    const response = await fetch(`${origin}/api/me`, {
+    const response = await mockFetch(app)(`${origin}/api/me`, {
       headers: { authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(10000),
     });
@@ -124,7 +128,7 @@ test('actual HTTP Guard, runtime limiter and WebSocket authorization use the sam
     600,
     'app',
   );
-  const response = await fetch(`${origin}/api/auth/access-token`, {
+  const response = await mockFetch(app)(`${origin}/api/auth/access-token`, {
     method: 'POST',
     headers: { origin, cookie: `${REFRESH_TOKEN_COOKIE_NAME}=${refresh}` },
     signal: AbortSignal.timeout(10000),

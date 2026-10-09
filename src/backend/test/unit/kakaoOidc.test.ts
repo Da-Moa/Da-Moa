@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import test from 'node:test';
 import { ResponseCookies } from '@edge-runtime/cookies';
-import { createBackend } from '../../domain/main';
+import {
+  createMockBackend,
+  mockFetch,
+  mockOrigin,
+} from '../support/mockHttpTestSupport';
 import { AuthService } from '../../global/auth/service/auth.service';
 import { KakaoOidcClient } from '../../global/auth/service/kakaoOidc.client';
 import {
@@ -10,7 +14,7 @@ import {
   REFRESH_TOKEN_COOKIE_NAME,
   RETURN_TO_COOKIE_NAME,
 } from '../../global/auth/native';
-import { requestTestServer } from '../support/actualHttpTestSupport';
+import { requestMockServer } from '../support/mockHttpTestSupport';
 
 const config = {
   clientId: 'isolated-oidc-client',
@@ -51,7 +55,7 @@ function idToken(
   return `${content}.${sign('RSA-SHA256', Buffer.from(content), privateKey).toString('base64url')}`;
 }
 
-test('Kakao OIDC SDK validates state before exchange and retries only missing JWKS keys', async (t) => {
+test('카카오 OIDC SDK가 교환 전에 상태를 검증하고 누락된 JWKS 키만 재시도한다', async (t) => {
   const client = new KakaoOidcClient();
   const authorization = await client.authorize(config);
   const url = new URL(authorization.url);
@@ -201,7 +205,7 @@ test('Kakao OIDC SDK validates state before exchange and retries only missing JW
   );
 });
 
-test('actual Kakao HTTP uses the injected OIDC client and rejects invalid tokens before account writes', async (t) => {
+test('카카오 요청이 주입된 OIDC 클라이언트를 사용하고 계정 저장 전에 잘못된 토큰을 거부한다', async (t) => {
   const previous = Object.fromEntries(
     [
       'NODE_ENV',
@@ -224,10 +228,10 @@ test('actual Kakao HTTP uses the injected OIDC client and rejects invalid tokens
       else process.env[name] = value;
     }
   });
-  const { app } = await createBackend();
+  const { app } = await createMockBackend();
   t.after(() => app.close());
-  await app.listen(0, '127.0.0.1');
-  const origin = await app.getUrl();
+
+  const origin = mockOrigin(app);
   const oidc = app.get(KakaoOidcClient);
   const authenticate = t.mock.method(oidc, 'authenticate');
   const authorize = t.mock.method(oidc, 'authorize');
@@ -322,7 +326,7 @@ test('actual Kakao HTTP uses the injected OIDC client and rejects invalid tokens
     },
   );
   const login = async () => {
-    const response = await requestTestServer(
+    const response = await requestMockServer(
       origin,
       new Request('http://localhost:3000/api/auth/kakao?returnTo=/home/groups'),
     );
@@ -347,7 +351,7 @@ test('actual Kakao HTTP uses the injected OIDC client and rejects invalid tokens
     );
   };
   const finish = async (error?: 'failed' | 'invalid') => {
-    const response = await requestTestServer(origin, await login(), 15_000);
+    const response = await requestMockServer(origin, await login(), 15_000);
     assert.equal(response.status, 307);
     assert.equal(response.headers.get('cache-control'), 'private, no-store');
     const destination = new URL(response.headers.get('location')!);
@@ -417,7 +421,7 @@ test('actual Kakao HTTP uses the injected OIDC client and rejects invalid tokens
     mode = label;
     claims = payload;
     header = protectedHeader;
-    // Keep the +61s boundary fixed while the actual HTTP request is in flight.
+    // Keep the +61s boundary fixed while the mock requests request is in flight.
     // A wall-clock second rollover otherwise turns this invalid token into +60s.
     if (label === 'future-iat') {
       const now = Date.now();

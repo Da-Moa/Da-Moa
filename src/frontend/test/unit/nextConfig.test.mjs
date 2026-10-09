@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-test('development origins only allow hosts explicitly configured in the environment', async t => {
+test('개발 Origin이 환경에 명시한 호스트만 허용한다', async t => {
   const previous = process.env.NEXT_DEV_ALLOWED_ORIGINS
   t.after(() => {
     if (previous === undefined) delete process.env.NEXT_DEV_ALLOWED_ORIGINS

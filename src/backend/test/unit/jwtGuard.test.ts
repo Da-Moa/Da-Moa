@@ -27,7 +27,7 @@ const proxy = (request: Request) =>
   jwtGuard(request) ??
   new Response(null, { headers: { 'x-middleware-next': '1' } });
 
-test('global JwtGuard replaces untrusted user data and CurrentUser reads only verified claims', () => {
+test('전역 JWT Guard가 신뢰하지 않는 사용자 데이터를 교체하고 검증된 클레임만 전달한다', () => {
   const previous = process.env.AUTH_JWT_SECRET;
   process.env.AUTH_JWT_SECRET =
     'isolated-jwt-principal-test-secret-at-least-32-bytes';
@@ -92,7 +92,7 @@ test('global JwtGuard replaces untrusted user data and CurrentUser reads only ve
   }
 });
 
-test('Node JWT guard rejects protected requests before body validation and permits only explicit public routes', async () => {
+test('JWT Guard가 본문 검증 전에 보호 요청을 거부하고 명시적인 공개 경로만 허용한다', async () => {
   const previous = process.env.AUTH_JWT_SECRET;
   process.env.AUTH_JWT_SECRET =
     'isolated-jwt-guard-test-secret-at-least-32-bytes';

@@ -10,7 +10,7 @@ import { readAccessToken } from '../support/legacyTokenTestSupport.ts';
 import { withdrawAccount } from '../support/domainTestSupport.ts';
 import { AppError } from '../../global/apiPayload/errors.ts';
 import { getDatabasePool } from '../support/domainTestSupport.ts';
-import { completeTestOnboarding } from './bankTestSupport.ts';
+import { completeTestOnboarding } from '../support/bankTestSupport.ts';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
 
 const testUrl = process.env.TEST_DATABASE_URL;
@@ -26,7 +26,7 @@ process.env.DATABASE_URL = testUrl;
 process.env.AUTH_JWT_SECRET ||=
   'isolated-kakao-signin-test-secret-at-least-32-bytes';
 
-test('Kakao sign-in creates only missing provider identities with one SQL and no explicit transaction or lock', async (t) => {
+test('카카오 로그인이 없는 사용자만 SQL 1회로 생성하고 명시적 트랜잭션·락을 사용하지 않는다', async (t) => {
   const db = new pg.Client({ connectionString: testUrl });
   await db.connect();
   const oldQueryLog = process.env.DB_QUERY_LOG;

@@ -1,3 +1,4 @@
+import { assertServerRejects } from '../support/expectedErrorTestSupport';
 import { mockPoolConnection, queryText } from '../support/dbTestSupport.ts';
 import { before } from 'node:test';
 import { getPrismaClient } from '../support/domainTestSupport.ts';
@@ -24,7 +25,7 @@ import {
   revokeInvite,
 } from '../support/domainTestSupport.ts';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
-import { completeTestOnboarding } from './bankTestSupport.ts';
+import { completeTestOnboarding } from '../support/bankTestSupport.ts';
 import {
   createRound,
   getRound,
@@ -32,7 +33,11 @@ import {
 } from '../support/domainTestSupport.ts';
 import { RealtimePublisher } from '../../global/util/invalidationUtil.ts';
 import { testProvider } from '../support/domainTestSupport.ts';
-import { createBackend } from '../../domain/main';
+import {
+  createMockBackend,
+  mockFetch,
+  mockOrigin,
+} from '../support/mockHttpTestSupport';
 import { GroupService } from '../../domain/group/service/group.service';
 import {
   CreateGroupRequestDTO,
@@ -51,7 +56,7 @@ if (
 process.env.DATABASE_URL = database;
 process.env.AUTH_JWT_SECRET ||= 'isolated-group-test-secret-at-least-32-bytes';
 
-test('Group autocommit reads, group/invite creation/revocation and atomic replay/replacement; departure uses 2/3 business queries', async (t) => {
+test('모임 조회·생성·초대·탈퇴의 SQL 횟수와 원자적 재시도를 검증한다', async (t) => {
   const client = createDatabaseClient(database);
   await client.connect();
   try {
@@ -134,12 +139,12 @@ test('Group autocommit reads, group/invite creation/revocation and atomic replay
     };
     try {
       await t.test(
-        'native Body DTOs own Group field validation and normalization; HTTP writes preserve replay, errors and SQL counts',
+        '모임 DTO가 입력을 검증·정규화하고 오류 응답과 SQL 횟수를 유지한다',
         async (ht) => {
-          const { app } = await createBackend();
+          const { app } = await createMockBackend();
           ht.after(async () => app.close());
-          await app.listen(0, '127.0.0.1');
-          const origin = await app.getUrl(),
+
+          const origin = mockOrigin(app),
             service = app.get(GroupService);
           const accessToken = createAccessToken(owner.userId, owner.sessionId);
           const create = service.createGroup.bind(service),
@@ -173,7 +178,7 @@ test('Group autocommit reads, group/invite creation/revocation and atomic replay
             headers: Record<string, string> = {},
           ) => {
             statements = [];
-            const response = await fetch(`${origin}${path}`, {
+            const response = await mockFetch(app)(`${origin}${path}`, {
               method: 'POST',
               headers: {
                 origin,
@@ -388,8 +393,9 @@ test('Group autocommit reads, group/invite creation/revocation and atomic replay
         `ALTER TABLE group_members ADD CONSTRAINT ${constraint} CHECK (group_id <> '${rejectedKey}') NOT VALID`,
       );
       try {
-        await assert.rejects(
-          createGroup(owner, rejectedKey, body),
+        await assertServerRejects(
+          t,
+          () => createGroup(owner, rejectedKey, body),
           (error: { code: string; constraint: string }) =>
             error.code === '23514' && error.constraint === constraint,
         );
@@ -669,8 +675,9 @@ test('Group autocommit reads, group/invite creation/revocation and atomic replay
       );
       try {
         await trace(5, 'session', () =>
-          assert.rejects(
-            acceptInvite(outsider, failedAcceptKey, token),
+          assertServerRejects(
+            t,
+            () => acceptInvite(outsider, failedAcceptKey, token),
             (error: { code: string }) => error.code === '23514',
           ),
         );
@@ -942,10 +949,12 @@ test('Group autocommit reads, group/invite creation/revocation and atomic replay
         `ALTER TABLE mutation_requests ADD CONSTRAINT ${inviteConstraint} CHECK (request_key <> '${failedReplacementKey}') NOT VALID`,
       );
       try {
-        await assert.rejects(
-          createInvite(owner, failedReplacementKey, group.id, {
-            replaceInviteId: invite.id,
-          }),
+        await assertServerRejects(
+          t,
+          () =>
+            createInvite(owner, failedReplacementKey, group.id, {
+              replaceInviteId: invite.id,
+            }),
           (error: { code: string }) => error.code === '23514',
         );
         assert.equal(
@@ -1010,8 +1019,9 @@ test('Group autocommit reads, group/invite creation/revocation and atomic replay
       );
       try {
         await trace(3, null, () =>
-          assert.rejects(
-            revokeInvite(owner, failedRevokeKey, group.id, replaced.id),
+          assertServerRejects(
+            t,
+            () => revokeInvite(owner, failedRevokeKey, group.id, replaced.id),
             (error: { code: string }) => error.code === '23514',
           ),
         );
@@ -1132,8 +1142,9 @@ test('Group autocommit reads, group/invite creation/revocation and atomic replay
         `ALTER TABLE mutation_requests ADD CONSTRAINT ${departureConstraint} CHECK (request_key <> '${failedDepartureKey}') NOT VALID`,
       );
       try {
-        await assert.rejects(
-          leaveGroup(owner, failedDepartureKey, group.id),
+        await assertServerRejects(
+          t,
+          () => leaveGroup(owner, failedDepartureKey, group.id),
           (error: { code: string }) => error.code === '23514',
         );
         assert.equal(

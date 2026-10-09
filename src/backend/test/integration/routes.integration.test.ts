@@ -1,3 +1,4 @@
+import { withExpectedErrorLog } from '../support/expectedErrorTestSupport';
 import { ReceiptStorage } from '../../global/util/minio.util';
 import { ReceiptWorker } from '../../domain/settle/service/receiptWorker';
 import { SettleRepository } from '../../domain/settle/repository/settle.repository';
@@ -6,12 +7,16 @@ import type { Database } from '../../global/database/db';
 import type { INestApplication } from '@nestjs/common';
 import { channel } from 'node:diagnostics_channel';
 import { before, after } from 'node:test';
-import { createBackend } from '../../domain/main';
+import {
+  createMockBackend,
+  mockFetch,
+  mockOrigin,
+} from '../support/mockHttpTestSupport';
 import { AuthService } from '../../global/auth/service/auth.service';
 
 import { PrismaService } from '../../global/database/prisma.service';
 
-import { drainReceiptQueue } from './receiptWorkerTestSupport';
+import { drainReceiptQueue } from '../support/receiptWorkerTestSupport';
 import { uuidV7 } from '../../../shared/uuid.ts';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -21,7 +26,7 @@ import { readAccessToken } from '../support/legacyTokenTestSupport.ts';
 import { createDatabaseClient } from '../../global/database/db.ts';
 import { CURRENCY_CODES } from '../../../shared/domain/settle/money.ts';
 
-const me = (req: Request) => fetch(req.url, { headers: req.headers });
+const me = (req: Request) => mockFetch(app)(req.url, { headers: req.headers });
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
 
 const testUrl = process.env.TEST_DATABASE_URL;
@@ -80,7 +85,7 @@ async function request(
   const multipart = body instanceof FormData;
   if (body !== undefined && !multipart)
     headers.set('content-type', 'application/json');
-  const response = await fetch(`${origin}/api/${path}`, {
+  const response = await mockFetch(app)(`${origin}/api/${path}`, {
     method,
     headers,
     ...(body === undefined
@@ -90,7 +95,7 @@ async function request(
   return response;
 }
 
-test('Actual Nest HTTP plus real PostgreSQL contracts enforce Bearer JWTs, origin, idempotency, normalized images and personalized output', async (t) => {
+test('모의 Nest 요청과 실제 PostgreSQL이 JWT·Origin·멱등성·이미지 정규화·개인별 응답을 검증한다', async (t) => {
   const storage = t.mock.method(app.get(ReceiptStorage), 'putReceipt');
   const repository = t.mock.method(
     app.get(SettleRepository),
@@ -851,7 +856,7 @@ test('Actual Nest HTTP plus real PostgreSQL contracts enforce Bearer JWTs, origi
   }
 });
 
-test('Nest rejects invalid DTOs without querying PostgreSQL', async () => {
+test('Nest가 잘못된 DTO를 PostgreSQL 조회 없이 거부한다', async () => {
   const actor = await session('DTO 경계');
   let queries = 0;
   const count = () => queries++;
@@ -877,7 +882,7 @@ test('Nest rejects invalid DTOs without querying PostgreSQL', async () => {
   }
 });
 
-test('Nest HTTP expense failure rolls back the expense, version and replay metadata', async (t) => {
+test('지출 요청 실패가 지출·버전·재시도 메타데이터를 롤백한다', async (t) => {
   const actor = await session('롤백-A');
   const member = await session('롤백-B');
   const group = await request('groups', actor.accessToken, 'POST', {
@@ -915,22 +920,23 @@ test('Nest HTTP expense failure rolls back the expense, version and replay metad
       [actor.userId],
     );
     await client.query(rows[0].ddl);
-    const logger = t.mock.method(console, 'error', () => {});
-    const failed = await request(
-      `rounds/${roundId}/expenses`,
-      actor.accessToken,
-      'POST',
-      {
-        currency: 'KRW',
-        description: '실패한 저장',
-        amount: '1000',
-        payerId: actor.userId,
-        splitMode: 'ALL',
-        expectedVersion: 1,
-      },
+    const { result: failed } = await withExpectedErrorLog(
+      t,
+      (label, error) =>
+        label === 'Unhandled server error' &&
+        error.code === '23514' &&
+        error.constraint === 'nest_http_reject_mutation',
+      () =>
+        request(`rounds/${roundId}/expenses`, actor.accessToken, 'POST', {
+          currency: 'KRW',
+          description: '실패한 저장',
+          amount: '1000',
+          payerId: actor.userId,
+          splitMode: 'ALL',
+          expectedVersion: 1,
+        }),
     );
     assert.equal(failed.status, 503);
-    assert.ok(logger.mock.callCount() > 0);
     const prisma = app.get(PrismaService).client;
     assert.equal(
       await prisma.expenses.count({ where: { round_id: roundId } }),
@@ -956,15 +962,15 @@ test('Nest HTTP expense failure rolls back the expense, version and replay metad
 });
 
 before(async () => {
-  ({ app } = await createBackend());
-  await app.listen(0, '127.0.0.1');
-  origin = await app.getUrl();
+  ({ app } = await createMockBackend());
+
+  origin = mockOrigin(app);
 });
 after(async () => {
   await app?.close();
 });
 
-test('Nest HTTP uses the registered account Provider and retains transaction context', async (t) => {
+test('Nest 요청이 등록된 계정 Provider와 트랜잭션 컨텍스트를 사용한다', async (t) => {
   const actor = await session('DI 검증');
   const accounts = app.get(AccountStateRepository);
   const blocked = t.mock.method(accounts, 'findState', async () => null);

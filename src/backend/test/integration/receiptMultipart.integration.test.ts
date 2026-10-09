@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { request as httpRequest } from 'node:http';
 import test from 'node:test';
 import sharp from 'sharp';
-import { createBackend } from '../../domain/main';
+import {
+  createMockBackend,
+  mockFetch,
+  mockOrigin,
+} from '../support/mockHttpTestSupport';
 import { SettleService } from '../../domain/settle/service/settle.service';
 import { createDatabaseClient } from '../../global/database/db';
 import { readAccessToken } from '../support/legacyTokenTestSupport.ts';
@@ -15,8 +18,8 @@ import {
   saveExpense,
   signInKakao,
 } from '../support/domainTestSupport';
-import { completeTestOnboarding } from './bankTestSupport';
-import { drainReceiptQueue } from './receiptWorkerTestSupport';
+import { completeTestOnboarding } from '../support/bankTestSupport';
+import { drainReceiptQueue } from '../support/receiptWorkerTestSupport';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
 import { uuidV7 } from '../../../shared/uuid';
 import {
@@ -33,7 +36,7 @@ if (
   throw new Error('An isolated local test database is required');
 process.env.DATABASE_URL = url;
 
-test('native Nest multipart preserves field/error/size/digest contracts and delivers one Buffer to the registered Service', async (t) => {
+test('Nest multipart 파서가 필드·오류·크기·해시 계약을 유지하고 Buffer 하나를 Service에 전달한다', async (t) => {
   const db = createDatabaseClient(url);
   await db.connect();
   t.after(() => db.end());
@@ -87,12 +90,12 @@ test('native Nest multipart preserves field/error/size/digest contracts and deli
     data.set('expectedVersion', version);
     return data;
   };
-  const { app } = await createBackend();
+  const { app } = await createMockBackend();
   t.after(() => app.close());
-  await app.listen(0, '127.0.0.1');
-  const origin = await app.getUrl();
+
+  const origin = mockOrigin(app);
   const path = `/api/rounds/${round.id}/expenses/${expense.id}/receipts`;
-  const documented = await fetch(`${origin}/api/openapi.json`, {
+  const documented = await mockFetch(app)(`${origin}/api/openapi.json`, {
     headers: { authorization: `Bearer ${owner.accessToken}` },
   });
   assert.equal(documented.status, 200);
@@ -135,7 +138,7 @@ test('native Nest multipart preserves field/error/size/digest contracts and deli
     extra: Record<string, string> = {},
     key = randomUUID(),
   ) =>
-    fetch(`${origin}${path}`, {
+    mockFetch(app)(`${origin}${path}`, {
       method: 'POST',
       headers: { ...headers(key), ...extra },
       body,
@@ -205,39 +208,12 @@ test('native Nest multipart preserves field/error/size/digest contracts and deli
     );
 
   const raw = async (body: Buffer, contentType: string, key = randomUUID()) =>
-    new Promise<Response>((resolve, reject) => {
-      const request = httpRequest(
-        `${origin}${path}`,
-        {
-          method: 'POST',
-          headers: {
-            ...headers(key),
-            'content-type': contentType,
-            'transfer-encoding': 'chunked',
-          },
-        },
-        (response) => {
-          const chunks: Buffer[] = [];
-          response.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-          response.on('error', reject);
-          response.on('end', () =>
-            resolve(
-              new Response(Buffer.concat(chunks), {
-                status: response.statusCode,
-                headers: response.headers as Record<string, string>,
-              }),
-            ),
-          );
-        },
-      );
-      request.on('error', reject);
-      request.setTimeout(10000, () =>
-        request.destroy(new Error('Chunked upload timed out')),
-      );
-      // Deliberately omit Content-Length and split framing independently of multipart parts.
-      for (let offset = 0; offset < body.length; offset += 32768)
-        request.write(body.subarray(offset, offset + 32768));
-      request.end();
+    mockFetch(app)(`${origin}${path}`, {
+      method: 'POST',
+      headers: { ...headers(key), 'content-type': contentType },
+      chunks: Array.from({ length: Math.ceil(body.length / 32768) }, (_, i) =>
+        body.subarray(i * 32768, (i + 1) * 32768),
+      ),
     });
   const encoded = new Request('http://localhost', {
     method: 'POST',

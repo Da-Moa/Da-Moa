@@ -28,7 +28,7 @@ process.env.DATABASE_URL = testUrl;
 process.env.AUTH_JWT_SECRET ||=
   'integration-only-not-a-production-secret-0123456789';
 
-test('account writes and migrations preserve digits with corrected layouts and allow unknown formats', async () => {
+test('계좌 저장·마이그레이션이 숫자를 보존하고 수정된 형식과 미등록 형식을 허용한다', async () => {
   const client = createDatabaseClient(testUrl);
   await client.connect();
   try {

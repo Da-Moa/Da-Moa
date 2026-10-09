@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { channel } from 'node:diagnostics_channel';
-import { createServer } from 'node:http';
 import test, { before, after } from 'node:test';
-import { createBackend } from '../../domain/main';
+import {
+  createMockBackend,
+  mockFetch,
+  mockOrigin,
+} from '../support/mockHttpTestSupport';
 import type { INestApplication } from '@nestjs/common';
 import { ReceiptWorker } from '../../domain/settle/index.ts';
 import { createDatabaseClient } from '../../global/database/dbClient.mjs';
@@ -22,26 +25,24 @@ process.env.DATABASE_URL = testUrl;
 let app: INestApplication;
 let origin: string;
 before(async () => {
-  ({ app } = await createBackend());
-  await app.listen(0, '127.0.0.1');
-  origin = await app.getUrl();
+  ({ app } = await createMockBackend());
+
+  origin = mockOrigin(app);
 });
 after(async () => {
   await app?.close();
 });
 
-test('individual health routes probe PostgreSQL and MinIO independently', async (t) => {
+test('각 헬스 API가 PostgreSQL과 저장소를 독립적으로 검사한다', async (t) => {
   let minioStatus = 200;
   const paths: string[] = [];
-  const minio = createServer((request, response) => {
-    paths.push(request.url!);
-    response.writeHead(minioStatus).end();
+  process.env.MINIO_ENDPOINT = 'http://mock-minio.test';
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
+    paths.push(new URL(String(input)).pathname);
+    return new Response(null, { status: minioStatus });
   });
-  await new Promise<void>((resolve) => minio.listen(0, '127.0.0.1', resolve));
-  const address = minio.address() as { port: number };
-  process.env.MINIO_ENDPOINT = `http://127.0.0.1:${address.port}`;
   const get = (check: string) =>
-    fetch(`${origin}/api/health${check ? '/' + check : ''}`);
+    mockFetch(app)(`${origin}/api/health${check ? '/' + check : ''}`);
   try {
     minioStatus = 503;
     const previousLog = process.env.DB_QUERY_LOG;
@@ -144,11 +145,17 @@ test('individual health routes probe PostgreSQL and MinIO independently', async 
       checks: { database: 'down' },
     });
   } finally {
-    await new Promise<void>((resolve) => minio.close(() => resolve()));
+    process.env.DATABASE_URL = testUrl;
   }
 });
 
-test('receipt worker probes distinguish startup, queue errors, dependencies and shutdown', async () => {
+test('영수증 워커의 시작·큐 오류·의존성 장애·종료 상태를 구분한다', async (t) => {
+  const enabled = process.env.RECEIPT_WORKER_ENABLED;
+  process.env.RECEIPT_WORKER_ENABLED = 'true';
+  t.after(() => {
+    if (enabled === undefined) delete process.env.RECEIPT_WORKER_ENABLED;
+    else process.env.RECEIPT_WORKER_ENABLED = enabled;
+  });
   process.env.DATABASE_URL = testUrl;
   const db = createDatabaseClient(testUrl);
   await db.connect();
@@ -158,17 +165,19 @@ test('receipt worker probes distinguish startup, queue errors, dependencies and 
     await db.end();
   }
   let minioStatus = 200;
-  const minio = createServer((_request, response) =>
-    response.writeHead(minioStatus).end(),
-  );
-  await new Promise<void>((resolve) => minio.listen(0, '127.0.0.1', resolve));
   Object.assign(process.env, {
-    MINIO_ENDPOINT: `http://127.0.0.1:${(minio.address() as { port: number }).port}`,
+    MINIO_ENDPOINT: 'http://mock-minio.test',
     MINIO_BUCKET: 'worker-health-test',
     MINIO_ACCESS_KEY: 'test',
     MINIO_SECRET_KEY: 'test',
   });
-  const get = (scope: string) => fetch(`${origin}/api/health/${scope}`);
+  t.mock.method(
+    globalThis,
+    'fetch',
+    async () => new Response(null, { status: minioStatus }),
+  );
+  const get = (scope: string) =>
+    mockFetch(app)(`${origin}/api/health/${scope}`);
   let runner: Awaited<ReturnType<ReceiptWorker['start']>> | undefined;
   try {
     assert.equal((await get('worker')).status, 503);
@@ -236,6 +245,6 @@ test('receipt worker probes distinguish startup, queue errors, dependencies and 
       await app.get(ReceiptWorker).stop();
       await runner.promise;
     }
-    await new Promise<void>((resolve) => minio.close(() => resolve()));
+    process.env.DATABASE_URL = testUrl;
   }
 });

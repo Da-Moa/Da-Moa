@@ -5,7 +5,7 @@ import sharp from 'sharp'
 import { validateReceipt } from '../../domain/settle/service/receiptFile.ts'
 import { MAX_RECEIPT_BYTES } from '../../../shared/domain/settle/receipt.ts'
 
-test('receipt upload accepts AVIF/AV1 up to 10 MiB and preserves bytes without encoding', async t => {
+test('10 MiB 이하 AVIF·AV1 영수증을 허용하고 재인코딩 없이 바이트를 유지한다', async t => {
   const png = await sharp({ create: { width: 2, height: 3, channels: 3, background: '#369' } }).png().toBuffer()
   const avif = await sharp(png).avif().toBuffer()
   t.mock.method(sharp.prototype, 'avif', () => { throw new Error('The backend must never encode receipts') })
