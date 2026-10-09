@@ -1,0 +1,325 @@
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/backend/generated/prisma"
+  previewFeatures = ["partialIndexes"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model expense_receipts {
+  id             String   @id
+  expense_id     String
+  uploaded_by    String
+  mime_type      String
+  byte_size      Int
+  sha256         String
+  object_key     String?  @unique
+  created_at     BigInt
+  storage_status String   @default("READY")
+  expenses       expenses @relation(fields: [expense_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users          users    @relation(fields: [uploaded_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([expense_id], map: "expense_receipts_expense_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model has constraints using non-default deferring rules and requires additional setup for migrations. Visit https://pris.ly/d/constraint-deferring for more info.
+model expense_shares {
+  expense_id            String
+  user_id               String
+  round_id              String
+  final_amount_minor    Decimal?      @db.Decimal
+  received_remainder    Boolean?
+  assigned_amount_minor Decimal?      @db.Decimal
+  expenses              expenses      @relation(fields: [expense_id, round_id], references: [id, round_id], onDelete: Cascade, onUpdate: NoAction)
+  round_members         round_members @relation(fields: [round_id, user_id], references: [round_id, user_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([expense_id, user_id])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model has constraints using non-default deferring rules and requires additional setup for migrations. Visit https://pris.ly/d/constraint-deferring for more info.
+model expenses {
+  id                                                       String             @id
+  round_id                                                 String
+  author_id                                                String
+  payer_id                                                 String
+  description                                              String
+  amount_minor                                             Decimal            @db.Decimal
+  split_mode                                               String
+  base_share_minor                                         Decimal?           @db.Decimal
+  remainder_units                                          Int?
+  created_at                                               BigInt
+  updated_at                                               BigInt
+  updated_by                                               String
+  currency                                                 String
+  expense_receipts                                         expense_receipts[]
+  expense_shares                                           expense_shares[]
+  round_members_expenses_round_id_author_idToround_members round_members      @relation("expenses_round_id_author_idToround_members", fields: [round_id, author_id], references: [round_id, user_id], onDelete: NoAction, onUpdate: NoAction)
+  rounds                                                   rounds             @relation(fields: [round_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  round_members_expenses_round_id_payer_idToround_members  round_members      @relation("expenses_round_id_payer_idToround_members", fields: [round_id, payer_id], references: [round_id, user_id], onDelete: NoAction, onUpdate: NoAction)
+  users                                                    users              @relation(fields: [updated_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([id, round_id])
+  @@index([round_id, created_at, id], map: "expenses_round_created_idx")
+  @@index([round_id, currency], map: "expenses_round_currency_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model group_invites {
+  id         String  @id
+  group_id   String
+  created_by String
+  token_hash String  @unique
+  created_at BigInt
+  expires_at BigInt
+  revoked_at BigInt?
+  users      users   @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  groups     groups  @relation(fields: [group_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model group_members {
+  group_id  String
+  user_id   String
+  joined_at BigInt
+  left_at   BigInt?
+  groups    groups  @relation(fields: [group_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users     users   @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([group_id, user_id])
+  @@index([user_id], map: "group_members_active_user_idx", where: raw("(left_at IS NULL)"))
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model groups {
+  id            String          @id
+  creator_id    String
+  name          String
+  created_at    BigInt
+  group_invites group_invites[]
+  group_members group_members[]
+  users         users           @relation(fields: [creator_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  rounds        rounds[]
+}
+
+model mutation_requests {
+  actor_id          String
+  operation         String
+  request_key       String
+  request_digest    String
+  resource_id       String?
+  response_metadata Json
+  created_at        BigInt
+  users             users   @relation(fields: [actor_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([actor_id, operation, request_key])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model openbanking_connections {
+  user_id                    String  @id
+  connection_id              String  @unique @db.Uuid
+  environment                String
+  status                     String
+  user_seq_no                String?
+  access_token               String?
+  refresh_token              String?
+  expires_at                 BigInt?
+  refresh_expires_at         BigInt?
+  scope                      String?
+  authenticated_at           BigInt?
+  version                    Int     @default(0)
+  operation_id               String? @db.Uuid
+  operation_kind             String?
+  operation_started_at       BigInt?
+  operation_finished_at      BigInt?
+  operation_outcome          String?
+  operation_lease_until      BigInt?
+  disconnect_requested_at    BigInt?
+  disconnect_attempts        Int     @default(0)
+  disconnect_next_attempt_at BigInt?
+  disconnect_last_error      String?
+  disconnected_at            BigInt?
+  verification_window_at     BigInt?
+  verification_count         Int     @default(0)
+  users                      users   @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([disconnect_next_attempt_at], map: "openbanking_disconnect_due_idx", where: raw("(status = 'DISCONNECT_PENDING'::text)"))
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model openbanking_oauth_states {
+  state_hash                 String           @id
+  user_id                    String
+  session_id                 String
+  connection_id              String           @db.Uuid
+  environment                String
+  context                    String
+  return_to                  String
+  created_at                 BigInt
+  expires_at                 BigInt
+  used_at                    BigInt?
+  invalidated_at             BigInt?
+  exchange_started_at        BigInt?
+  exchange_finished_at       BigInt?
+  exchange_outcome           String?
+  cleanup_user_seq_no        String?
+  cleanup_access_token       String?
+  cleanup_refresh_token      String?
+  cleanup_expires_at         BigInt?
+  cleanup_refresh_expires_at BigInt?
+  cleanup_scope              String?
+  cleanup_operation_id       String?          @db.Uuid
+  cleanup_started_at         BigInt?
+  cleanup_outcome            String?
+  cleaned_at                 BigInt?
+  refresh_sessions           refresh_sessions @relation(fields: [session_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users                      users            @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([user_id], map: "openbanking_oauth_user_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model openbanking_service_tokens {
+  environment       String  @id
+  access_token      String?
+  expires_at        BigInt?
+  version           Int     @default(0)
+  operation_id      String? @db.Uuid
+  operation_outcome String?
+  lease_until       BigInt?
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model refresh_sessions {
+  id                       String                     @id
+  user_id                  String
+  token_hash               String                     @unique
+  issued_at                BigInt
+  expires_at               BigInt
+  revoked_at               BigInt?
+  purpose                  String                     @default("app")
+  openbanking_oauth_states openbanking_oauth_states[]
+  users                    users                      @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([user_id], map: "refresh_sessions_active_user_idx", where: raw("(revoked_at IS NULL)"))
+  @@index([expires_at], map: "refresh_sessions_expiry_idx")
+}
+
+model round_members {
+  round_id                                                                      String
+  user_id                                                                       String
+  display_name_snapshot                                                         String
+  joined_at                                                                     BigInt
+  excluded_at                                                                   BigInt?
+  expense_shares                                                                expense_shares[]
+  expenses_expenses_round_id_author_idToround_members                           expenses[]             @relation("expenses_round_id_author_idToround_members")
+  expenses_expenses_round_id_payer_idToround_members                            expenses[]             @relation("expenses_round_id_payer_idToround_members")
+  rounds_round_members_round_idTorounds                                         rounds                 @relation("round_members_round_idTorounds", fields: [round_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users                                                                         users                  @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  rounds_rounds_id_creator_idToround_members                                    rounds[]                @relation("rounds_id_creator_idToround_members")
+  settlement_balances                                                           settlement_balances[]
+  settlement_transfers_settlement_transfers_round_id_receiver_idToround_members settlement_transfers[] @relation("settlement_transfers_round_id_receiver_idToround_members")
+  settlement_transfers_settlement_transfers_round_id_sender_idToround_members   settlement_transfers[] @relation("settlement_transfers_round_id_sender_idToround_members")
+
+  @@id([round_id, user_id])
+  @@index([user_id, round_id], map: "round_members_user_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model has constraints using non-default deferring rules and requires additional setup for migrations. Visit https://pris.ly/d/constraint-deferring for more info.
+model rounds {
+  id                                                String                 @id
+  group_id                                          String
+  name                                              String
+  status                                            String                 @default("RECORDING")
+  version                                           Int                    @default(1)
+  created_at                                        BigInt
+  confirmed_at                                      BigInt?
+  locked_at                                         BigInt?
+  finalized_at                                      BigInt?
+  completed_at                                      BigInt?
+  creator_id                                        String
+  expenses                                          expenses[]
+  round_members_round_members_round_idTorounds      round_members[]        @relation("round_members_round_idTorounds")
+  groups                                            groups                 @relation(fields: [group_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  round_members_rounds_id_creator_idToround_members round_members          @relation("rounds_id_creator_idToround_members", fields: [id, creator_id], references: [round_id, user_id], onDelete: NoAction, onUpdate: NoAction)
+  settlement_balances                               settlement_balances[]
+  settlement_transfers                              settlement_transfers[]
+
+  @@index([group_id, created_at, id], map: "rounds_group_created_idx")
+}
+
+model schema_migrations {
+  version    String @id
+  applied_at BigInt @default(dbgenerated("(EXTRACT(epoch FROM now()))::bigint"))
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model has constraints using non-default deferring rules and requires additional setup for migrations. Visit https://pris.ly/d/constraint-deferring for more info.
+model settlement_balances {
+  round_id      String
+  user_id       String
+  paid_minor    Decimal       @db.Decimal
+  burden_minor  Decimal       @db.Decimal
+  balance_minor Decimal       @db.Decimal
+  currency      String
+  rounds        rounds        @relation(fields: [round_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  round_members round_members @relation(fields: [round_id, user_id], references: [round_id, user_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([round_id, user_id, currency])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model has constraints using non-default deferring rules and requires additional setup for migrations. Visit https://pris.ly/d/constraint-deferring for more info.
+model settlement_transfers {
+  round_id                                                               String
+  sender_id                                                              String
+  receiver_id                                                            String
+  amount_minor                                                           Decimal       @db.Decimal
+  received_at                                                            BigInt?
+  currency                                                               String
+  rounds                                                                 rounds        @relation(fields: [round_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  round_members_settlement_transfers_round_id_receiver_idToround_members round_members @relation("settlement_transfers_round_id_receiver_idToround_members", fields: [round_id, receiver_id], references: [round_id, user_id], onDelete: NoAction, onUpdate: NoAction)
+  round_members_settlement_transfers_round_id_sender_idToround_members   round_members @relation("settlement_transfers_round_id_sender_idToround_members", fields: [round_id, sender_id], references: [round_id, user_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([round_id, sender_id, receiver_id, currency])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model users {
+  id                        String                     @id
+  provider                  String
+  provider_subject          String
+  created_at                BigInt
+  updated_at                BigInt
+  display_name              String?
+  email                     String?
+  profile_image_url         String?
+  deleted_at                BigInt?
+  onboarding_completed_at   BigInt?
+  bank_name                 String?
+  account_number            String?
+  account_holder            String?
+  bank_updated_at           BigInt?
+  bank_code                 String?
+  bank_verified_at          BigInt?
+  bank_verification_tran_id String?
+  bank_version              Int                        @default(0)
+  account_number_formatted  String?
+  expense_receipts          expense_receipts[]
+  expenses                  expenses[]
+  group_invites             group_invites[]
+  group_members             group_members[]
+  groups                    groups[]
+  mutation_requests         mutation_requests[]
+  openbanking_connections   openbanking_connections?
+  openbanking_oauth_states  openbanking_oauth_states[]
+  refresh_sessions          refresh_sessions[]
+  round_members             round_members[]
+
+  @@unique([provider, provider_subject])
+}

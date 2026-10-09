@@ -1,5 +1,5 @@
 import { notFound } from 'next/navigation'
-import { renderAuthenticatedHome, type HomeTab } from '../authenticated-home'
+import { renderAuthenticatedHome, type HomeTab } from '../../../frontend/page/home/authenticatedHome'
 
 const tabs: HomeTab[] = ['groups', 'history', 'all']
 

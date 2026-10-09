@@ -1,0 +1,533 @@
+import { RuntimeModule } from '../../global/runtime/runtime.module';
+import type { Database } from '../../global/database/db';
+import { GroupModule } from '../../domain/group/module/group.module';
+import { SettleModule } from '../../domain/settle/module/settle.module';
+import { PrismaService } from '../../global/database/prisma.service';
+import { databaseRows } from '../../global/database/rowMapping';
+import {
+  inspectionDatabase,
+  type InspectionDatabase,
+} from './inspectionDatabase';
+import 'reflect-metadata';
+import { after } from 'node:test';
+import { NestFactory } from '@nestjs/core';
+import { Module, type Type } from '@nestjs/common';
+import { UserModule } from '../../domain/user/module/user.module';
+import { AuthModule } from '../../global/auth/module/auth.module';
+import { HealthModule } from '../../domain/health/module/health.module';
+import { UserService } from '../../domain/user/service/user.service';
+import { GroupService } from '../../domain/group/service/group.service';
+import {
+  SettleService,
+  type ReceiptUpload,
+} from '../../domain/settle/service/settle.service';
+import { AuthService } from '../../global/auth/service/auth.service';
+import { AuthorizationService } from '../../global/auth/service/authorization.service';
+import { UserRepository } from '../../domain/user/repository/user.repository';
+import { createValidationPipe } from '../../global/apiPayload/validation.pipe';
+import { PageQueryDTO } from '../../global/apiPayload/dto/req/page.request.dto';
+import {
+  CreateGroupRequestDTO,
+  CreateInviteRequestDTO,
+  GroupListQueryDTO,
+} from '../../domain/group/dto/req/group.request.dto';
+import {
+  BankAccountRequestDTO,
+  OnboardingRequestDTO,
+} from '../../domain/user/dto/req/user.request.dto';
+import { objectBody } from '../../global/util/mutations';
+import {
+  CreateRoundRequestDTO,
+  CreateExpenseRequestDTO,
+  ExpenseRequestDTO,
+  VersionRequestDTO,
+  ReceiptUploadRequestDTO,
+  SettlementCheckRequestDTO,
+  RoundListQueryDTO,
+  parseRoundListQuery,
+} from '../../domain/settle/dto/req/settle.request.dto';
+import {
+  parsePageQuery,
+  parseSearchPageQuery,
+} from '../../global/apiPayload/pageQuery';
+
+// Existing domain fixtures describe raw query strings. Run the same Nest DTO
+// boundary here; production Services accept only the resulting typed query.
+async function testQuery<T extends PageQueryDTO>(
+  dto: Type<T>,
+  query: URLSearchParams,
+): Promise<T> {
+  const values: Record<string, string | string[]> = Object.create(null);
+  for (const [name, value] of query) {
+    const previous = values[name];
+    values[name] =
+      previous === undefined
+        ? value
+        : [...(Array.isArray(previous) ? previous : [previous]), value];
+  }
+  return createValidationPipe().transform(values, {
+    type: 'query',
+    metatype: dto,
+  });
+}
+
+async function testBody<T>(dto: Type<T>, input: unknown): Promise<T> {
+  return createValidationPipe().transform(objectBody(input), {
+    type: 'body',
+    metatype: dto,
+  });
+}
+
+@Module({
+  imports: [
+    RuntimeModule,
+    UserModule,
+    GroupModule,
+    SettleModule,
+    AuthModule,
+    HealthModule,
+  ],
+})
+class DomainTestModule {}
+let context:
+  ReturnType<typeof NestFactory.createApplicationContext> | undefined;
+export async function testProvider<T>(token: Type<T>): Promise<T> {
+  context ??= NestFactory.createApplicationContext(DomainTestModule, {
+    logger: ['error'],
+  });
+  return (await context).get(token);
+}
+after(async () => {
+  if (context) await (await context).close();
+});
+
+export async function completeOnboarding(
+  access: Parameters<UserService['completeOnboarding']>[0],
+  input: unknown,
+): Promise<Awaited<ReturnType<UserService['completeOnboarding']>>> {
+  const body = await testBody(OnboardingRequestDTO, input);
+  return (await testProvider(UserService)).completeOnboarding(access, body);
+}
+
+export async function updateBankAccount(
+  access: Parameters<UserService['updateBankAccount']>[0],
+  key: string,
+  input: unknown,
+): Promise<Awaited<ReturnType<UserService['updateBankAccount']>>> {
+  const body = await testBody(BankAccountRequestDTO, input);
+  return (await testProvider(UserService)).updateBankAccount(access, key, body);
+}
+
+export async function withdrawAccount(
+  ...args: Parameters<UserService['withdrawAccount']>
+): Promise<Awaited<ReturnType<UserService['withdrawAccount']>>> {
+  return (await testProvider(UserService)).withdrawAccount(...args);
+}
+
+export async function getMe(
+  ...args: Parameters<UserService['getMe']>
+): Promise<Awaited<ReturnType<UserService['getMe']>>> {
+  return (await testProvider(UserService)).getMe(...args);
+}
+
+export async function findOrCreateKakaoUser(
+  ...args: Parameters<UserService['findOrCreateKakaoUser']>
+): Promise<Awaited<ReturnType<UserService['findOrCreateKakaoUser']>>> {
+  return (await testProvider(UserService)).findOrCreateKakaoUser(...args);
+}
+
+export async function createTestOnboardingUser(
+  ...args: Parameters<UserService['createTestOnboardingUser']>
+): Promise<Awaited<ReturnType<UserService['createTestOnboardingUser']>>> {
+  return (await testProvider(UserService)).createTestOnboardingUser(...args);
+}
+
+export async function getTestSignInUser(
+  ...args: Parameters<UserService['getTestSignInUser']>
+): Promise<Awaited<ReturnType<UserService['getTestSignInUser']>>> {
+  return (await testProvider(UserService)).getTestSignInUser(...args);
+}
+
+export async function requireGroupMembership(
+  ...args: Parameters<GroupService['requireGroupMembership']>
+): Promise<Awaited<ReturnType<GroupService['requireGroupMembership']>>> {
+  return (await testProvider(GroupService)).requireGroupMembership(...args);
+}
+
+export async function listGroups(
+  access: Parameters<GroupService['listGroups']>[0],
+  query: URLSearchParams,
+): Promise<Awaited<ReturnType<GroupService['listGroups']>>> {
+  const parsed = await testQuery(GroupListQueryDTO, query);
+  return (await testProvider(GroupService)).listGroups(
+    access,
+    parseSearchPageQuery(parsed),
+  );
+}
+
+export async function getGroup(
+  ...args: Parameters<GroupService['getGroup']>
+): Promise<Awaited<ReturnType<GroupService['getGroup']>>> {
+  return (await testProvider(GroupService)).getGroup(...args);
+}
+
+export async function createGroup(
+  access: Parameters<GroupService['createGroup']>[0],
+  key: string,
+  body: unknown,
+  captureAudience?: Parameters<GroupService['createGroup']>[3],
+): Promise<Awaited<ReturnType<GroupService['createGroup']>>> {
+  const parsed = await testBody(CreateGroupRequestDTO, body);
+  return (await testProvider(GroupService)).createGroup(
+    access,
+    key,
+    parsed,
+    captureAudience,
+  );
+}
+
+export async function leaveGroup(
+  ...args: Parameters<GroupService['leaveGroup']>
+): Promise<Awaited<ReturnType<GroupService['leaveGroup']>>> {
+  return (await testProvider(GroupService)).leaveGroup(...args);
+}
+
+export async function createInvite(
+  access: Parameters<GroupService['createInvite']>[0],
+  key: string,
+  groupId: string,
+  body: unknown,
+  captureAudience?: Parameters<GroupService['createInvite']>[4],
+): Promise<Awaited<ReturnType<GroupService['createInvite']>>> {
+  const parsed = await testBody(CreateInviteRequestDTO, body);
+  return (await testProvider(GroupService)).createInvite(
+    access,
+    key,
+    groupId,
+    parsed,
+    captureAudience,
+  );
+}
+
+export async function revokeInvite(
+  ...args: Parameters<GroupService['revokeInvite']>
+): Promise<Awaited<ReturnType<GroupService['revokeInvite']>>> {
+  return (await testProvider(GroupService)).revokeInvite(...args);
+}
+
+export async function getInvite(
+  ...args: Parameters<GroupService['getInvite']>
+): Promise<Awaited<ReturnType<GroupService['getInvite']>>> {
+  return (await testProvider(GroupService)).getInvite(...args);
+}
+
+export async function acceptInvite(
+  ...args: Parameters<GroupService['acceptInvite']>
+): Promise<Awaited<ReturnType<GroupService['acceptInvite']>>> {
+  return (await testProvider(GroupService)).acceptInvite(...args);
+}
+
+export async function listRounds(
+  access: Parameters<SettleService['listRounds']>[0],
+  query: URLSearchParams,
+  groupId?: string,
+): Promise<Awaited<ReturnType<SettleService['listRounds']>>> {
+  const parsed = await testQuery(RoundListQueryDTO, query);
+  return (await testProvider(SettleService)).listRounds(
+    access,
+    parseRoundListQuery(parsed),
+    groupId,
+  );
+}
+
+export async function getRound(
+  access: Parameters<SettleService['getRound']>[0],
+  roundId: string,
+  query: URLSearchParams,
+): Promise<Awaited<ReturnType<SettleService['getRound']>>> {
+  const parsed = await testQuery(PageQueryDTO, query);
+  return (await testProvider(SettleService)).getRound(
+    access,
+    roundId,
+    parsePageQuery(parsed),
+  );
+}
+
+export async function createRound(
+  access: Parameters<SettleService['createRound']>[0],
+  key: string,
+  groupId: string,
+  body: unknown,
+  captureAudience?: Parameters<SettleService['createRound']>[4],
+): Promise<Awaited<ReturnType<SettleService['createRound']>>> {
+  const parsed = await testBody(CreateRoundRequestDTO, body);
+  return (await testProvider(SettleService)).createRound(
+    access,
+    key,
+    groupId,
+    parsed,
+    captureAudience,
+  );
+}
+
+export async function saveExpense(
+  access: Parameters<SettleService['createExpense']>[0],
+  key: string,
+  roundId: string,
+  body: unknown,
+  expenseId?: string,
+  captureAudience?: Parameters<SettleService['createExpense']>[4],
+): Promise<Awaited<ReturnType<SettleService['createExpense']>>> {
+  const service = await testProvider(SettleService);
+  if (expenseId)
+    return service.updateExpense(
+      access,
+      key,
+      roundId,
+      await testBody(ExpenseRequestDTO, body),
+      expenseId,
+      captureAudience,
+    );
+  return service.createExpense(
+    access,
+    key,
+    roundId,
+    await testBody(CreateExpenseRequestDTO, body),
+    captureAudience,
+  );
+}
+
+export async function deleteExpense(
+  access: Parameters<SettleService['deleteExpense']>[0],
+  key: string,
+  roundId: string,
+  expenseId: string,
+  body: unknown,
+  captureAudience?: Parameters<SettleService['deleteExpense']>[5],
+): Promise<Awaited<ReturnType<SettleService['deleteExpense']>>> {
+  const parsed = await testBody(VersionRequestDTO, body);
+  return (await testProvider(SettleService)).deleteExpense(
+    access,
+    key,
+    roundId,
+    expenseId,
+    parsed,
+    captureAudience,
+  );
+}
+
+export async function checkExclusion(
+  ...args: Parameters<SettleService['checkExclusion']>
+): Promise<Awaited<ReturnType<SettleService['checkExclusion']>>> {
+  return (await testProvider(SettleService)).checkExclusion(...args);
+}
+
+export async function excludeMember(
+  access: Parameters<SettleService['excludeMember']>[0],
+  key: string,
+  roundId: string,
+  targetId: string,
+  body: unknown,
+  captureAudience?: Parameters<SettleService['excludeMember']>[5],
+): Promise<Awaited<ReturnType<SettleService['excludeMember']>>> {
+  const parsed = await testBody(VersionRequestDTO, body);
+  return (await testProvider(SettleService)).excludeMember(
+    access,
+    key,
+    roundId,
+    targetId,
+    parsed,
+    captureAudience,
+  );
+}
+
+export async function roundCommand(
+  access: Parameters<SettleService['roundCommand']>[0],
+  key: string,
+  roundId: string,
+  action: string,
+  body: unknown,
+  captureAudience?: Parameters<SettleService['roundCommand']>[5],
+): Promise<Awaited<ReturnType<SettleService['roundCommand']>>> {
+  const parsed = await testBody(VersionRequestDTO, body);
+  return (await testProvider(SettleService)).roundCommand(
+    access,
+    key,
+    roundId,
+    action,
+    parsed,
+    captureAudience,
+  );
+}
+
+export async function setSettlementCheck(
+  access: Parameters<SettleService['setSettlementCheck']>[0],
+  key: string,
+  roundId: string,
+  body: unknown,
+  captureAudience?: Parameters<SettleService['setSettlementCheck']>[4],
+): Promise<Awaited<ReturnType<SettleService['setSettlementCheck']>>> {
+  const parsed = await testBody(SettlementCheckRequestDTO, body);
+  return (await testProvider(SettleService)).setSettlementCheck(
+    access,
+    key,
+    roundId,
+    parsed,
+    captureAudience,
+  );
+}
+
+export async function getSettlement(
+  ...args: Parameters<SettleService['getSettlement']>
+): Promise<Awaited<ReturnType<SettleService['getSettlement']>>> {
+  return (await testProvider(SettleService)).getSettlement(...args);
+}
+
+// Legacy direct fixtures enter through the same typed metadata validation as
+// native multipart HTTP; upload overloads do not exist in production Services.
+export async function addReceipt(
+  access: Parameters<SettleService['admitReceipt']>[0],
+  key: string,
+  roundId: string,
+  expenseId: string,
+  ...input:
+    | [
+        expectedVersion: number,
+        bytes: Uint8Array,
+        type: string,
+        captureAudience?: Parameters<SettleService['saveReceipt']>[2],
+      ]
+    | [
+        readUpload: () => Promise<ReceiptUpload>,
+        captureAudience?: Parameters<SettleService['saveReceipt']>[2],
+      ]
+): Promise<Awaited<ReturnType<SettleService['saveReceipt']>>> {
+  const service = await testProvider(SettleService);
+  const admission = await service.admitReceipt(access, key, roundId, expenseId);
+  const upload: ReceiptUpload =
+    typeof input[0] === 'function'
+      ? await input[0]()
+      : {
+          expectedVersion: input[0],
+          bytes: input[1] as Uint8Array,
+          type: input[2] as string,
+        };
+  const body = await testBody(ReceiptUploadRequestDTO, {
+    expectedVersion: upload.expectedVersion,
+  });
+  const captureAudience =
+    typeof input[0] === 'function'
+      ? (input[1] as Parameters<SettleService['saveReceipt']>[2])
+      : input[3];
+  return service.saveReceipt(
+    admission,
+    { ...upload, expectedVersion: body.expectedVersion },
+    captureAudience,
+  );
+}
+
+export async function removeReceipt(
+  access: Parameters<SettleService['removeReceipt']>[0],
+  key: string,
+  roundId: string,
+  expenseId: string,
+  receiptId: string,
+  body: unknown,
+  captureAudience?: Parameters<SettleService['removeReceipt']>[6],
+): Promise<Awaited<ReturnType<SettleService['removeReceipt']>>> {
+  const parsed = await testBody(VersionRequestDTO, body);
+  return (await testProvider(SettleService)).removeReceipt(
+    access,
+    key,
+    roundId,
+    expenseId,
+    receiptId,
+    parsed,
+    captureAudience,
+  );
+}
+
+export async function getReceipt(
+  ...args: Parameters<SettleService['getReceipt']>
+): Promise<Awaited<ReturnType<SettleService['getReceipt']>>> {
+  return (await testProvider(SettleService)).getReceipt(...args);
+}
+
+export async function signInKakao(
+  ...args: Parameters<AuthService['signInKakao']>
+): Promise<Awaited<ReturnType<AuthService['signInKakao']>>> {
+  return (await testProvider(AuthService)).signInKakao(...args);
+}
+
+export async function signInTestAccount(
+  ...args: Parameters<AuthService['signInTestAccount']>
+): Promise<Awaited<ReturnType<AuthService['signInTestAccount']>>> {
+  return (await testProvider(AuthService)).signInTestAccount(...args);
+}
+
+export async function getAccount(
+  ...args: Parameters<AuthorizationService['getAccount']>
+): Promise<Awaited<ReturnType<AuthorizationService['getAccount']>>> {
+  return (await testProvider(AuthorizationService)).getAccount(...args);
+}
+
+export async function requireAccount(
+  ...args: Parameters<AuthorizationService['requireAccount']>
+): Promise<Awaited<ReturnType<AuthorizationService['requireAccount']>>> {
+  return (await testProvider(AuthorizationService)).requireAccount(...args);
+}
+
+export async function findUser(
+  client: import('../../global/database/db').Database,
+  userId: string,
+) {
+  const row = await client.prisma.users.findFirst({ where: { id: userId } });
+  return row
+    ? databaseRows<import('../../domain/user/dao/user.dao').UserRow>(row)
+    : undefined;
+}
+
+export async function saveBankAccount(
+  ...args: Parameters<UserRepository['saveBankAccount']>
+): Promise<Awaited<ReturnType<UserRepository['saveBankAccount']>>> {
+  return (await testProvider(UserRepository)).saveBankAccount(...args);
+}
+
+export async function saveOnboarding(
+  ...args: Parameters<UserRepository['saveOnboarding']>
+): Promise<Awaited<ReturnType<UserRepository['saveOnboarding']>>> {
+  return (await testProvider(UserRepository)).saveOnboarding(...args);
+}
+
+export async function withDatabaseConnection<T>(
+  work: (client: InspectionDatabase) => Promise<T>,
+): Promise<T> {
+  return (await testProvider(PrismaService)).withDatabaseConnection((client) =>
+    work(inspectionDatabase(client)),
+  );
+}
+export async function withReadTransaction<T>(
+  work: (client: InspectionDatabase) => Promise<T>,
+): Promise<T> {
+  return (await testProvider(PrismaService)).withReadTransaction((client) =>
+    work(inspectionDatabase(client)),
+  );
+}
+export async function withWriteTransaction<T>(
+  work: (client: InspectionDatabase) => Promise<T>,
+  beforeLock?: (client: Database) => Promise<void>,
+  beforeBegin?: (client: Database) => Promise<void>,
+): Promise<T> {
+  return (await testProvider(PrismaService)).withWriteTransaction(
+    (client) => work(inspectionDatabase(client)),
+    beforeLock,
+    beforeBegin,
+  );
+}
+
+export async function getPrismaClient(url: string) {
+  return (await testProvider(PrismaService)).clientFor(url);
+}
+export async function getDatabasePool(url: string) {
+  return (await testProvider(PrismaService)).poolFor(url);
+}

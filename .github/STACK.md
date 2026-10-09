@@ -10,20 +10,21 @@
 | --- | --- | --- |
 | 언어 | TypeScript 6 | 프론트엔드·백엔드·공유 DTO와 금액 계산 로직 |
 | 런타임 | Node.js 22.18 이상 | Next.js 커스텀 서버, WebSocket 서버, 영수증 워커 실행 |
-| 프론트엔드 | Next.js 16 · React 19 | App Router 기반 화면과 Route Handler API |
+| 프론트엔드 | Next.js 16 · React 19 | App Router 기반 프론트 라우팅과 화면 |
 | 스타일 | CSS · Lucide React | 모바일 화면, 라이트·다크 모드, 아이콘 |
 | 인증 | Kakao Login · OpenID Connect · JWT | 카카오 로그인과 Access/Refresh 토큰 인증 |
-| 데이터베이스 | PostgreSQL 17 · pg | 모임·회차·지출·정산 저장, 커넥션 풀과 SQL 트랜잭션 |
+| 백엔드 | NestJS 11 · Guard · SWC · class-validator | 도메인 모듈·HTTP 컨트롤러·JWT 요청 인증 |
+| 데이터베이스 | PostgreSQL 17 · Prisma · pg | 모임·회차·지출·정산 저장, Prisma 모델·트랜잭션와 커넥션 풀·SQL 트랜잭션 |
 | 실시간 통신 | WebSocket · ws | 인증된 참여자에게 변경 알림을 보내 API 재조회 |
 | 파일 저장소 | MinIO · AWS SDK for S3 | 비공개 영수증 객체 저장·조회·삭제 |
 | 비동기 작업 | Graphile Worker | PostgreSQL 영속 큐에서 영수증 업로드 처리 |
 | 이미지 처리 | Web Worker · WebAssembly · @jsquash/avif · sharp | 브라우저 AVIF 변환, 서버 이미지 검증 |
-| API 문서 | OpenAPI · Swagger UI React | API 계약 정의와 `/docs` 문서 화면 |
-| 테스트 | node:test · assert · tsx · Chrome DevTools Protocol | 단위·통합 테스트와 모바일 브라우저 검증 |
+| API 문서 | @nestjs/swagger · OpenAPI | API 계약 정의와 Nest가 제공하는 `/docs`·`/api/docs` Swagger UI |
+| 테스트 | node:test · assert · SWC · tsx · Chrome DevTools Protocol | 단위·통합 테스트와 모바일 브라우저 검증 |
 | 개발 환경 | npm · Docker · Docker Compose | 의존성 설치와 로컬 PostgreSQL·MinIO 실행 |
 | 배포 | GitHub Actions · OCI · Nginx | 테스트·빌드 자동화, Docker 배포, HTTPS·WebSocket 프록시 |
 
-Next.js·React·TypeScript의 정확한 설치 버전은 lockfile에서 관리합니다. 앱 서버는 [server.mjs](../server.mjs), 로컬 서비스는 [compose.yaml](../compose.yaml), 운영 Compose·Nginx 설정·배포 스크립트는 [Deploy 저장소](https://github.com/Da-Moa/Deploy)에서 관리합니다. 앱 CI는 테스트 후 ARM64 운영 이미지를 빌드하고 실행을 확인합니다. main에서는 GHCR에 SHA 태그와 latest를 게시한 뒤 repository_dispatch로 이미지 digest를 Deploy에 전달합니다. Deploy Actions가 자체 production 환경을 사용해 A1에 배포하며, A1은 이미지를 내려받아 실행합니다. 앱에는 DEPLOY_DISPATCH_TOKEN을, Deploy에는 OCI 운영 Secret을 등록합니다.
+Next.js·React·TypeScript의 정확한 설치 버전은 lockfile에서 관리합니다. 앱 서버는 [Nest 진입점](../src/backend/main.ts), 로컬 서비스는 [compose.yaml](../compose.yaml), 운영 Compose·Nginx 설정·배포 스크립트는 [Deploy 저장소](https://github.com/Da-Moa/Deploy)에서 관리합니다. 앱 CI는 테스트 후 ARM64 운영 이미지를 빌드하고 실행을 확인합니다. main에서는 GHCR에 SHA 태그와 latest를 게시한 뒤 repository_dispatch로 이미지 digest를 Deploy에 전달합니다. Deploy Actions가 자체 production 환경을 사용해 A1에 배포하며, A1은 이미지를 내려받아 실행합니다. 앱에는 DEPLOY_DISPATCH_TOKEN을, Deploy에는 OCI 운영 Secret을 등록합니다.
 
 ## 도메인 라이브러리
 
@@ -34,7 +35,7 @@ Next.js·React·TypeScript의 정확한 설치 버전은 lockfile에서 관리�
 | `sql-formatter` | 개발용 SQL 로그 서식 |
 | `next/font/local` | 로컬 글꼴 로딩과 캐시 |
 
-금액·분배 로직은 [Settle Shared](../src/Domain/Settle/Shared/)에, 회원·모임·정산의 프론트엔드와 백엔드는 [Domain](../src/Domain/)에 있습니다. 인증·WebSocket·공통 유틸리티는 [Global](../src/Global/)에 있습니다.
+금액·분배 로직은 [공유 정산 모듈](../src/shared/domain/settle/)에 있습니다. [백엔드](../src/backend/)와 [프론트엔드](../src/frontend/)는 각자의 domain·global을 가지며, 전체 구조와 실행 경계는 [프로젝트 구조](STRUCTURE.md)에 정리했습니다.
 
 ## 이미지·글꼴 출처
 

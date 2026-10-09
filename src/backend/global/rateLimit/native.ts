@@ -1,0 +1,53 @@
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { Duplex } from 'node:stream'
+import { setInterval, clearInterval } from 'node:timers'
+import { apiJwtPolicy, readApiJwt, REFRESH_TOKEN_COOKIE_NAME } from '../auth/native.ts'
+import type { TokenService } from '../auth/service/token.service'
+import { createTokenBuckets } from './tokenBucket.ts'
+import { requestRateLimitKinds } from './rateLimitPolicy.ts'
+import { rateLimitResponse } from './rateLimitResponse.ts'
+
+export { createTokenBuckets } from './tokenBucket.ts'
+export { rateLimitPolicies, requestRateLimitKinds } from './rateLimitPolicy.ts'
+
+type CookieRequest = IncomingMessage & { cookies?: Record<string, unknown> }
+
+function refreshCookie(request: CookieRequest) {
+  const value: unknown = request.cookies?.[REFRESH_TOKEN_COOKIE_NAME]
+  return typeof value === 'string' ? value : undefined
+}
+
+export function createRateLimitController(tokens: TokenService, buckets = createTokenBuckets()) {
+  // ponytail: one store per Node server; use an atomic shared store before running multiple processes/instances.
+  const cleanup = setInterval(buckets.prune, 60000)
+  cleanup.unref()
+
+  function handleRequest(request: CookieRequest, response: ServerResponse) {
+    let pathname: string
+    try { pathname = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname).replace(/\/{2,}/g, '/').replace(/\/+$/, '') }
+    catch { return false }
+    if (pathname !== '/api' && !pathname.startsWith('/api/')) return false
+    const method = request.method ?? 'GET'
+    if (apiJwtPolicy(method, pathname) === 'public') return false
+    const jwt = readApiJwt(tokens, method, pathname, request.headers.authorization, refreshCookie(request))
+    // Invalid JWTs continue to the Nest Guard's 401/cookie cleanup response.
+    if (!jwt) return false
+    const retryAfter = buckets.consume(jwt.userId, requestRateLimitKinds(method, pathname))
+    if (!retryAfter) return false
+    const rejected = rateLimitResponse(retryAfter)
+    response.writeHead(rejected.status, rejected.headers)
+    response.end(method === 'HEAD' ? undefined : rejected.body)
+    return true
+  }
+
+  function limitWebsocket(token: string | null, socket: Duplex) {
+    const access = tokens.verifyAccessToken(token ?? undefined)
+    if (!access || (access.purpose ?? 'app') !== 'app') { socket.destroy(); return true }
+    const retryAfter = buckets.consume(access.userId, ['websocket'])
+    if (!retryAfter) return false
+    socket.end(`HTTP/1.1 429 Too Many Requests\r\nRetry-After: ${retryAfter}\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`)
+    return true
+  }
+
+  return { handleRequest, limitWebsocket, close: () => clearInterval(cleanup) }
+}

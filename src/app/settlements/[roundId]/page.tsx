@@ -1,5 +1,5 @@
-import { AppShell } from '../../home/ui'
-import { SettlementClient } from '../../../Domain/Settle/Frontend'
+import { AppShell } from '../../../frontend/page/home/ui'
+import { SettlementClient } from '../../../frontend/domain/settle'
 
 export default async function SettlementPage({ params }: { params: Promise<{ roundId: string }> }) {
   const { roundId } = await params

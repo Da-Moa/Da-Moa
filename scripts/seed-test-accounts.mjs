@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import nextEnv from '@next/env'
-import { createDatabaseClient } from '../src/lib/db.ts'
-import { TEST_ACCOUNTS as accounts } from '../src/lib/test-accounts.ts'
+import { createDatabaseClient } from '../src/backend/global/database/db.ts'
+import { TEST_ACCOUNTS as accounts } from '../src/shared/testAccounts.ts'
 import { applyMigrations } from './migrations.mjs'
 
 nextEnv.loadEnvConfig(process.cwd())
@@ -36,8 +36,12 @@ try {
         deleted_at = NULL,
         onboarding_completed_at = EXCLUDED.onboarding_completed_at,
         bank_name = EXCLUDED.bank_name,
+        bank_code = NULL,
         account_number = EXCLUDED.account_number,
+        account_number_formatted = NULL,
         account_holder = EXCLUDED.account_holder,
+        bank_verified_at = NULL,
+        bank_verification_tran_id = NULL,
         bank_updated_at = EXCLUDED.bank_updated_at,
         updated_at = EXCLUDED.updated_at
     `, [account.id, account.providerSubject, account.displayName, account.email, now, account.bankName, account.accountNumber, account.accountHolder])
