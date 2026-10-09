@@ -81,16 +81,16 @@ test('receipt deletion uses AUTH, authorized context and one atomic deletion wit
     }
     const body = { expectedVersion: f.receipt.version! }
     for (const [actor, roundId, expenseId, receiptId, ticket, input, error, expected] of [
-      [null, f.round.id, f.expense.id, f.receipt.id, '', { unexpected: true }, 'unauthorized', []],
-      [{ ...owner, userId: key() }, f.round.id, f.expense.id, f.receipt.id, '', { unexpected: true }, 'unauthorized', ['AUTH']],
-      [owner, f.round.id, f.expense.id, f.receipt.id, key(), { unexpected: true }, 'invalid_input', ['AUTH']],
+      [null, f.round.id, f.expense.id, f.receipt.id, '', body, 'unauthorized', []],
+      [{ ...owner, userId: key() }, f.round.id, f.expense.id, f.receipt.id, '', body, 'unauthorized', ['AUTH']],
+      [owner, f.round.id, f.expense.id, f.receipt.id, key(), { unexpected: true }, 'invalid_input', []],
       [owner, f.round.id, f.expense.id, f.receipt.id, '', body, 'invalid_request_key', ['AUTH']],
       [groupOwner, f.round.id, f.expense.id, f.receipt.id, key(), body, 'forbidden', ['AUTH', 'SQL']],
       [outsider, f.round.id, f.expense.id, f.receipt.id, key(), body, 'not_found', ['AUTH', 'SQL']],
       [owner, key(), f.expense.id, f.receipt.id, key(), body, 'not_found', ['AUTH', 'SQL']],
       [owner, f.round.id, key(), f.receipt.id, key(), body, 'not_found', ['AUTH', 'SQL']],
       [owner, f.round.id, f.expense.id, key(), key(), body, 'not_found', ['AUTH', 'SQL']],
-      [owner, f.round.id, f.expense.id, f.receipt.id, key(), { expectedVersion: '1' }, 'invalid_version', ['AUTH', 'SQL']],
+      [owner, f.round.id, f.expense.id, f.receipt.id, key(), { expectedVersion: '1' }, 'invalid_version', []],
       [owner, f.round.id, f.expense.id, f.receipt.id, key(), { expectedVersion: body.expectedVersion - 1 }, 'stale_round', ['AUTH', 'SQL']],
     ] as const) await trace([...expected], () => assert.rejects(removeReceipt(actor, ticket, roundId, expenseId, receiptId, input, audience), code(error)))
     await db.query('UPDATE round_members SET excluded_at=1 WHERE round_id=$1 AND user_id=$2', [f.round.id, author.userId])

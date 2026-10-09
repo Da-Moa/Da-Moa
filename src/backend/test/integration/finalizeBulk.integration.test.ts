@@ -377,6 +377,7 @@ test('send bulk-finalizes settlement with constant SQL count, exact money and at
         ).rows[0].finalized_at,
         null,
       );
+      assert.ok(result.version !== undefined);
       const drawn = await service.roundCommand(
         owner,
         randomUUID(),

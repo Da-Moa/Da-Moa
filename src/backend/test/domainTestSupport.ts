@@ -31,6 +31,10 @@ import {
 import { objectBody } from '../global/util/mutations';
 import {
   CreateRoundRequestDTO,
+  CreateExpenseRequestDTO,
+  ExpenseRequestDTO,
+  VersionRequestDTO,
+  SettlementCheckRequestDTO,
   RoundListQueryDTO,
   parseRoundListQuery,
 } from '../domain/settle/dto/req/settle.request.dto';
@@ -254,15 +258,44 @@ export async function createRound(
 }
 
 export async function saveExpense(
-  ...args: Parameters<SettleService['saveExpense']>
+  access: Parameters<SettleService['saveExpense']>[0],
+  key: string,
+  roundId: string,
+  body: unknown,
+  expenseId?: string,
+  captureAudience?: Parameters<SettleService['saveExpense']>[5],
 ): Promise<Awaited<ReturnType<SettleService['saveExpense']>>> {
-  return (await testProvider(SettleService)).saveExpense(...args);
+  const parsed = await testBody(
+    expenseId ? ExpenseRequestDTO : CreateExpenseRequestDTO,
+    body,
+  );
+  return (await testProvider(SettleService)).saveExpense(
+    access,
+    key,
+    roundId,
+    parsed,
+    expenseId,
+    captureAudience,
+  );
 }
 
 export async function deleteExpense(
-  ...args: Parameters<SettleService['deleteExpense']>
+  access: Parameters<SettleService['deleteExpense']>[0],
+  key: string,
+  roundId: string,
+  expenseId: string,
+  body: unknown,
+  captureAudience?: Parameters<SettleService['deleteExpense']>[5],
 ): Promise<Awaited<ReturnType<SettleService['deleteExpense']>>> {
-  return (await testProvider(SettleService)).deleteExpense(...args);
+  const parsed = await testBody(VersionRequestDTO, body);
+  return (await testProvider(SettleService)).deleteExpense(
+    access,
+    key,
+    roundId,
+    expenseId,
+    parsed,
+    captureAudience,
+  );
 }
 
 export async function checkExclusion(
@@ -272,21 +305,58 @@ export async function checkExclusion(
 }
 
 export async function excludeMember(
-  ...args: Parameters<SettleService['excludeMember']>
+  access: Parameters<SettleService['excludeMember']>[0],
+  key: string,
+  roundId: string,
+  targetId: string,
+  body: unknown,
+  captureAudience?: Parameters<SettleService['excludeMember']>[5],
 ): Promise<Awaited<ReturnType<SettleService['excludeMember']>>> {
-  return (await testProvider(SettleService)).excludeMember(...args);
+  const parsed = await testBody(VersionRequestDTO, body);
+  return (await testProvider(SettleService)).excludeMember(
+    access,
+    key,
+    roundId,
+    targetId,
+    parsed,
+    captureAudience,
+  );
 }
 
 export async function roundCommand(
-  ...args: Parameters<SettleService['roundCommand']>
+  access: Parameters<SettleService['roundCommand']>[0],
+  key: string,
+  roundId: string,
+  action: string,
+  body: unknown,
+  captureAudience?: Parameters<SettleService['roundCommand']>[5],
 ): Promise<Awaited<ReturnType<SettleService['roundCommand']>>> {
-  return (await testProvider(SettleService)).roundCommand(...args);
+  const parsed = await testBody(VersionRequestDTO, body);
+  return (await testProvider(SettleService)).roundCommand(
+    access,
+    key,
+    roundId,
+    action,
+    parsed,
+    captureAudience,
+  );
 }
 
 export async function setSettlementCheck(
-  ...args: Parameters<SettleService['setSettlementCheck']>
+  access: Parameters<SettleService['setSettlementCheck']>[0],
+  key: string,
+  roundId: string,
+  body: unknown,
+  captureAudience?: Parameters<SettleService['setSettlementCheck']>[4],
 ): Promise<Awaited<ReturnType<SettleService['setSettlementCheck']>>> {
-  return (await testProvider(SettleService)).setSettlementCheck(...args);
+  const parsed = await testBody(SettlementCheckRequestDTO, body);
+  return (await testProvider(SettleService)).setSettlementCheck(
+    access,
+    key,
+    roundId,
+    parsed,
+    captureAudience,
+  );
 }
 
 export async function getSettlement(
@@ -309,9 +379,24 @@ export async function addReceipt(
 }
 
 export async function removeReceipt(
-  ...args: Parameters<SettleService['removeReceipt']>
+  access: Parameters<SettleService['removeReceipt']>[0],
+  key: string,
+  roundId: string,
+  expenseId: string,
+  receiptId: string,
+  body: unknown,
+  captureAudience?: Parameters<SettleService['removeReceipt']>[6],
 ): Promise<Awaited<ReturnType<SettleService['removeReceipt']>>> {
-  return (await testProvider(SettleService)).removeReceipt(...args);
+  const parsed = await testBody(VersionRequestDTO, body);
+  return (await testProvider(SettleService)).removeReceipt(
+    access,
+    key,
+    roundId,
+    expenseId,
+    receiptId,
+    parsed,
+    captureAudience,
+  );
 }
 
 export async function getReceipt(

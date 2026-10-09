@@ -61,7 +61,6 @@ export class VersionRequestDTO {
   @Min(1, { context: settleErrors.VERSION_REQUIRED })
   @Max(Number.MAX_SAFE_INTEGER, { context: settleErrors.VERSION_REQUIRED })
   expectedVersion!: number;
-  [key: string]: unknown;
 }
 export class CustomShareRequestDTO {
   @ApiProperty({ maxLength: 128 })

@@ -1,14 +1,14 @@
 import { ReceiptStorage } from '../../../global/util/minio.util';
 import { MutationExecutor } from '../../../global/util/idempotencyUtil';
 import type { RoundListQuery } from './roundList.query';
+import type { CustomShareRequestDTO } from '../dto/req/settle.request.dto';
 import { Injectable, Inject } from '@nestjs/common';
-import { isUUID } from 'class-validator';
+import { isInt, min, max, isUUID } from 'class-validator';
 import { PrismaService } from '../../../global/database/prisma.service';
 import { settleErrors } from '../code/settle.error.code';
 import { SettleException } from '../exception/settle.exception';
 import { randomInt, randomUUID } from 'node:crypto';
 import { AuthorizationService } from '../../../global/auth/service/authorization.service';
-import { MAX_GROUP_MEMBERS } from '../../../../shared/domain/group';
 import { bankDisplayName } from '../../../../shared/domain/user';
 import {
   AppError,
@@ -18,7 +18,6 @@ import {
   type Database,
   idsInput,
   nowSeconds,
-  onlyKeys,
   pageOf,
   type PageQuery,
   textInput,
@@ -119,9 +118,7 @@ export class SettleService {
     }
   }
 
-  private version(round: RoundRow, value: unknown) {
-    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1)
-      throw new SettleException(settleErrors.VERSION_REQUIRED);
+  private version(round: RoundRow, value: number) {
     if (round.version !== value)
       throw new SettleException(settleErrors.STALE_ROUND, {
         version: round.version,
@@ -382,7 +379,7 @@ export class SettleService {
   }
 
   private expenseFields(
-    body: ExpenseRequestDTO | Record<string, unknown>,
+    body: ExpenseRequestDTO,
     previous?: ExpenseRow,
   ): {
     currency: Currency;
@@ -391,16 +388,6 @@ export class SettleService {
     payerId: string;
     splitMode: Expense['splitMode'];
   } {
-    onlyKeys(body, [
-      'currency',
-      'description',
-      'amount',
-      'payerId',
-      'splitMode',
-      'participantIds',
-      'customShares',
-      'expectedVersion',
-    ]);
     let currency: Currency;
     try {
       currency = requireCurrency(
@@ -462,17 +449,14 @@ export class SettleService {
     };
   }
 
-  private customSharesInput(value: unknown, currency: Currency) {
-    if (
-      !Array.isArray(value) ||
-      !value.length ||
-      value.length > MAX_GROUP_MEMBERS
-    )
+  private customSharesInput(
+    value: CustomShareRequestDTO[] | undefined,
+    currency: Currency,
+  ) {
+    // Required only for CUSTOM mode; nested field/array validation is owned by the DTO.
+    if (value === undefined)
       throw new SettleException(settleErrors.CUSTOM_SHARES_REQUIRED);
     return value.map((share) => {
-      if (!share || typeof share !== 'object' || Array.isArray(share))
-        throw new SettleException(settleErrors.CUSTOM_SHARES_REQUIRED);
-      onlyKeys(share, ['userId', 'amount']);
       let assignedAmount: bigint;
       try {
         assignedAmount = parseAmount(share.amount, currency);
@@ -480,7 +464,7 @@ export class SettleService {
         throw new SettleException(settleErrors.INVALID_CUSTOM_SHARE_AMOUNT);
       }
       return {
-        userId: share.userId as string,
+        userId: share.userId,
         assignedAmountMinor: assignedAmount.toString(),
       };
     });
@@ -488,7 +472,7 @@ export class SettleService {
 
   private expenseInput(
     round: ExpenseUpdateRow,
-    body: ExpenseRequestDTO | Record<string, unknown>,
+    body: ExpenseRequestDTO,
     previous: ExpenseRow,
   ) {
     const input = this.expenseFields(body, previous);
@@ -600,7 +584,7 @@ export class SettleService {
     access: Identity,
     key: string,
     roundId: string,
-    body: ExpenseRequestDTO | Record<string, unknown>,
+    body: ExpenseRequestDTO,
     captureAudience?: (audience: {
       groupId: string;
       userIds: string[];
@@ -622,7 +606,7 @@ export class SettleService {
           userId,
           key,
           { ...input, participantIds },
-          body.expectedVersion as number,
+          body.expectedVersion,
           minorLimit(MAX_ROUND_TOTAL_MAJOR, input.currency).toString(),
           now,
         );
@@ -644,11 +628,6 @@ export class SettleService {
           participantIds.some((id) => !round.active_ids.includes(id))
         )
           throw new SettleException(settleErrors.INACTIVE_SHARE_PARTICIPANT);
-        if (actual.splitMode === 'CUSTOM')
-          assignedShares = this.customSharesInput(
-            body.customShares,
-            input.currency,
-          );
         this.validateCurrencyTotals(round.totals, input);
         if (!round.created)
           throw new Error('Validated expense was not inserted');
@@ -682,12 +661,6 @@ export class SettleService {
           ...body,
         });
         input = this.expenseFields(body);
-        if (
-          typeof body.expectedVersion !== 'number' ||
-          !Number.isSafeInteger(body.expectedVersion) ||
-          body.expectedVersion < 1
-        )
-          throw new SettleException(settleErrors.VERSION_REQUIRED);
         if (input.splitMode === 'ALL') {
           if (body.participantIds !== undefined)
             throw new SettleException(
@@ -718,7 +691,7 @@ export class SettleService {
   private validateExpenseUpdate(
     round: ExpenseUpdateRow,
     userId: string,
-    expectedVersion: unknown,
+    expectedVersion: number,
   ) {
     if (!round.id || !round.expense) throw missing();
     this.state(round, 'RECORDING');
@@ -735,7 +708,7 @@ export class SettleService {
     access: Identity,
     key: string,
     roundId: string,
-    body: ExpenseRequestDTO | Record<string, unknown>,
+    body: ExpenseRequestDTO,
     expenseId?: string,
     captureAudience?: (audience: {
       groupId: string;
@@ -819,7 +792,7 @@ export class SettleService {
       | 'deleted'
     >,
     userId: string,
-    expectedVersion: unknown,
+    expectedVersion: number,
   ) {
     if (!round.id || !round.expense_id) throw missing();
     this.state(round, 'RECORDING');
@@ -837,7 +810,7 @@ export class SettleService {
     key: string,
     roundId: string,
     expenseId: string,
-    body: VersionRequestDTO | Record<string, unknown>,
+    body: VersionRequestDTO,
     captureAudience?: (audience: {
       groupId: string;
       userIds: string[];
@@ -877,7 +850,6 @@ export class SettleService {
       },
       async (client) => {
         userId = (await this.authorization.requireAccount(client, access)).id;
-        onlyKeys(body, ['expectedVersion']);
         digest = mutationDigest(key, { roundId, expenseId, ...body });
         round = (
           await this.repository.findExpenseDeletion(
@@ -972,7 +944,7 @@ export class SettleService {
     key: string,
     roundId: string,
     targetId: string,
-    body: VersionRequestDTO | Record<string, unknown>,
+    body: VersionRequestDTO,
     captureAudience?: (audience: {
       groupId: string;
       userIds: string[];
@@ -981,7 +953,6 @@ export class SettleService {
   ) {
     return this.prisma.withDatabaseConnection(async (client) => {
       const account = await this.authorization.requireAccount(client, access);
-      onlyKeys(body, ['expectedVersion']);
       mutationDigest(key, { roundId, targetId, ...body });
       const [round] = await this.repository.findMemberExclusion(
         client,
@@ -1097,7 +1068,7 @@ export class SettleService {
 
   private validateRoundConfirmation(
     round: RoundConfirmationRow,
-    expectedVersion: unknown,
+    expectedVersion: number,
   ) {
     if (!round.id) throw missing();
     this.creator(round);
@@ -1113,7 +1084,7 @@ export class SettleService {
     access: Identity,
     key: string,
     roundId: string,
-    body: VersionRequestDTO | Record<string, unknown>,
+    body: VersionRequestDTO,
     captureAudience?: (audience: {
       groupId: string;
       userIds: string[];
@@ -1163,7 +1134,6 @@ export class SettleService {
       },
       async (client) => {
         userId = (await this.authorization.requireAccount(client, access)).id;
-        onlyKeys(body, ['expectedVersion']);
         digest = mutationDigest(key, { roundId, ...body });
       },
     );
@@ -1174,7 +1144,7 @@ export class SettleService {
     key: string,
     roundId: string,
     action: string,
-    body: VersionRequestDTO | Record<string, unknown>,
+    body: VersionRequestDTO,
     captureAudience?: (audience: {
       groupId: string;
       userIds: string[];
@@ -1185,7 +1155,6 @@ export class SettleService {
     if (action === 'force-complete')
       return this.prisma.withDatabaseConnection(async (client) => {
         const account = await this.authorization.requireAccount(client, access);
-        onlyKeys(body, ['expectedVersion']);
         const digest = mutationDigest(key, { roundId, ...body });
         const [round] = await this.repository.findRoundForceCompletion(
           client,
@@ -1242,13 +1211,8 @@ export class SettleService {
     if (action === 'complete')
       return this.prisma.withDatabaseConnection(async (client) => {
         const account = await this.authorization.requireAccount(client, access);
-        onlyKeys(body, ['expectedVersion']);
         const digest = mutationDigest(key, { roundId, ...body });
-        const expectedVersion =
-          typeof body.expectedVersion === 'number' &&
-          Number.isSafeInteger(body.expectedVersion)
-            ? body.expectedVersion
-            : null;
+        const expectedVersion = body.expectedVersion;
         const current = await this.repository.completeCheckedRound(
           client,
           roundId,
@@ -1284,7 +1248,6 @@ export class SettleService {
     if (action === 'draw')
       return this.prisma.withDatabaseConnection(async (client) => {
         const account = await this.authorization.requireAccount(client, access);
-        onlyKeys(body, ['expectedVersion']);
         const digest = mutationDigest(key, { roundId, ...body });
         const [round] = await this.repository.findRoundConfirmation(
           client,
@@ -1342,7 +1305,6 @@ export class SettleService {
     if (action === 'reopen')
       return this.prisma.withDatabaseConnection(async (client) => {
         const account = await this.authorization.requireAccount(client, access);
-        onlyKeys(body, ['expectedVersion']);
         mutationDigest(key, { roundId, ...body });
         const [round] = await this.repository.findRoundReopening(
           client,
@@ -1367,7 +1329,6 @@ export class SettleService {
       let userId: string;
       return this.prisma.withWriteTransaction(
         async (client) => {
-          onlyKeys(body, ['expectedVersion']);
           const digest = mutationDigest(key, { roundId, ...body });
           const [round] = await this.repository.findRoundCancellation(
             client,
@@ -1404,7 +1365,6 @@ export class SettleService {
         },
       );
     }
-    onlyKeys(body, ['expectedVersion']);
     if (action !== 'send') throw missing();
     return this.mutations.execute(
       access,
@@ -1442,7 +1402,7 @@ export class SettleService {
     access: Identity,
     key: string,
     roundId: string,
-    body: SettlementCheckRequestDTO | Record<string, unknown>,
+    body: SettlementCheckRequestDTO,
     captureAudience?: (audience: {
       groupId: string;
       userIds: string[];
@@ -1450,28 +1410,11 @@ export class SettleService {
   ) {
     return this.prisma.withDatabaseConnection(async (client) => {
       const account = await this.authorization.requireAccount(client, access);
-      onlyKeys(body, ['expectedVersion', 'checked', 'senderId', 'currency']);
-      if (typeof body.checked !== 'boolean')
-        throw new SettleException(settleErrors.CHECK_STATE_REQUIRED);
-      if (
-        body.senderId !== undefined &&
-        (typeof body.senderId !== 'string' ||
-          body.senderId !== body.senderId.trim() ||
-          !/^[\w-]{1,128}$/.test(body.senderId))
-      )
-        throw new SettleException(settleErrors.INVALID_SENDER);
       mutationDigest(key, { roundId, ...body });
-      let currency: Currency | undefined;
-      if (body.currency !== undefined) {
-        try {
-          currency = requireCurrency(body.currency);
-        } catch {
-          throw new SettleException(settleErrors.UNSUPPORTED_TRANSFER_CURRENCY);
-        }
-      }
+      const currency = body.currency;
       if (body.senderId !== undefined && !currency)
         throw new SettleException(settleErrors.TRANSFER_CURRENCY_REQUIRED);
-      const senderId = body.senderId as string | undefined;
+      const senderId = body.senderId;
       const [round] = await this.repository.findSettlementCheck(
         client,
         roundId,
@@ -1627,7 +1570,13 @@ export class SettleService {
         ? (input[1] as ReceiptAudience | undefined)
         : input[3];
     const { expectedVersion, bytes, type } = upload;
-    if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1)
+    // Multipart/programmatic uploads enter after account authorization, outside
+    // JSON DTO pipes. Validate their metadata once with the same library rules.
+    if (
+      !isInt(expectedVersion) ||
+      !min(expectedVersion, 1) ||
+      !max(expectedVersion, Number.MAX_SAFE_INTEGER)
+    )
       throw new SettleException(settleErrors.VERSION_REQUIRED);
     const file = await validateReceipt(bytes, type, upload.name);
     const sourceSha256 = file.sha256;
@@ -1690,14 +1639,13 @@ export class SettleService {
     roundId: string,
     expenseId: string,
     receiptId: string,
-    body: VersionRequestDTO | Record<string, unknown>,
+    body: VersionRequestDTO,
     captureAudience?: ReceiptAudience,
   ) {
     let objectKey: string | null = null;
     let audience: Parameters<ReceiptAudience>[0] | undefined;
     const result = await this.prisma.withDatabaseConnection(async (client) => {
       const account = await this.authorization.requireAccount(client, access);
-      onlyKeys(body, ['expectedVersion']);
       const digest = mutationDigest(key, {
         roundId,
         expenseId,

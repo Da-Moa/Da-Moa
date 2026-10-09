@@ -225,6 +225,60 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         assert.equal((await request(input, randomUUID(), 400, 4)).code, 'invalid_request_key')
       })
       await trace(4, 'session', () => assert.rejects(createRound(a, createKey, group.id, body), (error: { code: string }) => error.code === 'round_already_exists'))
+      await t.test('every JSON settlement command validates version and nested fields before DB; valid typed input still reaches authorization and conflict checks', async ht => {
+        const { app } = await createBackend()
+        ht.after(async () => { await app.close() })
+        await app.listen(0, '127.0.0.1')
+        const origin = await app.getUrl(), token = createAccessToken(a.userId, a.sessionId)
+        const base = `/api/rounds/${round.id}`, expense = `${base}/expenses/${randomUUID()}`
+        const fields = { currency: 'KRW', description: 'HTTP 검증', amount: '100', payerId: b.userId, splitMode: 'ALL' }
+        const routes: [string, string, object][] = [
+          ['DELETE', base, {}],
+          ...['confirm', 'reopen', 'send', 'draw', 'complete', 'force-complete'].map(action => ['POST', `${base}/${action}`, {}] as [string, string, object]),
+          ['POST', `${base}/expenses`, fields], ['PATCH', expense, {}], ['DELETE', expense, {}],
+          ['POST', `${base}/members/${c.userId}/exclude`, {}],
+          ['DELETE', `${expense}/receipts/${randomUUID()}`, {}],
+          ['POST', `${base}/settlement-check`, { checked: true }],
+        ]
+        const request = async (method: string, path: string, input: object, status: number, count: number, authorization = `Bearer ${token}`) => {
+          statements = []
+          const response = await fetch(`${origin}${path}`, { method,
+            headers: { origin, authorization, 'content-type': 'application/json', 'idempotency-key': key() },
+            body: JSON.stringify(input), signal: AbortSignal.timeout(10000),
+          })
+          const result = await response.json()
+          assert.equal(response.status, status, `${method} ${path}: ${JSON.stringify(result)}`)
+          assert.equal(statements.length, count, statements.join('\n'))
+          return result
+        }
+        for (const [method, path, fields] of routes) {
+          for (const expectedVersion of [undefined, null, '1', 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, {}]) {
+            const payload = await request(method, path, { ...fields, expectedVersion }, 400, 0)
+            assert.equal(payload.code, 'invalid_version')
+            assert.deepEqual(payload.detail, { field: 'expectedVersion' })
+          }
+          assert.equal((await request(method, path, { ...fields, expectedVersion: 1, extra: true }, 400, 0)).code, 'invalid_input')
+          await request(method, path, fields, 401, 0, '')
+          await request(method, path, fields, 401, 0, 'Bearer forged')
+        }
+        for (const input of [
+          { checked: 'yes', expectedVersion: 1 },
+          { checked: true, senderId: ' sender ', expectedVersion: 1 },
+          { checked: true, currency: 'INVALID', expectedVersion: 1 },
+        ]) await request('POST', `${base}/settlement-check`, input, 400, 0)
+        for (const customShares of [
+          [{ userId: a.userId, amount: 100 }], [{ userId: a.userId, amount: '100', extra: true }], [123], [],
+        ]) await request('POST', `${base}/expenses`, { ...fields, splitMode: 'CUSTOM', customShares, expectedVersion: 1 }, 400, 0)
+        const stale = await request('POST', `${base}/confirm`, { expectedVersion: 2 }, 409, 4)
+        assert.equal(stale.code, 'stale_round')
+        assert.equal(statements[1], 'BEGIN')
+        assert.equal(statements.at(-1), 'ROLLBACK')
+        assert.ok(!statements.some(sql => sql.includes('pg_advisory_xact_lock')), 'version conflict occurs before the write lock')
+        const unauthorized = await request('POST', `${base}/confirm`, { expectedVersion: 1 }, 401, 1,
+          `Bearer ${createAccessToken(randomUUID(), randomUUID())}`)
+        assert.equal(unauthorized.code, 'unauthorized')
+        assert.match(statements[0], /"users" WHERE .*"id" = \$1/)
+      })
       assert.equal(round.id, createKey)
       await trace(4, 'session', () => assert.rejects(createRound(a, createKey.toUpperCase(), group.id, { ...body, name: '다른 제목' }), (error: { code: string }) => error.code === 'round_already_exists'))
       for (const [actor, ticket, input, expected, count] of [
@@ -347,19 +401,19 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       assert.deepEqual(new Set(expenseAudience?.userIds), new Set([a.userId, b.userId, c.userId]))
       version = expense.version!
       assert.deepEqual(await trace(5, 'expense', () => saveExpense(a, expenseKey, round.id, expenseBody, undefined, () => assert.fail('replay must not publish again'))), expense)
-      await trace(0, 'expense', () => assert.rejects(saveExpense(null, '', round.id, {}), (error: { code: string }) => error.code === 'unauthorized'))
-      await trace(1, 'expense', () => assert.rejects(saveExpense({ ...a, userId: randomUUID() }, '', round.id, {}), (error: { code: string }) => error.code === 'unauthorized'))
-      for (const [input, expected] of [
-        [{ ...expenseBody, description: '' }, 'invalid_input'],
-        [{ ...expenseBody, amount: 100 }, 'invalid_amount'],
-        [{ ...expenseBody, amount: '1.00' }, 'invalid_amount'],
-        [{ ...expenseBody, splitMode: 'CUSTOM', customShares: [{ userId: a.userId, amount: '100.00' }] }, 'invalid_amount'],
-        [{ ...expenseBody, amount: '100000001' }, 'expense_amount_limit_exceeded'],
-        [{ ...expenseBody, expectedVersion: '1' }, 'invalid_version'],
-        [{ ...expenseBody, participantIds: [a.userId] }, 'invalid_participants'],
-        [{ ...expenseBody, splitMode: 'SELECTED', participantIds: [a.userId, a.userId] }, 'invalid_participants'],
-        [{ ...expenseBody, splitMode: 'CUSTOM', customShares: [{ userId: a.userId, amount: '99' }] }, 'custom_share_total_mismatch'],
-      ] as const) await trace(1, 'expense', () => assert.rejects(saveExpense(a, key(), round.id, input), (error: { code: string }) => error.code === expected))
+      await trace(0, 'expense', () => assert.rejects(saveExpense(null, '', round.id, expenseBody), (error: { code: string }) => error.code === 'unauthorized'))
+      await trace(1, 'expense', () => assert.rejects(saveExpense({ ...a, userId: randomUUID() }, '', round.id, expenseBody), (error: { code: string }) => error.code === 'unauthorized'))
+      for (const [input, expected, count] of [
+        [{ ...expenseBody, description: '' }, 'invalid_input', 0],
+        [{ ...expenseBody, amount: 100 }, 'invalid_amount', 0],
+        [{ ...expenseBody, amount: '1.00' }, 'invalid_amount', 1],
+        [{ ...expenseBody, splitMode: 'CUSTOM', customShares: [{ userId: a.userId, amount: '100.00' }] }, 'invalid_amount', 1],
+        [{ ...expenseBody, amount: '100000001' }, 'expense_amount_limit_exceeded', 1],
+        [{ ...expenseBody, expectedVersion: '1' }, 'invalid_version', 0],
+        [{ ...expenseBody, participantIds: [a.userId] }, 'invalid_participants', 1],
+        [{ ...expenseBody, splitMode: 'SELECTED', participantIds: [a.userId, a.userId] }, 'invalid_participants', 0],
+        [{ ...expenseBody, splitMode: 'CUSTOM', customShares: [{ userId: a.userId, amount: '99' }] }, 'custom_share_total_mismatch', 1],
+      ] as const) await trace(count, count === 0 ? 'connection' : 'expense', () => assert.rejects(saveExpense(a, key(), round.id, input), (error: { code: string }) => error.code === expected))
       for (const [actor, id, input, expected] of [
         [nonParticipant, round.id, { ...expenseBody, expectedVersion: version }, 'not_found'],
         [a, randomUUID(), { ...expenseBody, expectedVersion: version }, 'not_found'],
@@ -388,19 +442,19 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         const patchRound = await createRound(a, uuidV7(), group.id, body)
         const original = await saveExpense(b, key(), patchRound.id, { ...expenseBody, expectedVersion: 1 })
         let patchVersion = original.version!
-        await trace(0, 'patch', () => assert.rejects(saveExpense(null, '', patchRound.id, {}, original.id), (error: { code: string }) => error.code === 'unauthorized'))
-        await trace(1, 'patch', () => assert.rejects(saveExpense({ ...a, userId: randomUUID() }, '', patchRound.id, {}, original.id), (error: { code: string }) => error.code === 'unauthorized'))
-        for (const [actor, id, input, expected] of [
-          [c, original.id, { expectedVersion: patchVersion }, 'forbidden'],
-          [nonParticipant, original.id, { expectedVersion: patchVersion }, 'not_found'],
-          [a, randomUUID(), { expectedVersion: patchVersion }, 'not_found'],
-          [a, original.id, { expectedVersion: 1 }, 'stale_round'],
-          [a, original.id, { expectedVersion: '2' }, 'invalid_version'],
-          [a, original.id, { amount: '1.00', expectedVersion: patchVersion }, 'invalid_amount'],
-          [a, original.id, { currency: 'USD', expectedVersion: patchVersion }, 'invalid_amount'],
-          [a, original.id, { payerId: nonParticipant.userId, expectedVersion: patchVersion }, 'invalid_participants'],
-          [a, original.id, { splitMode: 'CUSTOM', customShares: [{ userId: a.userId, amount: '99' }], expectedVersion: patchVersion }, 'custom_share_total_mismatch'],
-        ] as const) await trace(2, 'patch', () => assert.rejects(saveExpense(actor, key(), patchRound.id, input, id), (error: { code: string }) => error.code === expected))
+        await trace(0, 'patch', () => assert.rejects(saveExpense(null, '', patchRound.id, { expectedVersion: patchVersion }, original.id), (error: { code: string }) => error.code === 'unauthorized'))
+        await trace(1, 'patch', () => assert.rejects(saveExpense({ ...a, userId: randomUUID() }, '', patchRound.id, { expectedVersion: patchVersion }, original.id), (error: { code: string }) => error.code === 'unauthorized'))
+        for (const [actor, id, input, expected, count] of [
+          [c, original.id, { expectedVersion: patchVersion }, 'forbidden', 2],
+          [nonParticipant, original.id, { expectedVersion: patchVersion }, 'not_found', 2],
+          [a, randomUUID(), { expectedVersion: patchVersion }, 'not_found', 2],
+          [a, original.id, { expectedVersion: 1 }, 'stale_round', 2],
+          [a, original.id, { expectedVersion: '2' }, 'invalid_version', 0],
+          [a, original.id, { amount: '1.00', expectedVersion: patchVersion }, 'invalid_amount', 2],
+          [a, original.id, { currency: 'USD', expectedVersion: patchVersion }, 'invalid_amount', 2],
+          [a, original.id, { payerId: nonParticipant.userId, expectedVersion: patchVersion }, 'invalid_participants', 2],
+          [a, original.id, { splitMode: 'CUSTOM', customShares: [{ userId: a.userId, amount: '99' }], expectedVersion: patchVersion }, 'custom_share_total_mismatch', 2],
+        ] as const) await trace(count, count === 0 ? 'connection' : 'patch', () => assert.rejects(saveExpense(actor, key(), patchRound.id, input, id), (error: { code: string }) => error.code === expected))
         for (const [actor, input] of [
           [b, { description: '기록자 수정' }],
           [a, { splitMode: 'SELECTED', participantIds: [a.userId, b.userId] }],
@@ -456,16 +510,16 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
             await drainReceiptQueue()
             const objectKey = (await db.query('SELECT object_key FROM expense_receipts WHERE id=$1', [receipt.id])).rows[0].object_key
             const head = { Bucket: process.env.MINIO_BUCKET!, Key: objectKey }
-            await trace(2, 'delete', () => assert.rejects(deleteExpense(null, '', deletionRound.id, original.id, {}), (error: { code: string }) => error.code === 'unauthorized'))
-            await trace(3, 'delete', () => assert.rejects(deleteExpense({ ...a, userId: randomUUID() }, '', deletionRound.id, original.id, {}), (error: { code: string }) => error.code === 'unauthorized'))
-            await trace(3, 'delete', () => assert.rejects(deleteExpense(a, key(), deletionRound.id, original.id, { ...request, amount: '1' }), (error: { code: string }) => error.code === 'invalid_input'))
-            for (const [caller, id, input, expected] of [
-              [c, original.id, request, 'forbidden'],
-              [nonParticipant, original.id, request, 'not_found'],
-              [a, randomUUID(), request, 'not_found'],
-              [a, original.id, { expectedVersion: 1 }, 'stale_round'],
-              [a, original.id, { expectedVersion: '3' }, 'invalid_version'],
-            ] as const) await trace(4, 'delete', () => assert.rejects(deleteExpense(caller, key(), deletionRound.id, id, input), (error: { code: string }) => error.code === expected))
+            await trace(2, 'delete', () => assert.rejects(deleteExpense(null, '', deletionRound.id, original.id, request), (error: { code: string }) => error.code === 'unauthorized'))
+            await trace(3, 'delete', () => assert.rejects(deleteExpense({ ...a, userId: randomUUID() }, '', deletionRound.id, original.id, request), (error: { code: string }) => error.code === 'unauthorized'))
+            await trace(0, 'connection', () => assert.rejects(deleteExpense(a, key(), deletionRound.id, original.id, { ...request, amount: '1' }), (error: { code: string }) => error.code === 'invalid_input'))
+            for (const [caller, id, input, expected, count] of [
+              [c, original.id, request, 'forbidden', 4],
+              [nonParticipant, original.id, request, 'not_found', 4],
+              [a, randomUUID(), request, 'not_found', 4],
+              [a, original.id, { expectedVersion: 1 }, 'stale_round', 4],
+              [a, original.id, { expectedVersion: '3' }, 'invalid_version', 0],
+            ] as const) await trace(count, count === 0 ? 'connection' : 'delete', () => assert.rejects(deleteExpense(caller, key(), deletionRound.id, id, input), (error: { code: string }) => error.code === expected))
 
             const before = await getRound(a, deletionRound.id, new URLSearchParams())
             assert.equal(before.totals[0]?.totalMinor, '300')
@@ -542,16 +596,16 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       version = removed.version!
       assert.equal((await trace(3, 'connection', () => checkExclusion(a, round.id, c.userId))).allowed, true)
       for (const [actor, id, target, ticket, input, expected, count] of [
-        [null, round.id, c.userId, '', { unexpected: true }, 'unauthorized', 0],
-        [{ ...a, userId: randomUUID() }, round.id, c.userId, '', { unexpected: true }, 'unauthorized', 1],
-        [a, round.id, c.userId, key(), { unexpected: true }, 'invalid_input', 1],
+        [null, round.id, c.userId, '', { expectedVersion: version }, 'unauthorized', 0],
+        [{ ...a, userId: randomUUID() }, round.id, c.userId, '', { expectedVersion: version }, 'unauthorized', 1],
+        [a, round.id, c.userId, key(), { unexpected: true }, 'invalid_input', 0],
         [a, round.id, c.userId, '', { expectedVersion: version }, 'invalid_request_key', 1],
         [b, round.id, randomUUID(), key(), { expectedVersion: version }, 'forbidden', 2],
         [nonParticipant, round.id, c.userId, key(), { expectedVersion: version }, 'not_found', 2],
         [a, randomUUID(), c.userId, key(), { expectedVersion: version }, 'not_found', 2],
         [a, round.id, randomUUID(), key(), { expectedVersion: version }, 'not_found', 2],
         [a, round.id, a.userId, key(), { expectedVersion: version }, 'member_exclusion_blocked', 2],
-        [a, round.id, c.userId, key(), { expectedVersion: '1' }, 'invalid_version', 2],
+        [a, round.id, c.userId, key(), { expectedVersion: '1' }, 'invalid_version', 0],
         [a, round.id, c.userId, key(), { expectedVersion: version - 1 }, 'stale_round', 2],
       ] as const) await trace(count, 'exclude', () => assert.rejects(excludeMember(actor, ticket, id, target, input), (error: { code: string }) => error.code === expected))
       const beforeExclusion = await getRound(a, round.id, new URLSearchParams())
@@ -578,9 +632,9 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       await t.test('confirm uses six statements regardless of expenses and preserves validation, rollback and replay', async t => {
         const confirmation = await createRound(b, uuidV7(), group.id, { ...body, participantIds: [a.userId, b.userId] })
         for (const [actor, ticket, id, input, expected, count] of [
-          [null, '', confirmation.id, {}, 'unauthorized', 0],
-          [{ ...b, userId: randomUUID() }, '', confirmation.id, {}, 'unauthorized', 1],
-          [b, '', confirmation.id, {}, 'invalid_request_key', 1],
+          [null, '', confirmation.id, { expectedVersion: 1 }, 'unauthorized', 0],
+          [{ ...b, userId: randomUUID() }, '', confirmation.id, { expectedVersion: 1 }, 'unauthorized', 1],
+          [b, '', confirmation.id, { expectedVersion: 1 }, 'invalid_request_key', 1],
           [a, key(), confirmation.id, { expectedVersion: 1 }, 'forbidden', 4],
           [nonParticipant, key(), confirmation.id, { expectedVersion: 1 }, 'not_found', 4],
           [b, key(), randomUUID(), { expectedVersion: 1 }, 'not_found', 4],
@@ -620,14 +674,14 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         await t.test('reopen uses AUTH then round then one atomic save without locks or replay', async () => {
           const requestKey = key(), request = { expectedVersion: result.version }
           for (const [actor, ticket, id, input, expected, count] of [
-            [null, '', confirmation.id, {}, 'unauthorized', 0],
-            [{ ...b, userId: randomUUID() }, '', confirmation.id, {}, 'unauthorized', 1],
+            [null, '', confirmation.id, { expectedVersion: 1 }, 'unauthorized', 0],
+            [{ ...b, userId: randomUUID() }, '', confirmation.id, { expectedVersion: 1 }, 'unauthorized', 1],
             [b, '', confirmation.id, request, 'invalid_request_key', 1],
-            [b, key(), confirmation.id, { unexpected: true }, 'invalid_input', 1],
+            [b, key(), confirmation.id, { unexpected: true }, 'invalid_input', 0],
             [a, key(), confirmation.id, request, 'forbidden', 2],
             [nonParticipant, key(), confirmation.id, request, 'not_found', 2],
             [b, key(), randomUUID(), request, 'not_found', 2],
-            [b, key(), confirmation.id, { expectedVersion: '1' }, 'invalid_version', 2],
+            [b, key(), confirmation.id, { expectedVersion: '1' }, 'invalid_version', 0],
             [b, key(), confirmation.id, { expectedVersion: result.version! - 1 }, 'stale_round', 2],
           ] as const) await trace(count, 'reopen', () => assert.rejects(roundCommand(actor, ticket, id, 'reopen', input), (error: { code: string }) => error.code === expected))
           const constraint = `reopen_test_${key().replaceAll('-', '')}`
@@ -690,14 +744,14 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       await t.test('draw uses AUTH then round then one atomic final save', async () => {
         const requestKey = key(), request = { expectedVersion: version }
         for (const [actor, ticket, id, input, expected, count] of [
-          [null, '', round.id, {}, 'unauthorized', 0],
-          [{ ...a, userId: randomUUID() }, '', round.id, {}, 'unauthorized', 1],
+          [null, '', round.id, request, 'unauthorized', 0],
+          [{ ...a, userId: randomUUID() }, '', round.id, request, 'unauthorized', 1],
           [a, '', round.id, request, 'invalid_request_key', 1],
-          [a, key(), round.id, { unexpected: true }, 'invalid_input', 1],
+          [a, key(), round.id, { unexpected: true }, 'invalid_input', 0],
           [b, key(), round.id, request, 'forbidden', 2],
           [nonParticipant, key(), round.id, request, 'not_found', 2],
           [a, key(), randomUUID(), request, 'not_found', 2],
-          [a, key(), round.id, { expectedVersion: '1' }, 'invalid_version', 2],
+          [a, key(), round.id, { expectedVersion: '1' }, 'invalid_version', 0],
           [a, key(), round.id, { expectedVersion: version - 1 }, 'stale_round', 2],
         ] as const) await trace(count, 'draw', () => assert.rejects(roundCommand(actor, ticket, id, 'draw', input), (error: { code: string }) => error.code === expected))
         const result = await trace(3, 'draw', () => roundCommand(a, requestKey, round.id, 'draw', request, audience => {
@@ -724,11 +778,11 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       assert.deepEqual(receiver.outgoing, [])
       const checkKey = key(), checkBody = { checked: true, currency: 'KRW', senderId: a.userId, expectedVersion: version }
       for (const [actor, ticket, input, count, expected] of [
-        [null, checkKey, { checked: 'yes' }, 0, 'unauthorized'],
-        [{ ...b, userId: randomUUID() }, checkKey, { checked: 'yes' }, 1, 'unauthorized'],
-        [b, checkKey, { ...checkBody, checked: 'yes' }, 1, 'invalid_input'],
-        [b, checkKey, { ...checkBody, senderId: ' sender ' }, 1, 'invalid_input'],
-        [b, checkKey, { ...checkBody, extra: true }, 1, 'invalid_input'],
+        [null, checkKey, checkBody, 0, 'unauthorized'],
+        [{ ...b, userId: randomUUID() }, checkKey, checkBody, 1, 'unauthorized'],
+        [b, checkKey, { ...checkBody, checked: 'yes' }, 0, 'invalid_input'],
+        [b, checkKey, { ...checkBody, senderId: ' sender ' }, 0, 'invalid_input'],
+        [b, checkKey, { ...checkBody, extra: true }, 0, 'invalid_input'],
         [b, 'invalid-key', checkBody, 1, 'invalid_request_key'],
         [b, checkKey, { ...checkBody, expectedVersion: version + 1 }, 2, 'stale_round'],
         [b, checkKey, { ...checkBody, currency: 'KRW', senderId: c.userId }, 2, 'forbidden'],
@@ -755,14 +809,14 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       await t.test('complete checks pending transfers inside one atomic save after AUTH; rejection and replay also use two queries', async () => {
         const requestKey = key(), request = { expectedVersion: version }
         for (const [actor, ticket, id, input, expected, count] of [
-          [null, '', round.id, {}, 'unauthorized', 0],
-          [{ ...a, userId: randomUUID() }, '', round.id, {}, 'unauthorized', 1],
+          [null, '', round.id, request, 'unauthorized', 0],
+          [{ ...a, userId: randomUUID() }, '', round.id, request, 'unauthorized', 1],
           [a, '', round.id, request, 'invalid_request_key', 1],
-          [a, key(), round.id, { unexpected: true }, 'invalid_input', 1],
+          [a, key(), round.id, { unexpected: true }, 'invalid_input', 0],
           [b, key(), round.id, request, 'forbidden', 2],
           [nonParticipant, key(), round.id, request, 'not_found', 2],
           [a, key(), randomUUID(), request, 'not_found', 2],
-          [a, key(), round.id, { expectedVersion: '1' }, 'invalid_version', 2],
+          [a, key(), round.id, { expectedVersion: '1' }, 'invalid_version', 0],
           [a, key(), round.id, { expectedVersion: version - 1 }, 'stale_round', 2],
         ] as const) await trace(count, 'complete', () => assert.rejects(roundCommand(actor, ticket, id, 'complete', input), (error: { code: string }) => error.code === expected))
         await setSettlementCheck(b, key(), round.id, { ...checkBody, checked: false })
@@ -810,7 +864,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       const cancelled = await trace(4, 'session', () => createRound(a, uuidV7(), group.id, { ...body, participantIds: [a.userId, b.userId] }))
       for (const [actor, count] of [[null, 2], [{ ...a, userId: randomUUID() }, 3]] as const) {
         statements = []
-        await assert.rejects(roundCommand(actor, '', cancelled.id, 'cancel', {}), (error: { code: string }) => error.code === 'unauthorized')
+        await assert.rejects(roundCommand(actor, '', cancelled.id, 'cancel', { expectedVersion: 1 }), (error: { code: string }) => error.code === 'unauthorized')
         assert.equal(statements.length, count)
         assert.equal(statements[0], 'BEGIN')
         assert.equal(statements.at(-1), 'ROLLBACK')
@@ -819,14 +873,14 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       const historical = await trace(2, 'connection', () => listRounds(c, new URLSearchParams(), group.id))
       assert.ok(historical.items.some(item => item.id === round.id), 'excluded participants retain round history')
       assert.ok(historical.items.every(item => item.id !== cancelled.id), 'group membership alone does not expose a round')
-      for (const [actor, id, input, expected] of [
-        [b, cancelled.id, { expectedVersion: 1 }, 'forbidden'],
-        [c, cancelled.id, { expectedVersion: 1 }, 'not_found'],
-        [a, randomUUID(), { expectedVersion: 1 }, 'not_found'],
-        [a, cancelled.id, { expectedVersion: 2 }, 'stale_round'],
-        [a, cancelled.id, { expectedVersion: '1' }, 'invalid_version'],
-        [a, round.id, { expectedVersion: version }, 'invalid_round_state'],
-      ] as const) await trace(5, 'cancel', () => assert.rejects(roundCommand(actor, key(), id, 'cancel', input), (error: { code: string }) => error.code === expected))
+      for (const [actor, id, input, expected, count] of [
+        [b, cancelled.id, { expectedVersion: 1 }, 'forbidden', 5],
+        [c, cancelled.id, { expectedVersion: 1 }, 'not_found', 5],
+        [a, randomUUID(), { expectedVersion: 1 }, 'not_found', 5],
+        [a, cancelled.id, { expectedVersion: 2 }, 'stale_round', 5],
+        [a, cancelled.id, { expectedVersion: '1' }, 'invalid_version', 0],
+        [a, round.id, { expectedVersion: version }, 'invalid_round_state', 5],
+      ] as const) await trace(count, count === 0 ? 'connection' : 'cancel', () => assert.rejects(roundCommand(actor, key(), id, 'cancel', input), (error: { code: string }) => error.code === expected))
       const failedCancelKey = key(), cancelConstraint = `round_cancel_test_${key().replaceAll('-', '')}`
       await db.query(`ALTER TABLE mutation_requests ADD CONSTRAINT ${cancelConstraint} CHECK (request_key <> '${failedCancelKey}') NOT VALID`)
       try {
@@ -876,14 +930,14 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       await t.test('force completion reads pending receivers and atomically saves status, version and replay in three queries', async () => {
         const requestKey = key(), request = { expectedVersion: evenVersion }
         for (const [actor, ticket, id, input, expected, count] of [
-          [null, '', even.id, {}, 'unauthorized', 0],
-          [{ ...a, userId: randomUUID() }, '', even.id, {}, 'unauthorized', 1],
+          [null, '', even.id, request, 'unauthorized', 0],
+          [{ ...a, userId: randomUUID() }, '', even.id, request, 'unauthorized', 1],
           [a, '', even.id, request, 'invalid_request_key', 1],
-          [a, key(), even.id, { unexpected: true }, 'invalid_input', 1],
+          [a, key(), even.id, { unexpected: true }, 'invalid_input', 0],
           [b, key(), even.id, request, 'forbidden', 2],
           [nonParticipant, key(), even.id, request, 'not_found', 2],
           [a, key(), randomUUID(), request, 'not_found', 2],
-          [a, key(), even.id, { expectedVersion: '1' }, 'invalid_version', 2],
+          [a, key(), even.id, { expectedVersion: '1' }, 'invalid_version', 0],
           [a, key(), even.id, { expectedVersion: evenVersion - 1 }, 'stale_round', 2],
           [a, key(), round.id, { expectedVersion: version }, 'invalid_round_state', 2],
         ] as const) await trace(count, 'force-complete', () => assert.rejects(roundCommand(actor, ticket, id, 'force-complete', input, () => assert.fail('rejection must not publish')),
