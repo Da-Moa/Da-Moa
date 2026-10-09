@@ -32,7 +32,7 @@ import {
   createRefreshToken,
 } from '../support/legacyTokenTestSupport.ts';
 
-test('native form Body validates once after the test-login Guard and preserves limits and login responses over mock requests', async (t) => {
+test('로그인 Guard 이후 폼 본문을 한 번 검증하고 모의 요청에서 한도·로그인 응답을 유지한다', async (t) => {
   const previous = {
     NODE_ENV: process.env.NODE_ENV,
     AUTH_JWT_SECRET: process.env.AUTH_JWT_SECRET,
@@ -172,7 +172,7 @@ test('native form Body validates once after the test-login Guard and preserves l
   );
 });
 
-test('cookie-parser supplies refresh authentication and rejects non-string, expired and tampered cookies over injected Nest requests', async (t) => {
+test('모의 Nest 요청의 쿠키 파서가 갱신 인증을 지원하고 잘못된 타입·만료·변조 쿠키를 거부한다', async (t) => {
   const previous = process.env.AUTH_JWT_SECRET;
   process.env.AUTH_JWT_SECRET = 'cookie-parser-test-secret-at-least-32-bytes';
   const { app } = await createMockBackend();
@@ -230,7 +230,7 @@ test('cookie-parser supplies refresh authentication and rejects non-string, expi
   }
 });
 
-test('Nest JSON parser preserves byte limits, UTF-8, object shape and native Body DTOs after authentication', async (t) => {
+test('Nest JSON 파서가 인증 후 바이트 한도·UTF-8·객체 형태·본문 DTO를 유지한다', async (t) => {
   const previous = process.env.AUTH_JWT_SECRET;
   process.env.AUTH_JWT_SECRET = 'native-json-test-secret-at-least-32-bytes';
   const { app } = await createMockBackend();
@@ -344,7 +344,7 @@ test('Nest JSON parser preserves byte limits, UTF-8, object shape and native Bod
   );
 });
 
-test('Nest HTTP routes enforce JWT before body parsing, preserve cookies, and dispatch each domain', async (t) => {
+test('Nest 경로가 본문 파싱 전에 JWT를 검증하고 쿠키·도메인 요청 전달을 유지한다', async (t) => {
   const previous = process.env.AUTH_JWT_SECRET;
   process.env.AUTH_JWT_SECRET =
     'isolated-nest-http-test-secret-at-least-32-bytes';
@@ -635,7 +635,7 @@ test('Nest HTTP routes enforce JWT before body parsing, preserve cookies, and di
   );
 });
 
-test('required idempotency headers reject absent and blank values before every mutation handler', async (t) => {
+test('필수 멱등성 헤더가 누락·빈 값을 모든 변경 Controller 호출 전에 거부한다', async (t) => {
   const previous = process.env.AUTH_JWT_SECRET;
   process.env.AUTH_JWT_SECRET =
     'required-header-unit-test-secret-at-least-32-bytes';

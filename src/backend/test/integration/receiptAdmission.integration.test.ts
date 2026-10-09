@@ -35,7 +35,7 @@ if (
   throw new Error('An isolated local test database is required');
 process.env.DATABASE_URL = url;
 
-test('receipt HTTP admits resource access before any upload bytes and rechecks authorization atomically while preserving replay', async (t) => {
+test('영수증 요청이 본문 읽기 전 접근 권한을 검사하고 저장 시 권한을 원자적으로 재검사한다', async (t) => {
   const db = createDatabaseClient(url);
   await db.connect();
   t.after(() => db.end());

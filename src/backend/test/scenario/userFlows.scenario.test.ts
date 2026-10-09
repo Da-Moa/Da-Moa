@@ -87,7 +87,7 @@ async function roundFixture(count = 2) {
 }
 
 // Each scenario carries real response cookies, JWTs, IDs and versions forward.
-test('invitation → login → onboarding → acceptance → refresh → logout preserves the destination and membership', async () => {
+test('초대 → 로그인 → 가입 → 수락 → 토큰 갱신 → 로그아웃에서 목적지와 멤버십을 유지한다', async () => {
   const { user: owner } = await member();
   const group = await owner.createGroup();
   const invite = await owner.data(`groups/${group.id}/invites`, 'POST', {});
@@ -134,7 +134,7 @@ test('invitation → login → onboarding → acceptance → refresh → logout 
   );
 });
 
-test('group → round → expense → confirm → send → receipt checks → completion unlocks departure and withdrawal', async () => {
+test('모임 → 회차 → 지출 → 확인 → 정산 전송 → 수령 확인 → 종료 후 모임 이탈·탈퇴를 허용한다', async () => {
   const { owner, users, group, round } = await roundFixture();
   const expenseKey = randomUUID();
   const body = {
@@ -255,7 +255,7 @@ test('group → round → expense → confirm → send → receipt checks → co
   );
 });
 
-test('confirm → reopen → edit → send with remainder → one draw → force completion keeps exact balances', async () => {
+test('확인 → 다시 열기 → 수정 → 정산 전송 → 나머지 추첨 → 강제 종료에서 잔액을 정확히 유지한다', async () => {
   const { owner, users, round } = await roundFixture(3);
   let expense = await owner.data(`rounds/${round.id}/expenses`, 'POST', {
     description: '나머지 식비',
@@ -355,7 +355,7 @@ test('confirm → reopen → edit → send with remainder → one draw → force
   );
 });
 
-test('empty round cancellation → withdrawal → explicit rejoin keeps identity without restoring memberships', async () => {
+test('빈 회차 취소 → 탈퇴 → 명시적 재가입에서 사용자 ID를 유지하고 이전 모임을 복구하지 않는다', async () => {
   const { user: owner, code } = await member(),
     guest = (await member()).user;
   const group = await owner.createGroup();

@@ -110,7 +110,7 @@ async function waitUntil(
 }
 
 test(
-  'two stalled SDK uploads time out after one minute, release their queue locks and let the next job run',
+  '멈춘 SDK 업로드 2건을 1분 후 취소하고 큐 락을 해제하여 다음 작업을 실행한다',
   { timeout: 90000 },
   async (t) => {
     const fixture = await setup(t);
@@ -193,7 +193,7 @@ test(
 );
 
 test(
-  'SIGTERM cancels an active SDK upload through Graphile and exits zero with its job unlocked for retry',
+  'SIGTERM이 Graphile을 통해 진행 중 업로드를 취소하고 재시도 가능한 상태로 정상 종료한다',
   { timeout: 20000 },
   async (t) => {
     const fixture = await setup(t);

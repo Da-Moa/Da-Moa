@@ -33,7 +33,7 @@ if (
   throw new Error('An isolated local test database is required');
 process.env.DATABASE_URL = url;
 
-test('expense HTTP separates create/update DTOs, preserves trimmed UTF-16 limits and hashes original field values for replay', async (t) => {
+test('지출 생성·수정 DTO를 분리하고 이름 길이와 원문 기반 멱등성 검증을 유지한다', async (t) => {
   const db = createDatabaseClient(url);
   await db.connect();
   t.after(() => db.end());

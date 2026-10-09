@@ -21,7 +21,7 @@ if (
 }
 process.env.DATABASE_URL = testUrl;
 
-test('PostgreSQL pool reuses connections, rolls back safely, and isolates concurrent transactions', async (t) => {
+test('PostgreSQL 풀이 연결을 재사용하고 안전하게 롤백하며 동시 트랜잭션을 격리한다', async (t) => {
   const previousLog = process.env.DB_QUERY_LOG;
   process.env.DB_QUERY_LOG = 'true';
   t.after(() => {

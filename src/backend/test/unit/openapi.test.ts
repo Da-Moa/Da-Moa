@@ -32,7 +32,7 @@ function expand(value: unknown): any {
 }
 const openApiDocument = expand(actualDocument);
 
-test('served OpenAPI remains protected and independent when another Nest app changes or closes its document', async (t) => {
+test('다른 Nest 앱의 문서 변경·종료와 무관하게 OpenAPI 문서의 인증과 독립성을 유지한다', async (t) => {
   const previous = process.env.AUTH_JWT_SECRET;
   process.env.AUTH_JWT_SECRET =
     'isolated-document-test-secret-at-least-32-bytes';
@@ -86,12 +86,12 @@ test('served OpenAPI remains protected and independent when another Nest app cha
   }
 });
 
-test('OpenAPI document uses the Swagger UI-compatible 3.0 dialect', () => {
+test('OpenAPI 문서가 Swagger UI와 호환되는 3.0 형식을 사용한다', () => {
   assert.equal(openApiDocument.openapi, '3.0.3');
   assert.equal(JSON.stringify(openApiDocument).includes('"const"'), false);
 });
 
-test('OpenAPI documents a recoverable refresh failure', () => {
+test('OpenAPI 문서에 복구 가능한 토큰 갱신 실패를 명시한다', () => {
   const refresh = openApiDocument.paths['/api/auth/refresh'].post;
 
   const failure = refresh.responses['503'].content['application/json'];
@@ -153,7 +153,7 @@ const paths = openApiDocument.paths as unknown as Record<
   }
 >;
 
-test('group creation requires a UUIDv7 key and token bootstrap requires Origin only', () => {
+test('모임 생성에는 UUIDv7 키를 요구하고 토큰 발급에는 Origin만 요구한다', () => {
   const parameters = paths['/api/groups'].post.parameters ?? [];
   const key = parameters.find(
     (parameter) => parameter.name === 'Idempotency-Key',
@@ -172,7 +172,7 @@ test('group creation requires a UUIDv7 key and token bootstrap requires Origin o
   );
 });
 
-test('every group, expense and settlement endpoint has documented authorization and mutation contracts', () => {
+test('모든 모임·지출·정산 API에 인증·변경 요청 계약을 문서화한다', () => {
   const mutations = [
     ['/api/groups', 'post'],
     ['/api/groups/{groupId}', 'delete'],
@@ -247,7 +247,7 @@ test('every group, expense and settlement endpoint has documented authorization 
   }
 });
 
-test('OpenAPI component references resolve and financial privacy rules remain explicit', () => {
+test('OpenAPI 스키마 참조를 해석하고 금융 개인정보 규칙을 명시한다', () => {
   const document = actualDocument as unknown as Record<string, unknown>;
   function check(value: unknown, name?: string) {
     if (!value || typeof value !== 'object') return;
@@ -319,7 +319,7 @@ test('OpenAPI component references resolve and financial privacy rules remain ex
   );
 });
 
-test('currency is required on expenses and absent on round creation and absent from groups and invitation previews', () => {
+test('지출에는 통화를 요구하고 회차 생성·모임·초대 미리보기에는 통화를 포함하지 않는다', () => {
   const groupInput = paths['/api/groups'].post.requestBody!.content[
     'application/json'
   ].schema as DocumentedSchema;
@@ -373,7 +373,7 @@ test('currency is required on expenses and absent on round creation and absent f
   assert.equal(round.properties!.totals.maxItems, 5);
 });
 
-test('round lists document group and round name search', () => {
+test('회차 목록에 모임명·회차명 검색을 문서화한다', () => {
   for (const path of ['/api/rounds', '/api/groups/{groupId}/rounds']) {
     const search = paths[path].get.parameters?.find(
       (parameter) => parameter.name === 'q',
@@ -386,7 +386,7 @@ test('round lists document group and round name search', () => {
   }
 });
 
-test('group list documents name search with cursor pagination', () => {
+test('모임 목록에 이름 검색과 커서 페이지 조회를 문서화한다', () => {
   const parameters = paths['/api/groups'].get.parameters ?? [];
   const search = parameters.find((parameter) => parameter.name === 'q') as
     { schema?: { minLength?: number; maxLength?: number } } | undefined;
@@ -409,7 +409,7 @@ test('group list documents name search with cursor pagination', () => {
   );
 });
 
-test('custom expense allocation documents exact original shares and total validation', () => {
+test('개별 지출 분배에 원래 분담액과 합계 검증을 문서화한다', () => {
   for (const [path, method] of [
     ['/api/rounds/{roundId}/expenses', 'post'],
     ['/api/rounds/{roundId}/expenses/{expenseId}', 'patch'],
@@ -453,7 +453,7 @@ test('custom expense allocation documents exact original shares and total valida
   );
 });
 
-test('documented minor amounts accept exact integer strings and reject decimals', () => {
+test('문서의 최소 화폐 단위 금액은 정수 문자열만 허용하고 소수를 거부한다', () => {
   const schemas = openApiDocument.components.schemas;
   const amount = new RegExp(schemas.Expense.properties.amountMinor.pattern);
   const balance = new RegExp(

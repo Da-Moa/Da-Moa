@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { Client } from 'pg'
 import { createDatabaseClient } from '../../global/database/dbClient.mjs'
 
-test('formatted SQL logs preserve query behavior and omit parameters and returned data', async t => {
+test('SQL 로그가 쿼리 동작을 유지하고 파라미터·응답 데이터를 노출하지 않는다', async t => {
   const previous = process.env.DB_QUERY_LOG
   t.after(() => {
     if (previous === undefined) delete process.env.DB_QUERY_LOG

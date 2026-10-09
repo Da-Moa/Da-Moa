@@ -4,7 +4,7 @@ import { createReturnToCookie, readReturnToCookie, safeReturnTo } from '../../gl
 
 const secret = 'test-secret-only-for-return-destination-signatures'
 
-test('return destinations only allow local application routes without decoding bypasses', () => {
+test('돌아갈 목적지를 로컬 앱 경로로 제한하고 디코딩 우회를 거부한다', () => {
   for (const valid of ['/home', '/home/history', '/home/rounds/r-1', '/invites/A_b-C', '/settlements/r-1']) {
     assert.equal(safeReturnTo(valid), valid)
   }
@@ -13,7 +13,7 @@ test('return destinations only allow local application routes without decoding b
   }
 })
 
-test('return destination cookie is signed, expiring, and bound to the OIDC state', () => {
+test('돌아갈 목적지 쿠키를 서명·만료 처리하고 OIDC 상태와 연결한다', () => {
   const token = createReturnToCookie('/settlements/r-1', 'oidc-state', secret, 100)
   assert.equal(readReturnToCookie(token, 'oidc-state', secret, 101), '/settlements/r-1')
   assert.equal(readReturnToCookie(token, undefined, secret, 101), '/settlements/r-1')

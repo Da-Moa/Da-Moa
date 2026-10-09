@@ -41,7 +41,7 @@ function requestSql(log) {
     !/^SELECT\s+"public"\."users"\."id",\s*"public"\."users"\."deleted_at",\s*"public"\."users"\."onboarding_completed_at"\s+FROM\s+"public"\."users"/i.test(sql))
 }
 
-test('authenticated WebSocket receives only its own committed invalidations', async () => {
+test('인증된 WebSocket에 본인의 커밋된 변경 알림만 전달한다', async () => {
   const db = createDatabaseClient(database)
   await db.connect()
   try {

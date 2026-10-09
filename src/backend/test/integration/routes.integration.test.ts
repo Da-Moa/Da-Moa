@@ -94,7 +94,7 @@ async function request(
   return response;
 }
 
-test('Injected Nest requests plus real PostgreSQL contracts enforce Bearer JWTs, origin, idempotency, normalized images and personalized output', async (t) => {
+test('모의 Nest 요청과 실제 PostgreSQL이 JWT·Origin·멱등성·이미지 정규화·개인별 응답을 검증한다', async (t) => {
   const storage = t.mock.method(app.get(ReceiptStorage), 'putReceipt');
   const repository = t.mock.method(
     app.get(SettleRepository),
@@ -855,7 +855,7 @@ test('Injected Nest requests plus real PostgreSQL contracts enforce Bearer JWTs,
   }
 });
 
-test('Nest rejects invalid DTOs without querying PostgreSQL', async () => {
+test('Nest가 잘못된 DTO를 PostgreSQL 조회 없이 거부한다', async () => {
   const actor = await session('DTO 경계');
   let queries = 0;
   const count = () => queries++;
@@ -881,7 +881,7 @@ test('Nest rejects invalid DTOs without querying PostgreSQL', async () => {
   }
 });
 
-test('Nest HTTP expense failure rolls back the expense, version and replay metadata', async (t) => {
+test('지출 요청 실패가 지출·버전·재시도 메타데이터를 롤백한다', async (t) => {
   const actor = await session('롤백-A');
   const member = await session('롤백-B');
   const group = await request('groups', actor.accessToken, 'POST', {
@@ -968,7 +968,7 @@ after(async () => {
   await app?.close();
 });
 
-test('Nest HTTP uses the registered account Provider and retains transaction context', async (t) => {
+test('Nest 요청이 등록된 계정 Provider와 트랜잭션 컨텍스트를 사용한다', async (t) => {
   const actor = await session('DI 검증');
   const accounts = app.get(AccountStateRepository);
   const blocked = t.mock.method(accounts, 'findState', async () => null);

@@ -3,7 +3,7 @@ import test from 'node:test'
 import { errorResponse } from '../support/nativeResponseTestSupport.ts'
 import { pageOf, decodePageCursor } from '../../global/util/index.ts'
 
-test('pagination cursors include only the position and reject malformed or overflowing values', () => {
+test('페이지 커서가 위치 정보만 포함하고 잘못된 값·범위 초과를 거부한다', () => {
   const first = { id: 'entry-one', createdAt: 100, description: 'private expense', accountNumber: '001234' }
   const page = pageOf([first, { ...first, id: 'entry-two' }], 1, row => row)
   assert.deepEqual(JSON.parse(Buffer.from(page.nextCursor!, 'base64url').toString()), { id: 'entry-one', createdAt: '100' })
@@ -14,11 +14,11 @@ test('pagination cursors include only the position and reject malformed or overf
   }
 })
 
-test('database physical limits are input errors', () => {
+test('DB 저장 한도 초과를 입력 오류로 처리한다', () => {
   assert.equal(errorResponse({ code: '22003' }).status, 400)
 })
 
-test('unknown server errors are logged without exposing their details', async () => {
+test('알 수 없는 서버 오류는 기록하되 상세 정보를 응답에 노출하지 않는다', async () => {
   const original = console.error
   const calls: unknown[][] = []
   const error = new Error('secret connection details')

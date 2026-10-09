@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events'
 import { test } from 'node:test'
 import { httpMetrics, trackHttpResponse } from '../../global/monitoring/httpMetrics.mjs'
 
-test('HTTP histogram counts completed dynamic requests without URL or user labels', async () => {
+test('HTTP 지표가 완료된 동적 요청을 집계하고 URL·사용자 라벨을 제외한다', async () => {
   for (const url of ['/api/health', '/api/health/live?x=1', '/internal/realtime', '/_next/static/main.js', '/favicon.ico']) {
     const response = new EventEmitter()
     trackHttpResponse({ url }, response)

@@ -25,7 +25,7 @@ import {
   requestRateLimitKinds,
 } from '../../global/rateLimit/native';
 
-test('token buckets isolate users/kinds, refill fractionally, debit atomically and prune only fully refilled entries', async () => {
+test('토큰 버킷이 사용자·종류를 격리하고 소수 단위 충전·원자적 차감·충전 완료 항목 정리를 수행한다', async () => {
   let time = 0;
   const buckets = createTokenBuckets(() => time);
   for (const kind of Object.keys(
@@ -102,7 +102,7 @@ test('token buckets isolate users/kinds, refill fractionally, debit atomically a
 });
 
 test(
-  'native HTTP guard limits before Controller, shares JWT identities and returns retry metadata without clearing cookies',
+  'HTTP Guard가 Controller 전에 요청을 제한하고 JWT 식별자·재시도 정보·쿠키를 유지한다',
   { timeout: 10000 },
   async () => {
     const previous = process.env.AUTH_JWT_SECRET;

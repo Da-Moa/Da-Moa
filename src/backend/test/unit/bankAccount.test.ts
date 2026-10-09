@@ -4,7 +4,7 @@ import { createValidationPipe } from '../../global/apiPayload/validation.pipe'
 import { BankAccountRequestDTO } from '../../domain/user/dto/req/user.request.dto'
 import { BANKS, bankDisplayName, bankSelectionCode, formatAccountNumber, normalizeBankAccountInput, parseClipboardAccount, recognizedAccountNumber, suggestBanks } from '../../../shared/domain/user/index.ts'
 
-test('manual bank input keeps leading zeroes and rejects former verification fields at the DTO boundary', async () => {
+test('직접 입력한 계좌의 선행 0을 유지하고 과거 검증 필드를 DTO 단계에서 거부한다', async () => {
   const validate = (input: unknown) => createValidationPipe().transform(input, { type: 'body', metatype: BankAccountRequestDTO })
   const input = { bankCode: '002', accountNumber: '031-1234 5678-901', accountHolder: ' 테스트 ', expectedBankVersion: 0 }
   assert.deepEqual(normalizeBankAccountInput(input), {
@@ -18,7 +18,7 @@ test('manual bank input keeps leading zeroes and rejects former verification fie
   for (const accountNumber of ['', '123x4567', '1234/5678', '12345678901234567']) assert.throws(() => normalizeBankAccountInput({ ...input, accountNumber }))
 })
 
-test('account display inserts separators only for documented bank layouts', () => {
+test('문서에 정의된 은행 계좌 형식에만 구분자를 표시한다', () => {
   for (const [bank, number, expected] of [
     ['004', '12340312345678', '123403-12-345678'],
     ['088', '230123456789', '230-123-456789'],
@@ -43,7 +43,7 @@ test('account display inserts separators only for documented bank layouts', () =
   assert.equal(formatAccountNumber('092', '10000'), '10000')
 })
 
-test('account number suggests supported banks without silently selecting one', () => {
+test('계좌번호에 맞는 은행을 추천하되 자동으로 선택하지 않는다', () => {
   assert.deepEqual(suggestBanks(''), [])
   assert.deepEqual(suggestBanks('33331042'), ['090'])
   assert.deepEqual(suggestBanks('3333123456789'), ['090'])
@@ -57,7 +57,7 @@ test('account number suggests supported banks without silently selecting one', (
   assert.equal(recognizedAccountNumber('092', '100004459947'), '1000-0445-9947')
 })
 
-test('reported bank layouts are suggested, formatted, and accepted for saving', () => {
+test('등록된 은행 계좌 형식을 추천·표시하고 저장을 허용한다', () => {
   for (const [bankCode, number, formatted] of [
     ['081', '40212345678901', '402-123456-78901'],
     ['004', '94160201234567', '941602-01-234567'],
@@ -80,7 +80,7 @@ test('reported bank layouts are suggested, formatted, and accepted for saving', 
   assert.ok(suggestBanks('100150').includes('089'))
 })
 
-test('clipboard accounts extract one complete number and select only an unambiguous bank', () => {
+test('클립보드에서 완전한 계좌번호 하나를 추출하고 은행이 명확할 때만 선택한다', () => {
   for (const text of ['카카오뱅크 3333-12-3456789', '카카오 3333123456789 예금주 테스트', '3333 12 3456789', '계좌번호: 3333123456789\n예금주: 테스트']) {
     assert.deepEqual(parseClipboardAccount(text), { accountNumber: '3333123456789', bankCode: '090' }, text)
   }
@@ -96,7 +96,7 @@ test('clipboard accounts extract one complete number and select only an unambigu
   }
 })
 
-test('Nonghyup names and cooperative aliases select one unified bank', () => {
+test('농협 명칭과 지역 농축협 별칭을 하나의 통합 은행으로 선택한다', () => {
   for (const name of ['농협', 'NH농협', 'NH 농협', 'NH농협은행', '농협은행', '지역농협', '지역 농협', '지역농축협', '지역축협', '농축협', '축협']) {
     assert.deepEqual(parseClipboardAccount(`${name} 3510221772213`), { accountNumber: '3510221772213', bankCode: '011' }, name)
     assert.equal(bankDisplayName(name), '농협')
@@ -109,7 +109,7 @@ test('Nonghyup names and cooperative aliases select one unified bank', () => {
   assert.equal(bankDisplayName(null), null)
 })
 
-test('one Nonghyup selection supports both institutions and preserves account formatting', () => {
+test('통합 농협 선택이 두 기관을 지원하고 계좌 표시 형식을 유지한다', () => {
   assert.deepEqual(BANKS.filter(bank => bank.name.includes('농협')), [{ code: '011', name: '농협' }])
   assert.equal(bankSelectionCode('012'), '011')
   assert.equal(bankSelectionCode('090'), '090')
@@ -134,7 +134,7 @@ test('one Nonghyup selection supports both institutions and preserves account fo
   assert.equal(normalizeBankAccountInput({ bankCode: '012', accountNumber: '99999999', accountHolder: '테스트', expectedBankVersion: 0 }).bankCode, '012')
 })
 
-test('phone-shaped accounts paste only with a bank supporting that alias', () => {
+test('전화번호 형태 계좌는 해당 별칭을 지원하는 은행에서만 붙여넣는다', () => {
   for (const number of ['01031144018', '010-3114-4018', '011-123-1004']) {
     const accountNumber = number.replace(/-/g, '')
     assert.ok(suggestBanks(number).includes('003'))

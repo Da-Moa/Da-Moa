@@ -4,7 +4,7 @@ import test from 'node:test';
 import { dispatch as GET } from '../support/httpTestSupport';
 import { createAccessToken } from '../support/legacyTokenTestSupport.ts';
 
-test('Group controller preserves route dispatch, origin and input errors without adding update APIs', async (t) => {
+test('모임 Controller가 경로·Origin·입력 오류를 유지하고 수정 API를 추가하지 않는다', async (t) => {
   const previous = process.env.AUTH_JWT_SECRET;
   process.env.AUTH_JWT_SECRET =
     'isolated-group-unit-test-secret-at-least-32-bytes';
@@ -66,7 +66,7 @@ test('Group controller preserves route dispatch, origin and input errors without
   }
 });
 
-test('Group repository joins user names for details and leaves user writes, transactions and rules to their owners', () => {
+test('모임 Repository가 상세 조회에 회원명을 연결하고 회원 수정·트랜잭션·규칙을 담당 계층에 맡긴다', () => {
   const repository = readFileSync(
     'src/backend/domain/group/repository/group.repository.ts',
     'utf8',

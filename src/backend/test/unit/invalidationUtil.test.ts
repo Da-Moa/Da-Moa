@@ -32,7 +32,7 @@ function publisher(t: TestContext) {
   return { messages, publish, unregister };
 }
 
-test('group invalidation preserves list/detail scope and skips missing mutation audiences', async (t) => {
+test('모임 변경 알림이 목록·상세 범위를 유지하고 수신자 없는 변경을 생략한다', async (t) => {
   const { messages } = publisher(t);
   await publishGroupInvalidation('group-1', ['owner', 'member']);
   await publishGroupInvalidation('group-1', ['owner'], true);
@@ -44,7 +44,7 @@ test('group invalidation preserves list/detail scope and skips missing mutation 
   ]);
 });
 
-test('round invalidation targets participants, preserves settlement-only scope and skips replay audiences', async (t) => {
+test('회차 변경 알림이 참여자에게만 전달되고 정산 전용 범위·재시도 알림 생략을 유지한다', async (t) => {
   const { messages } = publisher(t);
   const audience = {
     groupId: 'group-1',
@@ -72,7 +72,7 @@ test('round invalidation targets participants, preserves settlement-only scope a
   ]);
 });
 
-test('publications merge duplicate keys per user without leaking keys to other recipients', async (t) => {
+test('사용자별 중복 재조회 키를 합치고 다른 수신자에게 키를 노출하지 않는다', async (t) => {
   const { messages } = publisher(t);
   await publishInvalidations([
     {
@@ -88,7 +88,7 @@ test('publications merge duplicate keys per user without leaking keys to other r
   ]);
 });
 
-test('bank invalidation refreshes the owner before lookup and only affected settlement senders afterwards', async (t) => {
+test('계좌 변경 알림이 본인 정보와 영향받는 송금자의 정산만 갱신한다', async (t) => {
   const { messages } = publisher(t);
   await publishBankInvalidation('owner', async (userId) => {
     assert.equal(userId, 'owner');
@@ -110,7 +110,7 @@ test('bank invalidation refreshes the owner before lookup and only affected sett
   ]);
 });
 
-test('bank recipient lookup failure preserves the already-published owner refresh', async (t) => {
+test('계좌 알림 수신자 조회 실패 시 이미 보낸 본인 갱신 알림을 유지한다', async (t) => {
   const { messages } = publisher(t);
   const errors = t.mock.method(console, 'error', () => {});
   await publishBankInvalidation('owner', async () => {
@@ -123,7 +123,7 @@ test('bank recipient lookup failure preserves the already-published owner refres
   );
 });
 
-test('departure invalidation maps each group to its remaining members and merges shared recipients', async (t) => {
+test('탈퇴 알림을 각 모임의 남은 회원에게 전달하고 중복 수신자를 합친다', async (t) => {
   const { messages } = publisher(t);
   let lookups = 0;
   const getMembers = async (groupIds: string[]) => {
@@ -148,7 +148,7 @@ test('departure invalidation maps each group to its remaining members and merges
   ]);
 });
 
-test('unregistered realtime performs no publication or recipient lookup', async (t) => {
+test('실시간 전송이 등록되지 않으면 알림·수신자 조회를 실행하지 않는다', async (t) => {
   const { messages, unregister } = publisher(t);
   assert.equal(realtimeEnabled(), true);
   unregister();
@@ -165,7 +165,7 @@ test('unregistered realtime performs no publication or recipient lookup', async 
   assert.deepEqual(messages, []);
 });
 
-test('transport and departure lookup failures are contained without exposing exception details', async (t) => {
+test('전송·탈퇴 수신자 조회 실패를 처리하고 예외 상세를 노출하지 않는다', async (t) => {
   const { publish } = publisher(t);
   const errors = t.mock.method(console, 'error', () => {});
   publish.mock.mockImplementationOnce(() => {
@@ -196,7 +196,7 @@ test('transport and departure lookup failures are contained without exposing exc
   );
 });
 
-test('closing an older registration cannot disable a newer publisher', async (t) => {
+test('이전 전송자 등록을 해제해도 새 전송자를 비활성화하지 않는다', async (t) => {
   const { publish: first, unregister: stopFirst } = publisher(t);
   const second = t.mock.fn((userId: string, keys: string[]) => {});
   const stopSecond = registerInvalidationPublisher(second);

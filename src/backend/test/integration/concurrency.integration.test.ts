@@ -123,7 +123,7 @@ before(async () => {
   await inspect((client) => applyMigrations(client));
 });
 
-test('group departure and round creation serialize for participants and creators', async () => {
+test('회원·생성자의 모임 이탈과 회차 생성을 순서대로 처리한다', async () => {
   for (const creatorDeparture of [false, true]) {
     const fixture = await group();
     const actor = creatorDeparture ? fixture.owner : fixture.participant;
@@ -162,7 +162,7 @@ test('group departure and round creation serialize for participants and creators
   }
 });
 
-test('reopen racing send commits exactly one state transition', async () => {
+test('다시 열기와 정산 전송이 경쟁하면 하나의 상태 전환만 커밋한다', async () => {
   const fixture = await recordingRound();
   const confirmed = await roundCommand(
     fixture.owner,
@@ -229,7 +229,7 @@ test('reopen racing send commits exactly one state transition', async () => {
 });
 
 test(
-  'reopen and send recheck a competing transition after the round read',
+  '회차 조회 이후 경쟁한 다시 열기·정산 전송 상태를 재검사한다',
   { timeout: 15000 },
   async (t) => {
     for (const [olderAction, newerAction] of [
@@ -336,7 +336,7 @@ test(
 );
 
 test(
-  'draw rechecks concurrent results and idempotency keys after its round read',
+  '추첨이 회차 조회 이후 동시 결과와 멱등성 키를 재검사한다',
   { timeout: 15000 },
   async (t) => {
     for (const scenario of ['same-key', 'new-key', 'other-round']) {
@@ -468,7 +468,7 @@ test(
   },
 );
 
-test('settlement checks compose concurrently and normal/forced completion cannot both commit', async () => {
+test('동시 수령 확인을 함께 반영하고 일반·강제 종료가 모두 커밋되지 않게 한다', async () => {
   const finalRound = async () => {
     const fixture = await recordingRound();
     const confirmed = await roundCommand(
@@ -587,7 +587,7 @@ test('settlement checks compose concurrently and normal/forced completion cannot
 });
 
 test(
-  'force completion rechecks a competing completion or replay after reading pending receivers',
+  '강제 종료가 미수령자 조회 이후 경쟁한 종료·재시도를 재검사한다',
   { timeout: 15000 },
   async (t) => {
     for (const winnerAction of ['same-key', 'new-key', 'complete']) {
@@ -696,7 +696,7 @@ test(
 );
 
 test(
-  'force completion with the same key on different rounds commits one and preserves the loser',
+  '다른 회차의 동일 키 강제 종료 중 하나만 성공하고 실패 회차를 보존한다',
   { timeout: 15000 },
   async (t) => {
     const fixture = await group();
@@ -811,7 +811,7 @@ test(
 );
 
 test(
-  'settlement check rechecks a duplicate or completed round after its incoming read',
+  '수령 확인이 송금 조회 이후 중복 확인과 완료된 회차를 재검사한다',
   { timeout: 15000 },
   async (t) => {
     for (const winnerAction of ['check', 'force-complete']) {
@@ -910,7 +910,7 @@ test(
   },
 );
 
-test('round creation racing participant withdrawal never creates unfinished participation for a deleted member', async () => {
+test('회차 생성과 탈퇴가 경쟁해도 탈퇴 회원의 미완료 참여를 만들지 않는다', async () => {
   const fixture = await group();
   const outcomes = await Promise.allSettled([
     createRound(fixture.owner, uuidV7(), fixture.groupId, {
@@ -954,7 +954,7 @@ test('round creation racing participant withdrawal never creates unfinished part
   }
 });
 
-test('withdrawal checks unfinished participation after waiting for a round creation lock', async () => {
+test('탈퇴가 회차 생성 락을 기다린 뒤 미완료 참여를 확인한다', async () => {
   const fixture = await group();
   const gate = createDatabaseClient(testUrl!);
   const roundId = key();
@@ -1023,7 +1023,7 @@ test('withdrawal checks unfinished participation after waiting for a round creat
   }
 });
 
-test('round creation waits for the common lock and validates committed departure/withdrawal state', async () => {
+test('회차 생성이 공통 락을 기다린 뒤 커밋된 모임 이탈·탈퇴 상태를 확인한다', async () => {
   for (const action of ['leave', 'close', 'withdraw', 'actor-withdraw']) {
     const fixture = await group(),
       gate = createDatabaseClient(testUrl!);
@@ -1098,7 +1098,7 @@ test('round creation waits for the common lock and validates committed departure
   }
 });
 
-test('invite acceptance racing withdrawal leaves no active membership on a deleted user', async () => {
+test('초대 수락과 탈퇴가 경쟁해도 탈퇴 회원의 활성 멤버십을 남기지 않는다', async () => {
   const fixture = await group(false);
   const outcomes = await Promise.allSettled([
     acceptInvite(fixture.participant, key(), fixture.token),
@@ -1125,7 +1125,7 @@ test('invite acceptance racing withdrawal leaves no active membership on a delet
   assert.equal(state.memberships, 0);
 });
 
-test('simultaneous invite acceptance never exceeds ten active group members', async () => {
+test('동시 초대 수락이 모임의 활성 회원 정원 10명을 초과하지 않는다', async () => {
   const fixture = await group(false);
   const existing: AccessToken[] = [];
   for (let index = 0; index < 8; index++) existing.push(await member());
@@ -1178,7 +1178,7 @@ test('simultaneous invite acceptance never exceeds ten active group members', as
   assert.equal(counts.accepted_candidates, 1);
 });
 
-test('receipt storage rejects a concurrent round lock after its conditional UPDATE waits', async () => {
+test('영수증 저장이 조건부 수정 대기 후 동시에 잠긴 회차를 거부한다', async () => {
   const fixture = await recordingRound();
   const gate = createDatabaseClient(testUrl!);
   const requestKey = key();
@@ -1280,7 +1280,7 @@ test('receipt storage rejects a concurrent round lock after its conditional UPDA
 });
 
 test(
-  'expense DELETE rechecks state and concurrent deletion replay after its pre-lock read',
+  '지출 삭제가 락 획득 전 조회 이후 상태와 중복 삭제 재시도를 재검사한다',
   { timeout: 15000 },
   async (t) => {
     for (const action of ['confirm', 'same-key', 'different-key'] as const) {
@@ -1387,7 +1387,7 @@ test(
 
 // Pause after the old-version read, before the shared lock, so PATCH wins deterministically.
 test(
-  'expense PATCH invalidates already-read writes and rechecks a losing conditional UPDATE',
+  '지출 수정이 이미 조회한 쓰기 상태와 실패한 조건부 수정을 재검사한다',
   { timeout: 15000 },
   async (t) => {
     for (const action of ['confirm', 'delete', 'patch'] as const) {
@@ -1531,7 +1531,7 @@ test(
 );
 
 test(
-  'confirm holds the shared lock until commit and blocks expense creation/update and concurrent replay',
+  '확인이 커밋까지 공통 락을 유지하고 지출 생성·수정·재시도를 대기시킨다',
   { timeout: 15000 },
   async (t) => {
     const fixture = await recordingRound();

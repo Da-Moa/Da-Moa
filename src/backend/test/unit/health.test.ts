@@ -70,7 +70,7 @@ const healthResponse = (scope: HealthScope, checks: Partial<HealthProbes>) => {
   );
 };
 
-test('worker liveness skips dependencies and readiness reports each failure without exposing errors', async () => {
+test('워커 생존 확인은 의존성을 생략하고 준비 상태는 장애 원인을 노출하지 않는다', async () => {
   for (const failed of [undefined, 'worker', 'database', 'minio'] as const) {
     const calls: string[] = [];
     const probe = async (name: string) => {
@@ -126,7 +126,7 @@ test('worker liveness skips dependencies and readiness reports each failure with
   }
 });
 
-test('individual health checks only probe the selected dependency and report failures', async () => {
+test('개별 헬스 확인이 선택한 의존성만 검사하고 장애를 보고한다', async () => {
   for (const scope of ['database', 'minio'] as const) {
     for (const up of [true, false]) {
       const calls: string[] = [];
@@ -162,7 +162,7 @@ test('individual health checks only probe the selected dependency and report fai
   }
 });
 
-test('liveness skips dependencies and overall health reports each failure', async () => {
+test('생존 확인은 의존성을 생략하고 전체 헬스 확인은 모든 장애를 보고한다', async () => {
   let databaseChecks = 0;
   let minioUp = false;
   const probes = {
@@ -213,7 +213,7 @@ test('liveness skips dependencies and overall health reports each failure', asyn
   assert.equal(overall.headers.get('Cache-Control'), 'no-store');
 });
 
-test('health routes require MinIO read and write quorum', async () => {
+test('저장소 헬스 확인에 읽기·쓰기 정족수를 요구한다', async () => {
   const live = await GET(new Request('http://localhost/api/health/live'), {
     params: Promise.resolve({ check: ['live'] }),
   });
@@ -275,7 +275,7 @@ test('health routes require MinIO read and write quorum', async () => {
   }
 });
 
-test('every Nest health route calls its matching service method for GET and HEAD', async (t) => {
+test('모든 Nest 헬스 경로가 GET·HEAD에서 대응하는 Service 메서드를 호출한다', async (t) => {
   const service = app.get(HealthService);
   const calls: string[] = [];
   const methods = {
@@ -311,7 +311,7 @@ test('every Nest health route calls its matching service method for GET and HEAD
   }
 });
 
-test('synchronous probe errors become down results and concurrent failures are retained', async () => {
+test('동기 검사 오류를 장애 상태로 변환하고 동시 장애 결과를 모두 유지한다', async () => {
   const service = new HealthService(
     {
       checkDatabase: () => {

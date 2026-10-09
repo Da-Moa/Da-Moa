@@ -47,7 +47,7 @@ async function runtime() {
   return app;
 }
 
-test('closing one Nest app twice closes only its own DB, WebSockets and metrics listener', async (t) => {
+test('Nest 앱을 두 번 닫아도 해당 앱의 DB·WebSocket·메트릭 연결만 닫는다', async (t) => {
   const first = await runtime();
   const second = await runtime();
   let resume = () => {};
@@ -165,7 +165,7 @@ test('closing one Nest app twice closes only its own DB, WebSockets and metrics 
 });
 
 test(
-  'app.close drains an actual receipt task before closing its Prisma connection',
+  '앱 종료가 영수증 작업을 마친 뒤 Prisma 연결을 닫는다',
   { timeout: 20000 },
   async (t) => {
     const db = createDatabaseClient(testUrl);
@@ -336,7 +336,7 @@ test(
   },
 );
 
-test('a metrics listen failure during startup closes prepared transports and owned pools', async (t) => {
+test('시작 중 메트릭 포트 열기 실패 시 준비한 전송 계층과 해당 앱의 풀을 닫는다', async (t) => {
   const occupied = createServer();
   occupied.listen(0, '127.0.0.1');
   await once(occupied, 'listening');
@@ -420,7 +420,7 @@ async function childRuntime(blockUpload: boolean) {
 }
 
 test(
-  'SIGTERM uses Nest hooks and exits zero after closing HTTP, metrics and database peers',
+  'SIGTERM이 Nest 종료 훅으로 HTTP·메트릭·DB 연결을 닫고 정상 종료한다',
   { timeout: 15000 },
   async (t) => {
     const runtime = await childRuntime(false);
@@ -453,7 +453,7 @@ test(
 );
 
 test(
-  'shutdown deadline retains the unfinished job for Graphile recovery after the worker has exited',
+  '워커 종료 제한 시간을 넘기면 미완료 작업을 Graphile 복구 대상으로 남긴다',
   { timeout: 25000 },
   async (t) => {
     const db = createDatabaseClient(testUrl);

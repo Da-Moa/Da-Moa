@@ -33,7 +33,7 @@ after(async () => {
   await app?.close();
 });
 
-test('individual health routes probe PostgreSQL and MinIO independently', async (t) => {
+test('각 헬스 API가 PostgreSQL과 저장소를 독립적으로 검사한다', async (t) => {
   let minioStatus = 200;
   const paths: string[] = [];
   process.env.MINIO_ENDPOINT = 'http://mock-minio.test';
@@ -149,7 +149,7 @@ test('individual health routes probe PostgreSQL and MinIO independently', async 
   }
 });
 
-test('receipt worker probes distinguish startup, queue errors, dependencies and shutdown', async (t) => {
+test('영수증 워커의 시작·큐 오류·의존성 장애·종료 상태를 구분한다', async (t) => {
   const enabled = process.env.RECEIPT_WORKER_ENABLED;
   process.env.RECEIPT_WORKER_ENABLED = 'true';
   t.after(() => {

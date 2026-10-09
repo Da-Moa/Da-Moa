@@ -14,7 +14,7 @@ import {
   createTokenBuckets,
 } from '../../global/rateLimit/native';
 
-test('injected Nest requests limiter and JWT Guard use the same parsed refresh-cookie identity and reject duplicates consistently', async (t) => {
+test('모의 요청의 제한기와 JWT Guard가 동일한 갱신 쿠키 식별자를 사용하고 중복 쿠키를 거부한다', async (t) => {
   const previous = process.env.AUTH_JWT_SECRET;
   process.env.AUTH_JWT_SECRET = 'cookie-limiter-test-secret-at-least-32-bytes';
   let limiter: ReturnType<typeof createRateLimitController>;

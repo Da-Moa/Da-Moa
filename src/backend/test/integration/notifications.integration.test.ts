@@ -23,7 +23,7 @@ if (
   throw new Error('An isolated local TEST_DATABASE_URL is required');
 process.env.DATABASE_URL = database;
 
-test('committed mock requests publish after finish and isolate group, round, bank and departure recipients', async (t) => {
+test('커밋된 모의 요청이 응답 완료 후 알림을 보내고 모임·회차·계좌·탈퇴 수신자를 격리한다', async (t) => {
   t.mock.method(Server.prototype, 'listen', () => {
     throw new Error('Integration tests must not listen');
   });

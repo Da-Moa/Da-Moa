@@ -36,7 +36,7 @@ if (
 process.env.DATABASE_URL = database;
 process.env.AUTH_JWT_SECRET ||= 'isolated-pagination-secret-at-least-32-bytes';
 
-test('actual Nest pagination passes typed queries once and preserves cursor, search, authorization and SQL contracts', async (t) => {
+test('Nest 페이지 조회가 쿼리 DTO를 한 번 전달하고 커서·검색·권한·SQL 계약을 유지한다', async (t) => {
   const db = createDatabaseClient(database);
   await db.connect();
   try {

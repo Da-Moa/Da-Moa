@@ -41,7 +41,7 @@ const key = () => randomUUID();
 const code = (expected: string) => (error: unknown) =>
   (error as { code: string }).code === expected;
 
-test('receipt deletion uses AUTH, authorized context and one atomic deletion with no extra audience SQL', async (t) => {
+test('영수증 삭제가 인증·권한 조회·원자적 삭제를 거치고 알림 수신자 SQL을 추가하지 않는다', async (t) => {
   const db = createDatabaseClient(testUrl);
   await db.connect();
   const queryLog = process.env.DB_QUERY_LOG;
@@ -410,7 +410,7 @@ test('receipt deletion uses AUTH, authorized context and one atomic deletion wit
     assert.equal(published, 1);
 
     await t.test(
-      'failed success recording rolls back deletion and version; cleanup failure preserves DB success',
+      '성공 기록 저장 실패는 삭제·버전을 롤백하고 파일 정리 실패는 DB 성공을 유지한다',
       async () => {
         const f = await fixture(),
           ticket = key(),
@@ -525,7 +525,7 @@ test('receipt deletion uses AUTH, authorized context and one atomic deletion wit
     );
 
     await t.test(
-      'waiting duplicate deletes replay once; confirmation wins before waiting deletion',
+      '대기한 중복 삭제는 한 번의 결과를 재생하고 먼저 확정된 회차의 삭제를 거부한다',
       async () => {
         const gate = createDatabaseClient(testUrl);
         await gate.connect();
@@ -635,7 +635,7 @@ test('receipt deletion uses AUTH, authorized context and one atomic deletion wit
     );
 
     await t.test(
-      'same key across different rounds rolls back the losing deletion and version',
+      '다른 회차의 동일 키 삭제에서 실패한 삭제와 버전을 롤백한다',
       async () => {
         const fixtures = [await fixture(), await fixture()];
         const ticket = key(),

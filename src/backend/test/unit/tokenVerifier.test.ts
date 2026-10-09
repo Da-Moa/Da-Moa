@@ -19,7 +19,7 @@ import {
 } from '../support/legacyTokenTestSupport';
 import { REFRESH_TOKEN_COOKIE_NAME } from '../../global/auth/native';
 
-test('mock requests Guard, runtime limiter and WebSocket authorization use the same registered JWT verifier', async (t) => {
+test('모의 요청 Guard·요청 제한기·WebSocket 권한 검사가 동일한 JWT 검증기를 사용한다', async (t) => {
   const previous = process.env.AUTH_JWT_SECRET;
   process.env.AUTH_JWT_SECRET =
     'registered-verifier-test-secret-at-least-32-bytes';

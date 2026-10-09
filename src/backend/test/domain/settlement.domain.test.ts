@@ -77,7 +77,7 @@ async function member(name: string): Promise<AccessToken> {
   return readAccessToken(full.accessToken)!;
 }
 
-test('settlement lifecycle, permissions, privacy, exact money, idempotency and database races', async (t) => {
+test('정산 생명주기·권한·개인정보·금액·멱등성과 DB 경쟁을 검증한다', async (t) => {
   const client = createDatabaseClient(testUrl);
   await client.connect();
   try {
@@ -129,7 +129,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       });
 
     await t.test(
-      'explicit invites and membership do not auto-add new rounds; response loss has a recoverable invite flow',
+      '초대 수락으로 새 회차에 자동 참여시키지 않고 초대 응답 유실을 복구한다',
       async () => {
         assert.equal('currency' in (await getGroup(a, g.id)), false);
         assert.equal((await getInvite(b, token)).isMember, true);
@@ -179,7 +179,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     );
 
     await t.test(
-      'round lists search group and round names with existing filters and cursors',
+      '회차 목록에서 모임명·회차명을 검색하고 필터와 커서를 유지한다',
       async () => {
         const rounds = await Promise.all(
           ['alpha 검색대상', 'beta 검색대상', 'gamma 검색대상'].map((name) =>
@@ -249,7 +249,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     );
 
     await t.test(
-      'group search keeps its filter across cursor pages',
+      '모임 검색 조건을 다음 커서 페이지에서도 유지한다',
       async () => {
         const created = await Promise.all(
           ['Alpha 모임 검색', 'Beta 모임 검색', 'Gamma 모임 검색'].map((name) =>
@@ -289,7 +289,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     );
 
     await t.test(
-      'group list previews at most five active members',
+      '모임 목록에 활성 회원을 최대 5명까지 미리 보여준다',
       async () => {
         const group = await createGroup(a, uuidV7(), {
           name: '참여 인원 미리보기 검증',
@@ -337,7 +337,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     );
 
     await t.test(
-      'any active member starts and manages a round they create',
+      '활성 회원은 본인이 만든 회차를 생성하고 관리할 수 있다',
       async () => {
         const withoutGroupOwner = await createRound(b, uuidV7(), g.id, {
           name: '모임 생성자 없는 회차',
@@ -448,7 +448,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     );
 
     await t.test(
-      'participants leave without unfinished participation and creators close groups after every round completes',
+      '미완료 참여가 없는 회원은 나가고 생성자는 모든 회차 종료 후 모임을 닫는다',
       async () => {
         const leaving = await createGroup(a, uuidV7(), { name: '나가기 검증' });
         const invitation = await createInvite(a, key(), leaving.id, {});
@@ -513,7 +513,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     );
 
     await t.test(
-      'empty rounds, author/round-creator edits, partial edits and immutable completed data',
+      '빈 회차·작성자와 생성자의 수정 권한·부분 수정·완료 데이터 불변성을 검증한다',
       async () => {
         const r = await round();
         await assert.rejects(command(r.id, 'confirm'), code('empty_expenses'));
@@ -673,7 +673,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     );
 
     await t.test(
-      'payer outside selected burden retains all receivables after round exclusion',
+      '분담 대상이 아닌 결제자는 회차에서 제외되어도 받을 금액을 유지한다',
       async () => {
         const r = await round([a, b, c, d]);
         await expense(r.id, c, b.userId, '6000', [a.userId, c.userId]);
@@ -805,7 +805,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     );
 
     await t.test(
-      'participants toggle their own check and only the creator can force completion',
+      '참여자는 본인의 수령 확인만 변경하고 생성자만 강제 종료할 수 있다',
       async () => {
         const r = await round([a, b, c]);
         await expense(r.id, a, a.userId, '3000');
@@ -915,7 +915,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     );
 
     await t.test(
-      'creator, payer-burden and selected burden exclusions block atomically; ALL recalculates',
+      '생성자·결제 분담자·선택 분담자 제외를 원자적으로 차단하고 전체 분배를 다시 계산한다',
       async () => {
         const r = await round([a, b, c, d]);
         const e1 = await expense(r.id, a, b.userId, '6000');
@@ -975,7 +975,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     );
 
     await t.test(
-      'receipt storage, authorization, failed upload preservation and nonempty cancel rejection',
+      '영수증 저장·권한·업로드 실패 시 기존 데이터 보존·지출이 있는 회차 취소 거부를 검증한다',
       async () => {
         const r = await round();
         const e = await expense(r.id, b, b.userId, '10');
@@ -1147,7 +1147,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     );
 
     await t.test(
-      'custom shares validate exact totals atomically and survive partial edits and mode changes',
+      '개별 분배 합계를 원자적으로 검증하고 부분 수정과 분배 방식 변경에도 유지한다',
       async () => {
         for (const currency of ['KRW', 'JPY', 'USD']) {
           const r = await createRound(a, uuidV7(), g.id, {
@@ -1374,7 +1374,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     );
 
     await t.test(
-      'custom and equal allocations share previews and finalization without redrawing original burdens',
+      '개별·균등 분배의 미리보기와 확정을 일치시키고 원래 분담액을 다시 추첨하지 않는다',
       async () => {
         const r = await round([a, b, c, d]);
         const customShares = [
@@ -1511,7 +1511,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     );
 
     await t.test(
-      'one random draw, deferred finalization, idempotency and rollback after share writes',
+      '추첨을 한 번만 수행하고 확정 지연·멱등성·분배 저장 실패 롤백을 검증한다',
       async () => {
         const r = await round();
         const submission = key(),
@@ -1619,7 +1619,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     );
 
     await t.test(
-      'racing edits/confirm and cancel/confirm cannot both commit, snapshots and pages stay coherent',
+      '수정·확인·취소의 경쟁에서 하나만 커밋하고 조회 스냅샷과 페이지를 유지한다',
       async () => {
         const r = await round();
         const e = await expense(r.id, a, a.userId, '6000');
@@ -1691,7 +1691,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     );
 
     await t.test(
-      'expense and round total limits use each currency major unit and updates replace the old amount',
+      '통화별 지출·회차 한도를 적용하고 수정 시 기존 금액을 교체한다',
       async () => {
         for (const currency of ['KRW', 'JPY', 'USD'] as const) {
           const r = await createRound(a, uuidV7(), g.id, {
@@ -1767,7 +1767,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     );
 
     await t.test(
-      'all supported currencies persist exact amounts, editable expense currencies and KRW-only accounts without cross-round offset',
+      '지원 통화의 금액·통화 수정·원화 계좌를 정확히 저장하고 회차 간 금액을 상계하지 않는다',
       async () => {
         const participants = [a.userId, b.userId];
         await assert.rejects(
@@ -1898,7 +1898,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
     );
 
     await t.test(
-      'active Kakao profile images are shown and withdrawn profiles are masked',
+      '활성 카카오 회원의 프로필 이미지를 표시하고 탈퇴한 회원 정보를 가린다',
       async () => {
         const subject = `settlement-profile:${key()}`;
         const profileImageUrl = 'https://profiles.example.test/active.png';
@@ -1991,7 +1991,7 @@ test('settlement lifecycle, permissions, privacy, exact money, idempotency and d
       },
     );
     await t.test(
-      'UUIDv7 creation validates version and variant using the library, normalizes case and preserves duplicate errors',
+      'UUIDv7 버전·변형·대소문자를 검증하고 중복 생성 오류를 유지한다',
       async () => {
         const owner = await member('UUID 생성자'),
           participant = await member('UUID 참여자');

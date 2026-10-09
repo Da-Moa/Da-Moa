@@ -19,7 +19,7 @@ import {
   REFRESH_TOKEN_COOKIE_NAME,
 } from '../../global/auth/native';
 
-test('actual Nest errors preserve status, payload, diagnostics and refresh-only cookie cleanup', async (t) => {
+test('Nest 오류가 상태·본문·진단 정보·갱신 쿠키만 삭제하는 정책을 유지한다', async (t) => {
   const previous = {
     AUTH_JWT_SECRET: process.env.AUTH_JWT_SECRET,
     NODE_ENV: process.env.NODE_ENV,

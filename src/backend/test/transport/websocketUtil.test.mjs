@@ -5,7 +5,7 @@ import test from 'node:test'
 import WebSocket from 'ws'
 import { createWebsocketUtil } from '../../global/websocket/websocketUtil.mjs'
 
-test('WebSocket handshake, topic isolation, unsubscribe and ping/pong cleanup', { timeout: 10000 }, async () => {
+test('WebSocket 연결·토픽 격리·구독 취소·ping/pong 정리를 검증한다', { timeout: 10000 }, async () => {
   const websocket = createWebsocketUtil()
   const server = createServer()
   const connections = []

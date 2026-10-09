@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createWebsocketUtil } from '../../global/websocket/websocketUtil'
 
-test('client topics batch invalidations, reconnect with a fresh token and stop after disposal', async t => {
+test('클라이언트가 재조회 알림을 묶고 새 토큰으로 재연결하며 종료 후 멈춘다', async t => {
   const sockets: FakeSocket[] = []
   class FakeSocket {
     static CLOSING = 2

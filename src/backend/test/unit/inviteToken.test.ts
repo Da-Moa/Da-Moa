@@ -6,7 +6,7 @@ import {
   isInviteToken,
 } from '../../global/util/inviteTokenUtil';
 
-test('generated invite tokens are 43 URL-safe characters accepted by validation', () => {
+test('생성한 초대 토큰이 URL에 안전한 43자이며 검증을 통과한다', () => {
   for (let index = 0; index < 100; index++) {
     const token = createInviteToken();
     assert.equal(token.length, 43);
@@ -15,7 +15,7 @@ test('generated invite tokens are 43 URL-safe characters accepted by validation'
   }
 });
 
-test('invite validation accepts every URL-safe character and legacy base64url tokens', () => {
+test('초대 토큰 검증이 URL 안전 문자와 기존 base64url 토큰을 허용한다', () => {
   for (const character of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-') {
     assert.equal(isInviteToken(character.repeat(43)), true);
   }
@@ -24,7 +24,7 @@ test('invite validation accepts every URL-safe character and legacy base64url to
   }
 });
 
-test('invite validation rejects wrong types, lengths, whitespace and foreign characters', () => {
+test('초대 토큰의 잘못된 타입·길이·공백·지원하지 않는 문자를 거부한다', () => {
   for (const value of [
     undefined,
     null,

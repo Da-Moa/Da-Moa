@@ -7,7 +7,7 @@ const deleteReceiptObject = storage.deleteReceiptObject.bind(storage)
 const putReceipt = storage.putReceipt.bind(storage)
 const readReceipt = storage.readReceipt.bind(storage)
 
-test('receipt objects use the configured private S3 bucket', async () => {
+test('영수증 객체에 설정된 비공개 S3 버킷을 사용한다', async () => {
   const sent: string[] = []
   const originalSend = S3Client.prototype.send
   S3Client.prototype.send = (async function (command: PutObjectCommand | GetObjectCommand | DeleteObjectCommand) {

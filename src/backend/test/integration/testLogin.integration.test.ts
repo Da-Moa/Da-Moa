@@ -92,7 +92,7 @@ function loginRequest(key: string, origin = 'http://localhost', extra = '') {
   });
 }
 
-test('local development test login issues only a Refresh cookie and bootstraps a Bearer Access JWT and rejects untrusted input', async (t) => {
+test('개발용 로그인이 갱신 쿠키만 발급하고 접근 JWT를 발급하며 신뢰하지 않는 입력을 거부한다', async (t) => {
   const signer = t.mock.method(app.get(JwtService), 'sign');
   for (const account of TEST_ACCOUNTS) {
     const before = signer.mock.callCount();
@@ -188,7 +188,7 @@ const localAddress = Object.values(networkInterfaces())
       /^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(entry.address),
   )?.address;
 test(
-  'development test login works at the server LAN address and preserves origin and production restrictions',
+  '개발용 로그인이 LAN 주소에서 동작하고 Origin·운영 환경 제한을 유지한다',
   { skip: !localAddress },
   async () => {
     const origin = `http://${localAddress}:3000`;
@@ -236,7 +236,7 @@ test(
   },
 );
 
-test('onboarding preview creates a fresh limited test session on every click and completes registration', async () => {
+test('가입 미리보기가 클릭마다 새 온보딩 세션을 만들고 가입을 완료한다', async () => {
   const ids = new Set<string>();
   for (let attempt = 0; attempt < 2; attempt++) {
     const response = await POST(loginRequest(TEST_ONBOARDING_KEY));

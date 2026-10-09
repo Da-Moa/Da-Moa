@@ -55,7 +55,7 @@ function idToken(
   return `${content}.${sign('RSA-SHA256', Buffer.from(content), privateKey).toString('base64url')}`;
 }
 
-test('Kakao OIDC SDK validates state before exchange and retries only missing JWKS keys', async (t) => {
+test('카카오 OIDC SDK가 교환 전에 상태를 검증하고 누락된 JWKS 키만 재시도한다', async (t) => {
   const client = new KakaoOidcClient();
   const authorization = await client.authorize(config);
   const url = new URL(authorization.url);
@@ -205,7 +205,7 @@ test('Kakao OIDC SDK validates state before exchange and retries only missing JW
   );
 });
 
-test('actual Kakao HTTP uses the injected OIDC client and rejects invalid tokens before account writes', async (t) => {
+test('카카오 요청이 주입된 OIDC 클라이언트를 사용하고 계정 저장 전에 잘못된 토큰을 거부한다', async (t) => {
   const previous = Object.fromEntries(
     [
       'NODE_ENV',

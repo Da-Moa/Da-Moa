@@ -10,7 +10,7 @@ import { PrismaService } from '../../global/database/prisma.service.ts';
 import { RealtimePublisher } from '../../global/util/invalidationUtil.ts';
 
 test(
-  'Nest mutations publish directly to authenticated WebSockets without an internal HTTP request',
+  'Nest 변경이 내부 HTTP 요청 없이 인증된 WebSocket으로 알림을 직접 전송한다',
   { timeout: 10000 },
   async (t) => {
     const previousSecret = process.env.AUTH_JWT_SECRET;

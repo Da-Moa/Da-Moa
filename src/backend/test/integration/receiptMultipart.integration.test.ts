@@ -36,7 +36,7 @@ if (
   throw new Error('An isolated local test database is required');
 process.env.DATABASE_URL = url;
 
-test('native Nest multipart preserves field/error/size/digest contracts and delivers one Buffer to the registered Service', async (t) => {
+test('Nest multipart 파서가 필드·오류·크기·해시 계약을 유지하고 Buffer 하나를 Service에 전달한다', async (t) => {
   const db = createDatabaseClient(url);
   await db.connect();
   t.after(() => db.end());

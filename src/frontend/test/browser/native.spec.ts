@@ -9,7 +9,7 @@ import {
   signIn,
 } from './support';
 
-test('a stale expense version reloads once and retries before WebSocket-driven refresh', async ({
+test('오래된 지출 버전은 한 번 조회·재시도한 뒤 WebSocket 기반 갱신을 기다린다', async ({
   page,
   context,
   request,
@@ -86,7 +86,7 @@ test('a stale expense version reloads once and retries before WebSocket-driven r
   }
 });
 
-test('expired access JWT refreshes through the HttpOnly cookie and retries the authenticated GET', async ({
+test('만료된 접근 JWT는 HttpOnly 쿠키로 갱신하고 인증된 조회를 다시 시도한다', async ({
   page,
   context,
   baseURL,
@@ -120,7 +120,7 @@ test('expired access JWT refreshes through the HttpOnly cookie and retries the a
   }
 });
 
-test('expense success waits for a real WebSocket invalidation; manual refresh and reconnect remain separate', async ({
+test('지출 저장 성공은 실제 WebSocket 알림을 기다리고 수동 새로고침·재연결을 구분한다', async ({
   page,
   context,
   request,
@@ -181,7 +181,7 @@ test('expense success waits for a real WebSocket invalidation; manual refresh an
   }
 });
 
-test('account save triggers no GET until its real user-scoped WebSocket invalidation is delivered', async ({
+test('계좌 저장은 사용자별 실제 WebSocket 알림이 올 때까지 조회를 추가하지 않는다', async ({
   page,
   context,
   baseURL,

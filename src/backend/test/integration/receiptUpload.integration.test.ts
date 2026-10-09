@@ -62,7 +62,7 @@ async function member() {
   )!;
 }
 
-test('receipt queue authorizes before reading and persists atomically after one admission query; a new worker resumes, retries and cleans deleted receipts', async (t) => {
+test('영수증 큐가 읽기 전 권한을 검사하고 원자적으로 저장하며 새 워커가 재개·재시도·정리한다', async (t) => {
   const db = createDatabaseClient(testUrl);
   await db.connect();
   const originalLog = process.env.DB_QUERY_LOG,

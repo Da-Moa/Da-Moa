@@ -17,7 +17,7 @@ afterEach(() => {
   Object.defineProperty(globalThis, 'crypto', originalCrypto)
 })
 
-test('429 preserves the original mutation key/body across a lost response and a manual retry', async () => {
+test('429 이후 응답 유실·수동 재시도에서도 원래 변경 키·본문을 유지한다', async () => {
   fakeWindow()
   const requests: { key: string | null; body: BodyInit | null | undefined }[] = []
   globalThis.fetch = async (_input, init) => {
@@ -35,7 +35,7 @@ test('429 preserves the original mutation key/body across a lost response and a 
   assert.deepEqual(requests[2], requests[0])
 })
 
-test('rate-limited GET waits for Retry-After and retries once, sharing the pending read', async t => {
+test('제한된 조회는 Retry-After만큼 대기하고 한 번 재시도하며 진행 중 조회를 공유한다', async t => {
   fakeWindow()
   t.mock.timers.enable({ apis: ['setTimeout'] })
   let calls = 0
@@ -52,7 +52,7 @@ test('rate-limited GET waits for Retry-After and retries once, sharing the pendi
   assert.equal(calls, 2)
 })
 
-test('refresh throttling keeps authentication and mutation key, with actionable 429 metadata', async () => {
+test('토큰 갱신 제한 시 인증·변경 키를 유지하고 재시도 가능한 429 정보를 전달한다', async () => {
   const redirects = fakeWindow()
   const keys: (string | null)[] = []
   globalThis.fetch = async (input, init) => {
@@ -68,7 +68,7 @@ test('refresh throttling keeps authentication and mutation key, with actionable 
   assert.equal(keys[0], keys[1])
 })
 
-test('GET retries stop after one 429 retry and an aborted wait makes no second request', async t => {
+test('조회는 429를 한 번만 재시도하고 대기를 취소하면 두 번째 요청을 보내지 않는다', async t => {
   fakeWindow()
   t.mock.timers.enable({ apis: ['setTimeout'] })
   let calls = 0
@@ -88,7 +88,7 @@ test('GET retries stop after one 429 retry and an aborted wait makes no second r
   assert.equal(calls, 3)
 })
 
-test('HTTP LAN mutations and receipt retries work without randomUUID or subtle, while changed file bytes stay blocked', async () => {
+test('LAN HTTP 환경에서 UUID·암호 API 없이 변경·영수증 재시도를 지원하고 파일 변경을 차단한다', async () => {
   fakeWindow()
   const requests: { key: string; body: FormData | undefined }[] = []
   globalThis.fetch = async (_input, init) => {
@@ -119,7 +119,7 @@ test('HTTP LAN mutations and receipt retries work without randomUUID or subtle, 
   assert.notEqual(requests[2].key, requests[3].key)
 })
 
-test('leaving the bank form discards sensitive retry input, including an already exposed recovery callback', async () => {
+test('계좌 입력을 떠날 때 복구 콜백을 포함한 민감한 재시도 데이터를 지운다', async () => {
   fakeWindow()
   const requests: { key: string | null; body: string }[] = []
   globalThis.fetch = async (_input, init) => {
@@ -145,7 +145,7 @@ test('leaving the bank form discards sensitive retry input, including an already
   assert.equal(JSON.parse(requests[1].body).accountNumber, '0098765')
 })
 
-test('closing the form before request preparation completes cannot restore discarded account details', async () => {
+test('요청 준비 전에 폼을 닫아도 지운 계좌 정보를 복구하지 않는다', async () => {
   fakeWindow()
   let calls = 0
   globalThis.fetch = async () => { calls++; return Response.json({ data: { id: 'member' } }) }
@@ -159,7 +159,7 @@ test('closing the form before request preparation completes cannot restore disca
   assert.equal(calls, 1)
 })
 
-test('corrected bank input uses a fresh request key', async () => {
+test('수정한 계좌 입력에는 새 요청 키를 사용한다', async () => {
   fakeWindow()
   const requests: { key: string | null; body: string }[] = []
   globalThis.fetch = async (_input, init) => {
@@ -175,7 +175,7 @@ test('corrected bank input uses a fresh request key', async () => {
   assert.equal(JSON.parse(requests[1].body).accountNumber, '123456')
 })
 
-test('expired bank authentication discards the original personal data before login redirect', async () => {
+test('계좌 인증 만료 시 로그인 이동 전에 원래 개인정보를 지운다', async () => {
   const redirects = fakeWindow('/home/all')
   globalThis.fetch = async () => Response.json({ error: 'unauthorized' }, { status: 401 })
   await assert.rejects(() => apiRequest('/api/me/bank-account', { method: 'PUT', body: { accountNumber: '123456' } }))
@@ -194,7 +194,7 @@ function fakeWindow(path = '/settlements/round-a', search = '') {
   return redirects
 }
 
-test('failed mutation keeps its request key for retry; the next intentional submission gets a new key', async () => {
+test('변경 실패 시 재시도 키를 유지하고 다음 제출에는 새 키를 사용한다', async () => {
   fakeWindow()
   const keys: string[] = []
   globalThis.fetch = async (_input, init) => {
@@ -210,7 +210,7 @@ test('failed mutation keeps its request key for retry; the next intentional subm
   assert.notEqual(keys[1], keys[2])
 })
 
-test('session refresh retries the unchanged mutation with the same key and body', async () => {
+test('세션 갱신 후 동일한 변경 키·본문으로 요청을 다시 시도한다', async () => {
   const redirects = fakeWindow()
   const requests: { path: string; key: string | null; body: BodyInit | null | undefined }[] = []
   globalThis.fetch = async (input, init) => {
@@ -226,7 +226,7 @@ test('session refresh retries the unchanged mutation with the same key and body'
   assert.deepEqual(redirects, [])
 })
 
-test('logout clears the local Access token and requests carry Bearer authorization', async () => {
+test('로그아웃 시 로컬 접근 토큰을 지우고 요청에 Bearer 인증을 전달한다', async () => {
   fakeWindow()
   globalThis.fetch = async (_input, init) => {
     assert.equal(new Headers(init?.headers).get('Authorization'), 'Bearer test-access-token')
@@ -236,14 +236,14 @@ test('logout clears the local Access token and requests carry Bearer authorizati
   assert.equal(window.localStorage.getItem('da_moa_access'), null)
 })
 
-test('an expired session retains the settlement destination while redirecting to login', async () => {
+test('세션 만료로 로그인 이동 시 정산 목적지를 유지한다', async () => {
   const redirects = fakeWindow()
   globalThis.fetch = async () => Response.json({ error: 'unauthorized' }, { status: 401 })
   await assert.rejects(() => apiRequest('/api/me'), error => error instanceof ApiError && error.status === 401)
   assert.deepEqual(redirects, ['/login?returnTo=%2Fsettlements%2Fround-a'])
 })
 
-test('receipt byte responses use the same authenticated request path', async () => {
+test('영수증 바이너리 응답에도 동일한 인증 요청 경로를 사용한다', async () => {
   fakeWindow()
   globalThis.fetch = async () => new Response(new Uint8Array([137, 80, 78, 71]), { headers: { 'Content-Type': 'image/png' } })
   const blob = await apiRequest<Blob>('/api/receipts/receipt-a', { response: 'blob' })
@@ -251,14 +251,14 @@ test('receipt byte responses use the same authenticated request path', async () 
   assert.deepEqual([...new Uint8Array(await blob.arrayBuffer())], [137, 80, 78, 71])
 })
 
-test('expired onboarding preserves its invitation destination without creating an authentication loop', async () => {
+test('온보딩 만료 시 초대 목적지를 유지하고 인증 반복을 만들지 않는다', async () => {
   const redirects = fakeWindow('/onboarding', '?returnTo=%2Finvites%2Ftest-token')
   globalThis.fetch = async () => Response.json({ error: 'unauthorized' }, { status: 401 })
   await assert.rejects(() => apiRequest('/api/me'))
   assert.deepEqual(redirects, ['/login?returnTo=%2Finvites%2Ftest-token'])
 })
 
-test('a refreshed round version replays the original unacknowledged payload and key', async () => {
+test('회차 버전 갱신 후 미확인된 원래 본문·키를 재전송한다', async () => {
   fakeWindow()
   const requests: { key: string | null; body: string }[] = []
   globalThis.fetch = async (_input, init) => {
@@ -275,7 +275,7 @@ test('a refreshed round version replays the original unacknowledged payload and 
   assert.equal(JSON.parse(requests[1].body).expectedVersion, 1)
 })
 
-test('changed input is blocked until the previous write is resolved explicitly', async () => {
+test('이전 쓰기의 결과를 명시적으로 해결할 때까지 입력 변경을 차단한다', async () => {
   fakeWindow()
   const requests: { key: string | null; body: string }[] = []
   globalThis.fetch = async (_input, init) => {
@@ -299,7 +299,7 @@ test('changed input is blocked until the previous write is resolved explicitly',
   assert.notEqual(requests[1].key, requests[2].key)
 })
 
-test('a confirmed version conflict allows a fresh request using the latest version', async () => {
+test('확인된 버전 충돌은 최신 버전으로 새 요청을 허용한다', async () => {
   fakeWindow()
   const requests: { key: string | null; body: string }[] = []
   globalThis.fetch = async (_input, init) => {
@@ -312,7 +312,7 @@ test('a confirmed version conflict allows a fresh request using the latest versi
   assert.equal(JSON.parse(requests[1].body).expectedVersion, 2)
 })
 
-test('receipt retry retains its original version and bytes after a round refresh', async () => {
+test('회차 갱신 후 영수증 재시도의 원래 버전·바이트를 유지한다', async () => {
   fakeWindow()
   const requests: { key: string | null; version: string; size: number }[] = []
   globalThis.fetch = async (_input, init) => {
@@ -331,7 +331,7 @@ test('receipt retry retains its original version and bytes after a round refresh
   assert.deepEqual(requests[0], requests[1])
 })
 
-test('overlapping GETs share a request but completed reads and different tokens stay independent', async () => {
+test('동시 조회는 요청을 공유하되 완료된 조회와 다른 토큰은 분리한다', async () => {
   fakeWindow()
   let calls = 0
   globalThis.fetch = async () => { calls++; return Response.json({ data: { sequence: calls } }) }
@@ -350,7 +350,7 @@ test('overlapping GETs share a request but completed reads and different tokens 
   assert.equal(calls, 7)
 })
 
-test('failed GETs are not cached and callers with AbortSignal remain independent', async () => {
+test('실패한 조회는 캐시하지 않고 취소 신호를 가진 요청은 분리한다', async () => {
   fakeWindow()
   let calls = 0
   globalThis.fetch = async () => { calls++; return Response.json({ error: 'storage_unavailable' }, { status: 503 }) }
@@ -362,7 +362,7 @@ test('failed GETs are not cached and callers with AbortSignal remain independent
   assert.equal(calls, 4)
 })
 
-test('me 401 and 404 refresh once then retry once, while domain 404 never refreshes', async () => {
+test('내 정보의 401·404는 토큰 갱신 후 한 번 재시도하고 도메인 404는 갱신하지 않는다', async () => {
   for (const status of [401, 404]) {
     const redirects = fakeWindow()
     const paths: string[] = []
@@ -383,7 +383,7 @@ test('me 401 and 404 refresh once then retry once, while domain 404 never refres
   assert.deepEqual(paths, ['/api/groups/missing'])
 })
 
-test('me refresh and retry failures stop without an authentication loop', async () => {
+test('내 정보의 갱신·재조회 실패 시 인증 반복 없이 멈춘다', async () => {
   for (const refreshStatus of [200, 401, 503]) {
     const redirects = fakeWindow()
     const paths: string[] = []
@@ -398,7 +398,7 @@ test('me refresh and retry failures stop without an authentication loop', async 
   }
 })
 
-test('authentication redirects discard pending bodies and recovery callbacks across domains', async () => {
+test('로그인 이동 시 도메인별 대기 본문·복구 콜백을 지운다', async () => {
   for (const status of [401, 403]) {
     fakeWindow()
     let calls = 0
@@ -423,7 +423,7 @@ test('authentication redirects discard pending bodies and recovery callbacks acr
   }
 })
 
-test('round creation sends a UUIDv7 ticket and preserves it after a lost response', async () => {
+test('회차 생성이 UUIDv7 키를 보내고 응답 유실 후에도 유지한다', async () => {
   fakeWindow()
   const keys: string[] = []
   globalThis.fetch = async (_input, init) => {
@@ -440,7 +440,7 @@ test('round creation sends a UUIDv7 ticket and preserves it after a lost respons
   assert.notEqual(keys[1], keys[2], 'a definitive 409 clears the pending ticket')
 })
 
-test('group creation owns its UUIDv7 policy while generic requests keep random keys', async () => {
+test('모임 생성이 UUIDv7 정책을 담당하고 일반 요청은 무작위 키를 사용한다', async () => {
   fakeWindow()
   const keys: string[] = []
   globalThis.fetch = async (_input, init) => {

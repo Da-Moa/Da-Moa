@@ -32,7 +32,7 @@ if (
   );
 process.env.DATABASE_URL = database;
 
-test('send bulk-finalizes settlement with constant SQL count, exact money and atomic rollback', async (t) => {
+test('정산 전송이 일정한 SQL 횟수로 정확한 금액을 일괄 확정하고 실패 시 롤백한다', async (t) => {
   const previousQueryLog = process.env.DB_QUERY_LOG;
   process.env.DB_QUERY_LOG = 'false';
   t.after(() => {
@@ -249,7 +249,7 @@ test('send bulk-finalizes settlement with constant SQL count, exact money and at
   } as const;
 
   await t.test(
-    'one expense and two members use one persistence statement; replay does not save again',
+    '지출 1건·회원 2명의 정산을 SQL 1회로 저장하고 재시도 시 다시 저장하지 않는다',
     async () => {
       const round = await fixture([simple]);
       const key = randomUUID();
@@ -267,7 +267,7 @@ test('send bulk-finalizes settlement with constant SQL count, exact money and at
     },
   );
   await t.test(
-    'many shares, members and currencies keep the same SQL count and do not affect another round',
+    '분배·회원·통화가 늘어도 SQL 횟수를 유지하고 다른 회차를 변경하지 않는다',
     async () => {
       const untouched = await fixture([simple]);
       const round = await fixture(
@@ -287,7 +287,7 @@ test('send bulk-finalizes settlement with constant SQL count, exact money and at
     },
   );
   await t.test(
-    'balanced payments finalize successfully with an empty transfer array',
+    '결제 금액이 균형을 이루면 송금 내역이 없어도 정산을 확정한다',
     async () => {
       const round = await fixture([simple, { ...simple, payer: 1 }]);
       const { statements } = await send(round);
@@ -306,7 +306,7 @@ test('send bulk-finalizes settlement with constant SQL count, exact money and at
     },
   );
   await t.test(
-    'a transfer constraint failure rolls back every bulk write and the round lock',
+    '송금 제약 실패 시 일괄 저장과 회차 락을 모두 롤백한다',
     async () => {
       const round = await fixture([simple]);
       const key = randomUUID();
@@ -342,7 +342,7 @@ test('send bulk-finalizes settlement with constant SQL count, exact money and at
     },
   );
   await t.test(
-    'failure after successful bulk persistence rolls back results and leaves the retry usable',
+    '일괄 저장 이후 실패 시 결과를 롤백하고 다시 시도할 수 있다',
     async () => {
       const round = await fixture([simple]);
       const key = randomUUID();
@@ -369,7 +369,7 @@ test('send bulk-finalizes settlement with constant SQL count, exact money and at
     },
   );
   await t.test(
-    'send with a remainder defers persistence until draw',
+    '나머지가 있는 정산 전송은 추첨까지 확정 저장을 미룬다',
     async () => {
       const round = await fixture([simple], 3);
       const { result, statements } = await send(round);

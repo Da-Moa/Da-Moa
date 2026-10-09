@@ -29,7 +29,7 @@ if (
   throw new Error('An isolated local test database is required');
 process.env.DATABASE_URL = url;
 
-test('account HTTP validates DTO shape before SQL and preserves normalized business fields and conditional persistence', async (t) => {
+test('계좌 요청 DTO를 SQL 실행 전에 검증하고 정규화된 필드와 조건부 저장을 유지한다', async (t) => {
   const db = createDatabaseClient(url);
   await db.connect();
   t.after(() => db.end());

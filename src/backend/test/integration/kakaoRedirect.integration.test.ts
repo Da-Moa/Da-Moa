@@ -32,7 +32,7 @@ if (
 }
 process.env.DATABASE_URL = database;
 
-test('Kakao callbacks keep the selected URI for localhost and LAN and reject untrusted origins or cookies', async (t) => {
+test('카카오 콜백이 로컬·LAN의 선택된 URI를 유지하고 신뢰하지 않는 Origin·쿠키를 거부한다', async (t) => {
   const previous = Object.fromEntries(
     [
       'NODE_ENV',

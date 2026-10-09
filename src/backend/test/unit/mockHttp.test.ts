@@ -10,7 +10,7 @@ import { AppError } from '../../global/apiPayload/errors';
 
 process.env.AUTH_JWT_SECRET = 'mock-http-unit-test-only-at-least-32-bytes';
 
-test('mock requests use registered Nest routes, Guards, Pipes, Filter and response completion without a listener', async (t) => {
+test('서버 포트 없이 등록된 Nest 경로·Guard·Pipe·예외 필터·응답 완료를 검증한다', async (t) => {
   t.mock.method(Server.prototype, 'listen', () => {
     throw new Error('Mock tests must not listen');
   });
@@ -109,7 +109,7 @@ test('mock requests use registered Nest routes, Guards, Pipes, Filter and respon
   );
 });
 
-test('mock raw streams exercise real multipart admission, parsing and binary responses', async (t) => {
+test('모의 본문 스트림으로 실제 multipart 권한 검사·파싱·바이너리 응답을 검증한다', async (t) => {
   let admissions = 0,
     saves = 0;
   const bytes = Buffer.from([0, 255, 2, 3]);
@@ -208,7 +208,7 @@ test('mock raw streams exercise real multipart admission, parsing and binary res
   );
 });
 
-test('mock request timeout and abort release pending streams and permit subsequent requests', async (t) => {
+test('모의 요청 시간 초과·취소 시 스트림을 정리하고 다음 요청을 허용한다', async (t) => {
   const { app, request } = await createMockBackend(async (app) => {
     app.use(
       '/mock-pending',

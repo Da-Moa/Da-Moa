@@ -24,7 +24,7 @@ const TEST_KAKAO_CONFIG = {
   redirectUri: 'http://localhost:3000/auth/v1/kakao',
 }
 
-test('Kakao URI lists select only the configured origin and preserve exact callback values', () => {
+test('카카오 URI 목록이 설정된 Origin만 선택하고 콜백 값을 그대로 유지한다', () => {
   const previous = { KAKAO_REDIRECT_URI: process.env.KAKAO_REDIRECT_URI, KAKAO_REST_API_KEY: process.env.KAKAO_REST_API_KEY }
   const local = 'http://localhost:3000/auth/v1/kakao'
   const network = 'http://192.168.219.102:3000/auth/v1/kakao'
@@ -51,7 +51,7 @@ test('Kakao URI lists select only the configured origin and preserve exact callb
   }
 })
 
-test('selected Kakao redirect cookie is bound to state, expires and rejects tampering', () => {
+test('선택한 카카오 콜백 쿠키를 상태 값과 연결하고 만료·변조를 거부한다', () => {
   const uri = TEST_KAKAO_CONFIG.redirectUri
   const token = createRedirectUriCookie(uri, 'login-state', TEST_SECRET, 1000)
   assert.equal(readRedirectUriCookie(token, 'login-state', TEST_SECRET, 1001), uri)
@@ -63,7 +63,7 @@ test('selected Kakao redirect cookie is bound to state, expires and rejects tamp
   assert.equal(readRedirectUriCookie(undefined, 'login-state', TEST_SECRET, 1001), null)
 })
 
-test('access and refresh JWTs reject tampering, expiry, and token-type confusion', () => {
+test('접근·갱신 JWT의 변조·만료·토큰 종류 혼동을 거부한다', () => {
   const issuedAt = 1_000
   const access = createAccessToken('user-id', 'session-id', TEST_SECRET, issuedAt)
   const refresh = createRefreshToken('user-id', 'session-id', TEST_SECRET, issuedAt)

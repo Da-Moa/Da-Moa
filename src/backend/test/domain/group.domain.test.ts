@@ -55,7 +55,7 @@ if (
 process.env.DATABASE_URL = database;
 process.env.AUTH_JWT_SECRET ||= 'isolated-group-test-secret-at-least-32-bytes';
 
-test('Group autocommit reads, group/invite creation/revocation and atomic replay/replacement; departure uses 2/3 business queries', async (t) => {
+test('모임 조회·생성·초대·탈퇴의 SQL 횟수와 원자적 재시도를 검증한다', async (t) => {
   const client = createDatabaseClient(database);
   await client.connect();
   try {
@@ -138,7 +138,7 @@ test('Group autocommit reads, group/invite creation/revocation and atomic replay
     };
     try {
       await t.test(
-        'native Body DTOs own Group field validation and normalization; HTTP writes preserve replay, errors and SQL counts',
+        '모임 DTO가 입력을 검증·정규화하고 오류 응답과 SQL 횟수를 유지한다',
         async (ht) => {
           const { app } = await createMockBackend();
           ht.after(async () => app.close());

@@ -4,7 +4,7 @@ import { PrismaService } from '../../global/database/prisma.service'
 import { createDatabaseClient } from '../../global/database/db'
 import { Socket } from 'node:net'
 
-test('PostgreSQL uses TCP; Prisma transaction callbacks preserve lock ordering and failures', async t => {
+test('PostgreSQL TCP 연결과 Prisma 트랜잭션의 락 순서·실패 처리를 검증한다', async t => {
   assert.ok((createDatabaseClient('postgresql://test:test@postgres/test') as unknown as { connection: { stream: unknown } }).connection.stream instanceof Socket)
   const service = new PrismaService(), statements: string[] = []
   const tx = { $queryRaw: async () => { statements.push('lock') } }

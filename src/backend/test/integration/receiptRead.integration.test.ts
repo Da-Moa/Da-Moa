@@ -40,7 +40,7 @@ const key = () => randomUUID();
 const code = (expected: string) => (error: unknown) =>
   (error as { code: string }).code === expected;
 
-test('receipt read checks account and round participation in two SQL calls before MinIO GET', async (t) => {
+test('영수증 조회가 저장소 읽기 전에 SQL 2회로 계정과 회차 참여를 검사한다', async (t) => {
   const db = createDatabaseClient(testUrl);
   await db.connect();
   const queryLog = process.env.DB_QUERY_LOG;
