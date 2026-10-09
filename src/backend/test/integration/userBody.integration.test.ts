@@ -9,7 +9,7 @@ import {
 } from '../../domain/user/dto/req/user.request.dto';
 import { createDatabaseClient } from '../../global/database/db';
 import { createAccessToken, readAccessToken } from '../../global/auth/native';
-import { signInKakao } from '../domainTestSupport';
+import { signInKakao } from '../support/domainTestSupport';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
 
 const url = process.env.TEST_DATABASE_URL;

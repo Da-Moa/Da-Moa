@@ -15,7 +15,7 @@ import {
   createInvite,
   acceptInvite,
   createRound,
-} from '../domainTestSupport';
+} from '../support/domainTestSupport';
 
 const database = process.env.TEST_DATABASE_URL;
 if (

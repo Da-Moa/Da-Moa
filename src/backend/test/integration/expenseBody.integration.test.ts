@@ -15,7 +15,7 @@ import {
   createInvite,
   createRound,
   signInKakao,
-} from '../domainTestSupport';
+} from '../support/domainTestSupport';
 import { completeTestOnboarding } from './bankTestSupport';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
 import { uuidV7 } from '../../../shared/uuid';

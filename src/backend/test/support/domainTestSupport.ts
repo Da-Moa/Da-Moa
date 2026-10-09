@@ -1,9 +1,9 @@
-import { RuntimeModule } from '../global/runtime/runtime.module';
-import type { Database } from '../global/database/db';
-import { GroupModule } from '../domain/group/module/group.module';
-import { SettleModule } from '../domain/settle/module/settle.module';
-import { PrismaService } from '../global/database/prisma.service';
-import { databaseRows } from '../global/database/rowMapping';
+import { RuntimeModule } from '../../global/runtime/runtime.module';
+import type { Database } from '../../global/database/db';
+import { GroupModule } from '../../domain/group/module/group.module';
+import { SettleModule } from '../../domain/settle/module/settle.module';
+import { PrismaService } from '../../global/database/prisma.service';
+import { databaseRows } from '../../global/database/rowMapping';
 import {
   inspectionDatabase,
   type InspectionDatabase,
@@ -12,27 +12,27 @@ import 'reflect-metadata';
 import { after } from 'node:test';
 import { NestFactory } from '@nestjs/core';
 import { Module, type Type } from '@nestjs/common';
-import { UserModule } from '../domain/user/module/user.module';
-import { AuthModule } from '../global/auth/module/auth.module';
-import { HealthModule } from '../domain/health/module/health.module';
-import { UserService } from '../domain/user/service/user.service';
-import { GroupService } from '../domain/group/service/group.service';
-import { SettleService } from '../domain/settle/service/settle.service';
-import { AuthService } from '../global/auth/service/auth.service';
-import { AuthorizationService } from '../global/auth/service/authorization.service';
-import { UserRepository } from '../domain/user/repository/user.repository';
-import { createValidationPipe } from '../global/apiPayload/validation.pipe';
-import { PageQueryDTO } from '../global/apiPayload/dto/req/page.request.dto';
+import { UserModule } from '../../domain/user/module/user.module';
+import { AuthModule } from '../../global/auth/module/auth.module';
+import { HealthModule } from '../../domain/health/module/health.module';
+import { UserService } from '../../domain/user/service/user.service';
+import { GroupService } from '../../domain/group/service/group.service';
+import { SettleService } from '../../domain/settle/service/settle.service';
+import { AuthService } from '../../global/auth/service/auth.service';
+import { AuthorizationService } from '../../global/auth/service/authorization.service';
+import { UserRepository } from '../../domain/user/repository/user.repository';
+import { createValidationPipe } from '../../global/apiPayload/validation.pipe';
+import { PageQueryDTO } from '../../global/apiPayload/dto/req/page.request.dto';
 import {
   CreateGroupRequestDTO,
   CreateInviteRequestDTO,
   GroupListQueryDTO,
-} from '../domain/group/dto/req/group.request.dto';
+} from '../../domain/group/dto/req/group.request.dto';
 import {
   BankAccountRequestDTO,
   OnboardingRequestDTO,
-} from '../domain/user/dto/req/user.request.dto';
-import { objectBody } from '../global/util/mutations';
+} from '../../domain/user/dto/req/user.request.dto';
+import { objectBody } from '../../global/util/mutations';
 import {
   CreateRoundRequestDTO,
   CreateExpenseRequestDTO,
@@ -41,11 +41,11 @@ import {
   SettlementCheckRequestDTO,
   RoundListQueryDTO,
   parseRoundListQuery,
-} from '../domain/settle/dto/req/settle.request.dto';
+} from '../../domain/settle/dto/req/settle.request.dto';
 import {
   parsePageQuery,
   parseSearchPageQuery,
-} from '../global/apiPayload/pageQuery';
+} from '../../global/apiPayload/pageQuery';
 
 // Existing domain fixtures describe raw query strings. Run the same Nest DTO
 // boundary here; production Services accept only the resulting typed query.
@@ -444,12 +444,12 @@ export async function requireAccount(
 }
 
 export async function findUser(
-  client: import('../global/database/db').Database,
+  client: import('../../global/database/db').Database,
   userId: string,
 ) {
   const row = await client.prisma.users.findFirst({ where: { id: userId } });
   return row
-    ? databaseRows<import('../domain/user/dao/user.dao').UserRow>(row)
+    ? databaseRows<import('../../domain/user/dao/user.dao').UserRow>(row)
     : undefined;
 }
 

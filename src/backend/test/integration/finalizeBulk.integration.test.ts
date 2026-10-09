@@ -1,11 +1,15 @@
-import { testProvider } from '../domainTestSupport';
+import { testProvider } from '../support/domainTestSupport';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { createDatabaseClient } from '../../global/database/db';
 
 import type { AccessToken } from '../../global/auth/native';
-import { createGroup, createInvite, acceptInvite } from '../domainTestSupport';
+import {
+  createGroup,
+  createInvite,
+  acceptInvite,
+} from '../support/domainTestSupport';
 import { SettleService } from '../../domain/settle/service/settle.service';
 import { SettleRepository } from '../../domain/settle/repository/settle.repository';
 import {

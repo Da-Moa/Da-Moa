@@ -1,5 +1,5 @@
-import type { Database } from '../global/database/databaseConnection';
-import { rawRows, rawExecute } from '../global/database/rawSql';
+import type { Database } from '../../global/database/databaseConnection';
+import { rawRows, rawExecute } from '../../global/database/rawSql';
 
 // Existing fixture/inspection helpers use a pg-shaped result. This adapter is
 // test-only; operational repositories explicitly choose typed rows or a count.

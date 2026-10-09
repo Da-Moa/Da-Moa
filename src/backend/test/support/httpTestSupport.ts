@@ -13,24 +13,24 @@ import {
 } from '@nestjs/common/constants.js';
 import { Reflector } from '@nestjs/core';
 import { defer, lastValueFrom } from 'rxjs';
-import { RequestBodyInterceptor } from '../global/apiPayload/requestBody.interceptor';
-import { OriginGuard } from '../global/apiPayload/origin.guard';
-import { JwtGuard } from '../global/auth/guard/jwt.guard';
-import { HttpResponseException } from '../global/apiPayload/handler/global.exception.handler';
-import { createValidationPipe } from '../global/apiPayload/validation.pipe';
-import { ApiResponseInterceptor } from '../global/apiPayload/apiResponse.interceptor';
+import { RequestBodyInterceptor } from '../../global/apiPayload/requestBody.interceptor';
+import { OriginGuard } from '../../global/apiPayload/origin.guard';
+import { JwtGuard } from '../../global/auth/guard/jwt.guard';
+import { HttpResponseException } from '../../global/apiPayload/handler/global.exception.handler';
+import { createValidationPipe } from '../../global/apiPayload/validation.pipe';
+import { ApiResponseInterceptor } from '../../global/apiPayload/apiResponse.interceptor';
 import { type ExecutionContext, RequestMethod } from '@nestjs/common';
 import type {
   Request as ExpressRequest,
   Response as ExpressResponse,
 } from 'express';
-import { AppError, errorResponse } from '../global/apiPayload/errors';
-import { GroupController } from '../domain/group/controller/group.controller';
-import { SettleController } from '../domain/settle/controller/settle.controller';
-import { HealthController } from '../domain/health/controller/health.controller';
-import type { HttpRequest } from '../global/apiPayload/httpContext';
+import { AppError, errorResponse } from '../../global/apiPayload/errors';
+import { GroupController } from '../../domain/group/controller/group.controller';
+import { SettleController } from '../../domain/settle/controller/settle.controller';
+import { HealthController } from '../../domain/health/controller/health.controller';
+import type { HttpRequest } from '../../global/apiPayload/httpContext';
 
-import { UserController } from '../domain/user/controller/user.controller';
+import { UserController } from '../../domain/user/controller/user.controller';
 
 const validationPipe = createValidationPipe();
 const bodyInterceptor = new RequestBodyInterceptor(new Reflector());

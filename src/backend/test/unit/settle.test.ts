@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { HttpRequest as NextRequest } from '../../global/apiPayload/httpContext';
-import { dispatch as GET } from '../httpTestSupport';
+import { dispatch as GET } from '../support/httpTestSupport';
 import { createAccessToken } from '../../global/auth/authUtil';
 
 test('Settle dispatch preserves routes, origin, JSON and multipart validation before DB work', async (t) => {

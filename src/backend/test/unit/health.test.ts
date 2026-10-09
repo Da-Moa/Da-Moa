@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test, { before, after } from 'node:test';
-import { health as GET } from '../httpTestSupport';
+import { health as GET } from '../support/httpTestSupport';
 import { HealthRepository } from '../../domain/health/repository/health.repository';
 import {
   HEALTH_WORKER_PROBES,

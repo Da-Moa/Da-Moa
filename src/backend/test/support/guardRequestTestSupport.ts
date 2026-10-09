@@ -1,7 +1,7 @@
 import cookieParser from 'cookie-parser';
 import type { Request as ExpressRequest, Response } from 'express';
-import { nativeJwtGuard } from '../global/auth/guard/jwt.guard';
-import type { AccessToken } from '../global/auth/authUtil';
+import { nativeJwtGuard } from '../../global/auth/guard/jwt.guard';
+import type { AccessToken } from '../../global/auth/authUtil';
 
 // Pure policy fixtures use the same cookie middleware and native Guard as HTTP.
 export function jwtGuardForTest(

@@ -1,8 +1,8 @@
-import { getPrismaClient } from '../domainTestSupport';
+import { getPrismaClient } from '../support/domainTestSupport';
 import { runOnce } from 'graphile-worker';
 import { ReceiptWorker } from '../../domain/settle/service/receiptWorker';
-import { testProvider } from '../domainTestSupport';
-import { addReceipt } from '../domainTestSupport';
+import { testProvider } from '../support/domainTestSupport';
+import { addReceipt } from '../support/domainTestSupport';
 
 export async function drainReceiptQueue(worker?: ReceiptWorker) {
   const connectionString = process.env.TEST_DATABASE_URL;
