@@ -21,7 +21,8 @@
     "db:generate": "prisma generate",
     "postinstall": "prisma generate",
     "build:backend": "prisma generate && nest build",
-    "test:smoke": "npm run build:backend && SWC_NODE_PROJECT=tsconfig.backend.json node --import @swc-node/register/esm-register --test --test-concurrency=1 src/backend/test/integration/routes.integration.test.ts"
+    "test:smoke": "npm run build:backend && SWC_NODE_PROJECT=tsconfig.backend.json node --import @swc-node/register/esm-register --test --test-concurrency=1 src/backend/test/integration/routes.integration.test.ts",
+    "test:browser": "playwright test"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1142.0",
@@ -59,6 +60,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@nestjs/cli": "^11.0.24",
+    "@playwright/test": "1.64.0",
     "@swc-node/register": "^1.12.1",
     "@swc/core": "^1.16.13",
     "@types/cookie-parser": "^1.4.10",
