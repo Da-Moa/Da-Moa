@@ -248,6 +248,37 @@ test('정산 전송이 일정한 SQL 횟수로 정확한 금액을 일괄 확정
     payer: 0,
   } as const;
 
+  const assertLoggedRejection = async (
+    work: () => Promise<unknown>,
+    expected: (error: unknown) => boolean,
+  ) => {
+    const original = console.error;
+    const errors: unknown[] = [];
+    const logger = t.mock.method(console, 'error', (...args: unknown[]) => {
+      if (args[0] === 'Unhandled server error' && expected(args[1]))
+        errors.push(args[1]);
+      else original.apply(console, args);
+    });
+    try {
+      await assert.rejects(work, (error) => {
+        assert.ok(expected(error), '예상한 저장 실패가 발생해야 한다');
+        assert.equal(
+          errors.length,
+          1,
+          '예외 처리기가 실패를 한 번 기록해야 한다',
+        );
+        assert.equal(
+          errors[0],
+          error,
+          '기록된 오류와 요청의 실패가 같아야 한다',
+        );
+        return true;
+      });
+    } finally {
+      logger.mock.restore();
+    }
+  };
+
   await t.test(
     '지출 1건·회원 2명의 정산을 SQL 1회로 저장하고 재시도 시 다시 저장하지 않는다',
     async () => {
@@ -329,9 +360,13 @@ test('정산 전송이 일정한 SQL 횟수로 정확한 금액을 일괄 확정
           ),
       );
       try {
-        await assert.rejects(
-          send(round, key),
-          (error: { code?: string }) => error.code === '23514',
+        await assertLoggedRejection(
+          () => send(round, key),
+          (error) =>
+            !!error &&
+            typeof error === 'object' &&
+            'code' in error &&
+            error.code === '23514',
         );
       } finally {
         failure.mock.restore();
@@ -347,18 +382,19 @@ test('정산 전송이 일정한 SQL 횟수로 정확한 금액을 일괄 확정
       const round = await fixture([simple]);
       const key = randomUUID();
       const original = repository.saveFinalSettlement.bind(repository);
+      const injectedError = new Error('failure after bulk persistence');
       const failure = t.mock.method(
         repository,
         'saveFinalSettlement',
         async (...args: Parameters<typeof original>) => {
           await original(...args);
-          throw new Error('failure after bulk persistence');
+          throw injectedError;
         },
       );
       try {
-        await assert.rejects(
-          send(round, key),
-          /failure after bulk persistence/,
+        await assertLoggedRejection(
+          () => send(round, key),
+          (error) => error === injectedError,
         );
       } finally {
         failure.mock.restore();
