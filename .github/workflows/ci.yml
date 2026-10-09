@@ -77,6 +77,9 @@ jobs:
           reference=$(docker image inspect "$image:$GITHUB_SHA" --format '{{index .RepoDigests 0}}')
           [[ "$reference" =~ ^ghcr\.io/da-moa/da-moa@sha256:[0-9a-f]{64}$ ]]
           echo "image=$reference" >> "$GITHUB_OUTPUT"
+      - name: Prune unused Docker resources
+        if: always()
+        run: sudo docker system prune -a --volumes -f
 
   integration:
     name: Nest DB / ${{ matrix.kind }}
@@ -134,6 +137,9 @@ jobs:
           name: nest-db-${{ matrix.kind }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.CI_ARTIFACT_DIR }}
           retention-days: 7
+      - name: Prune unused Docker resources
+        if: always()
+        run: sudo docker system prune -a --volumes -f
 
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
