@@ -4,7 +4,7 @@ import { createServer } from 'node:http'
 import { PassThrough } from 'node:stream'
 import test from 'node:test'
 import { HttpRequest as NextRequest } from '../../global/apiPayload/httpContext'
-import { jwtGuard as proxy } from '../../global/auth/guard/jwt.guard'
+import { jwtGuardForTest as proxy } from '../guardRequestTestSupport'
 import { createAccessToken, createRefreshToken, REFRESH_TOKEN_COOKIE_NAME } from '../../global/auth/native'
 import { createRateLimitController, createTokenBuckets, rateLimitPolicies, requestRateLimitKinds } from '../../global/rateLimit/native'
 

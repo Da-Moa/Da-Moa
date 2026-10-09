@@ -5,27 +5,13 @@ import {
 } from '@nestjs/common';
 import { HttpResponseException } from '../../apiPayload/handler/global.exception.handler';
 import { clearAuthCookies } from '../controller/authCookies';
-import { HttpResponse, type HttpRequest } from '../../apiPayload/httpContext';
+import { HttpResponse } from '../../apiPayload/httpContext';
 import { REFRESH_TOKEN_COOKIE_NAME } from '../authUtil';
 import { apiJwtPolicy, readApiJwt } from '../apiJwtUtil';
 import { AppError, errorResponse } from '../../apiPayload/errors';
 import type { AccessToken } from '../authUtil';
 import type { AuthenticatedRequest } from '../decorator/currentUser.decorator';
 import type { Request as ExpressRequest } from 'express';
-
-export function jwtGuard(
-  request: HttpRequest,
-  authenticated?: (user: AccessToken) => void,
-): Response | null {
-  const { pathname } = request.nextUrl;
-  return authorizeApiRequest(
-    request.method,
-    pathname,
-    request.headers.get('authorization'),
-    request.cookies.get(REFRESH_TOKEN_COOKIE_NAME)?.value,
-    authenticated,
-  );
-}
 
 function authorizeApiRequest(
   method: string,

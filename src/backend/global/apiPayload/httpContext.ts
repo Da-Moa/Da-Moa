@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { Readable } from 'node:stream';
-import { RequestCookies, ResponseCookies } from '@edge-runtime/cookies';
+import { ResponseCookies } from '@edge-runtime/cookies';
 import type {
   Request as ExpressRequest,
   Response as ExpressResponse,
@@ -9,9 +9,6 @@ import type {
 export class HttpRequest extends Request {
   get nextUrl() {
     return new URL(this.url);
-  }
-  get cookies() {
-    return new RequestCookies(this.headers);
   }
 }
 

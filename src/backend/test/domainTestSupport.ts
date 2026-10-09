@@ -22,7 +22,6 @@ import { AuthService } from '../global/auth/service/auth.service';
 import { AuthorizationService } from '../global/auth/service/authorization.service';
 import { UserRepository } from '../domain/user/repository/user.repository';
 import { getTestLoginResponse as testLogin } from '../global/auth/controller/testLogin.controller';
-import { getRefreshResponse as refresh } from '../global/auth/controller/refresh.controller';
 
 @Module({
   imports: [
@@ -278,12 +277,6 @@ export async function getTestLoginResponse(
   request: Parameters<typeof testLogin>[0],
 ) {
   return testLogin(request, await testProvider(AuthService));
-}
-
-export async function getRefreshResponse(
-  request: Parameters<typeof refresh>[0],
-) {
-  return refresh(request, await testProvider(AuthService));
 }
 
 export async function withDatabaseConnection<T>(

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { HttpRequest as NextRequest } from '../../global/apiPayload/httpContext';
-import { JwtGuard, jwtGuard } from '../../global/auth/guard/jwt.guard';
+import { JwtGuard } from '../../global/auth/guard/jwt.guard';
+import { jwtGuardForTest as jwtGuard } from '../guardRequestTestSupport';
 import {
   CurrentUser,
   type AuthenticatedRequest,

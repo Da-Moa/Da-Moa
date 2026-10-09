@@ -1,10 +1,12 @@
 import { getPrismaClient } from '../domainTestSupport';
 import assert from 'node:assert/strict'
-import { before, test } from 'node:test'
+import { before, after, test } from 'node:test'
 import { networkInterfaces } from 'node:os'
 import { HttpRequest as NextRequest } from '../../global/apiPayload/httpContext'
 import { getTestLoginResponse as POST } from '../domainTestSupport';
-import { getAccessTokenResponse as accessTokenResponse } from '../../global/auth'
+import { createBackend } from '../../domain/main';
+import type { INestApplication } from '@nestjs/common';
+import { requestTestServer } from '../actualHttpTestSupport';
 import { ACCESS_TOKEN_COOKIE_NAME, readAccessToken, REFRESH_TOKEN_COOKIE_NAME } from '../../global/auth/native.ts'
 import { getAccount } from '../domainTestSupport';
 import { completeOnboarding } from '../domainTestSupport';
@@ -20,7 +22,15 @@ if (!testUrl || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(testUrl).h
 process.env.DATABASE_URL = testUrl
 process.env.AUTH_JWT_SECRET = 'isolated-test-login-secret-at-least-32-bytes'
 
+let app: INestApplication, origin: string
+const accessTokenResponse = (request: Request) => requestTestServer(origin, request)
+after(async () => app?.close())
+
 before(async () => {
+  const backend = await createBackend()
+  app = backend.app
+  await app.listen(0, '127.0.0.1')
+  origin = await app.getUrl()
   const client = createDatabaseClient(testUrl)
   try {
     await client.connect()
