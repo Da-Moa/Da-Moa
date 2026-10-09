@@ -6,7 +6,11 @@ import { randomUUID } from 'node:crypto'
 import test from 'node:test'
 import sharp from 'sharp'
 import { DeleteObjectCommand, HeadObjectCommand, S3Client } from '@aws-sdk/client-s3'
-import { readAccessToken } from '../../global/auth/native.ts'
+import { createAccessToken, readAccessToken } from '../../global/auth/native.ts'
+import { createBackend } from '../../domain/main'
+import { SettleService } from '../../domain/settle/service/settle.service'
+import { CreateRoundRequestDTO } from '../../domain/settle/dto/req/settle.request.dto'
+import { MAX_GROUP_MEMBERS } from '../../../shared/domain/group/constants'
 import { signInKakao } from '../domainTestSupport';
 import { acceptInvite, createGroup, createInvite } from '../domainTestSupport';
 import { addReceipt, checkExclusion, createRound, deleteExpense, excludeMember, getReceipt, getRound, getSettlement, listRounds, removeReceipt, roundCommand, saveExpense, setSettlementCheck } from '../domainTestSupport';
@@ -162,20 +166,80 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
     try {
       const createKey = uuidV7(), body = { name: '호출 수 검증', participantIds: [a.userId, b.userId, c.userId] }
       const round = await trace(4, 'session', () => createRound(a, createKey, group.id, body))
+      await t.test('Round Body DTO validation rejects invalid input before SQL while canonical members and the write transaction stay unchanged', async ht => {
+        const { app } = await createBackend()
+        ht.after(async () => { await app.close() })
+        await app.listen(0, '127.0.0.1')
+        const origin = await app.getUrl(), service = app.get(SettleService)
+        const token = createAccessToken(a.userId, a.sessionId)
+        const create = service.createRound.bind(service)
+        let calls = 0
+        ht.mock.method(service, 'createRound', (...args: Parameters<typeof create>) => {
+          calls++
+          assert.ok(args[3] instanceof CreateRoundRequestDTO)
+          assert.equal(args[3].name, args[3].name.trim())
+          return create(...args)
+        })
+        const request = async (input: unknown, ticket: string, status: number, count: number, authorization = `Bearer ${token}`) => {
+          statements = []
+          const response = await fetch(`${origin}/api/groups/${group.id}/rounds`, {
+            method: 'POST', headers: { origin, authorization, 'content-type': 'application/json', 'idempotency-key': ticket },
+            body: JSON.stringify(input), signal: AbortSignal.timeout(10000),
+          })
+          const payload = await response.json()
+          assert.equal(response.status, status, JSON.stringify(payload))
+          assert.equal(statements.length, count, statements.join('\n'))
+          if (count) {
+            assert.equal(statements[0], 'BEGIN')
+            assert.equal(statements[1], 'SELECT pg_advisory_xact_lock(1684106607)::text')
+            assert.match(statements[2], /"users" WHERE .*"id" = \$1/)
+            assert.equal(statements.at(-1), status === 200 ? 'COMMIT' : 'ROLLBACK')
+          }
+          return payload
+        }
+        const ticket = uuidV7(), members = [c.userId, a.userId, b.userId]
+        const input = { name: ' \t네이티브 회차\n ', participantIds: members }
+        const saved = await request(input, ticket.toUpperCase(), 200, 5)
+        assert.equal(saved.data.id, ticket)
+        ht.after(async () => { await roundCommand(a, randomUUID(), ticket, 'cancel', { expectedVersion: 1 }) })
+        const detail = await getRound(a, ticket, new URLSearchParams())
+        assert.equal(detail.name, '네이티브 회차')
+        assert.deepEqual(detail.members.map(member => member.userId).sort(), members.slice().sort())
+        assert.equal((await request(input, ticket, 409, 5)).code, 'round_already_exists')
+        const successfulCalls = calls
+        for (const [input, code] of [
+          [{ name: '', participantIds: members }, 'invalid_input'],
+          [{ name: 'x'.repeat(101), participantIds: members }, 'invalid_input'],
+          [{ name: 123, participantIds: members }, 'invalid_input'],
+          [{ name: '회차', participantIds: [a.userId] }, 'minimum_participants'],
+          [{ name: '회차', participantIds: [a.userId, a.userId] }, 'invalid_participants'],
+          [{ name: '회차', participantIds: [a.userId, `${b.userId} `] }, 'invalid_participants'],
+          [{ name: '회차', participantIds: [a.userId, 123] }, 'invalid_participants'],
+          [{ name: '회차', participantIds: Array.from({ length: MAX_GROUP_MEMBERS + 1 }, () => randomUUID()) }, 'invalid_participants'],
+          [{ name: '회차', participantIds: members, currency: 'KRW' }, 'invalid_input'],
+        ] as const) assert.equal((await request(input, uuidV7(), 400, 0)).code, code)
+        assert.equal((await request({}, uuidV7(), 401, 0, '')).code, 'unauthorized')
+        assert.equal((await request({}, uuidV7(), 401, 0, 'Bearer forged')).code, 'unauthorized')
+        assert.equal(calls, successfulCalls, 'invalid DTOs and JWTs never invoke the Service')
+        assert.equal((await request({ name: '본인 누락', participantIds: [b.userId, c.userId] }, uuidV7(), 409, 4)).code, 'minimum_participants')
+        assert.equal((await request(input, randomUUID(), 400, 4)).code, 'invalid_request_key')
+      })
       await trace(4, 'session', () => assert.rejects(createRound(a, createKey, group.id, body), (error: { code: string }) => error.code === 'round_already_exists'))
       assert.equal(round.id, createKey)
       await trace(4, 'session', () => assert.rejects(createRound(a, createKey.toUpperCase(), group.id, { ...body, name: '다른 제목' }), (error: { code: string }) => error.code === 'round_already_exists'))
       for (const [actor, ticket, input, expected, count] of [
-        [null, '', {}, 'unauthorized', 2],
-        [{ ...a, userId: randomUUID() }, '', {}, 'unauthorized', 3],
+        [null, '', body, 'unauthorized', 2],
+        [{ ...a, userId: randomUUID() }, '', body, 'unauthorized', 3],
         [a, randomUUID(), body, 'invalid_request_key', 3],
         [a, '', body, 'invalid_request_key', 3],
-        [a, uuidV7(), { ...body, name: '' }, 'invalid_input', 3],
-        [a, uuidV7(), { ...body, currency: 'INVALID' }, 'invalid_input', 3],
-        [a, uuidV7(), { ...body, participantIds: [a.userId] }, 'minimum_participants', 3],
-        [a, uuidV7(), { ...body, participantIds: [a.userId, a.userId] }, 'invalid_participants', 3],
         [a, uuidV7(), { ...body, participantIds: [a.userId, randomUUID()] }, 'invalid_participants', 4],
       ] as const) await trace(count, 'session', () => assert.rejects(createRound(actor, ticket, group.id, input), (error: { code: string }) => error.code === expected))
+      for (const [input, expected] of [
+        [{ ...body, name: '' }, 'invalid_input'],
+        [{ ...body, currency: 'INVALID' }, 'invalid_input'],
+        [{ ...body, participantIds: [a.userId] }, 'minimum_participants'],
+        [{ ...body, participantIds: [a.userId, a.userId] }, 'invalid_participants'],
+      ] as const) await trace(0, 'connection', () => assert.rejects(createRound(a, uuidV7(), group.id, input), (error: { code: string }) => error.code === expected))
       await trace(4, 'session', () => assert.rejects(createRound(a, uuidV7(), randomUUID(), body), (error: { code: string }) => error.code === 'not_found'))
       assert.equal((await db.query('SELECT 1 FROM mutation_requests WHERE request_key=$1', [createKey])).rowCount, 0)
       const concurrentKey = uuidV7()

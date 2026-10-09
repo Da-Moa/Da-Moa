@@ -50,7 +50,6 @@ export class CreateRoundRequestDTO {
     context: settleErrors.INVALID_PARTICIPANTS,
   })
   participantIds!: string[];
-  [key: string]: unknown;
 }
 export class VersionRequestDTO {
   @ApiProperty({

@@ -337,17 +337,16 @@ export class SettleService {
     access: Identity,
     key: string,
     groupId: string,
-    body: CreateRoundRequestDTO | Record<string, unknown>,
+    body: CreateRoundRequestDTO,
     captureAudience?: (userIds: string[]) => void,
   ) {
     return this.prisma.withWriteTransaction(async (client) => {
       const account = await this.authorization.requireAccount(client, access);
-      onlyKeys(body, ['name', 'participantIds']);
-      const name = textInput(body.name, 100),
-        ids = idsInput(body.participantIds);
+      // Canonical order is used for persistence/audience; DTO validation owns shape.
+      const ids = body.participantIds.slice().sort();
       if (!isUUID(key, '7'))
         throw new SettleException(settleErrors.ROUND_CREATION_KEY_REQUIRED);
-      if (ids.length < 2 || !ids.includes(account.id))
+      if (!ids.includes(account.id))
         throw new SettleException(settleErrors.MINIMUM_PARTICIPANTS);
       const id = key.toLowerCase();
       try {
@@ -356,7 +355,7 @@ export class SettleService {
           id,
           groupId,
           account.id,
-          name,
+          body.name,
           nowSeconds(),
           ids,
         );

@@ -30,6 +30,7 @@ import {
 } from '../domain/group/dto/req/group.request.dto';
 import { objectBody } from '../global/util/mutations';
 import {
+  CreateRoundRequestDTO,
   RoundListQueryDTO,
   parseRoundListQuery,
 } from '../domain/settle/dto/req/settle.request.dto';
@@ -236,9 +237,20 @@ export async function getRound(
 }
 
 export async function createRound(
-  ...args: Parameters<SettleService['createRound']>
+  access: Parameters<SettleService['createRound']>[0],
+  key: string,
+  groupId: string,
+  body: unknown,
+  captureAudience?: Parameters<SettleService['createRound']>[4],
 ): Promise<Awaited<ReturnType<SettleService['createRound']>>> {
-  return (await testProvider(SettleService)).createRound(...args);
+  const parsed = await testBody(CreateRoundRequestDTO, body);
+  return (await testProvider(SettleService)).createRound(
+    access,
+    key,
+    groupId,
+    parsed,
+    captureAudience,
+  );
 }
 
 export async function saveExpense(
