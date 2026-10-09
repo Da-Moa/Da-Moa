@@ -3,15 +3,11 @@ import {
   DocumentBuilder,
   SwaggerModule,
   type OpenAPIObject,
-  type OperationObject,
   type ReferenceObject,
   type SchemaObject,
 } from '@nestjs/swagger';
-import { legacyOpenApiDocument } from '../util/openapi';
 import { OpenApiService } from './openApi.service';
-import { GroupModule } from '../../domain/group';
-import { UserModule } from '../../domain/user/module/user.module';
-import { SettleModule } from '../../domain/settle/module/settle.module';
+import { OIDC_COOKIE_NAMES, REFRESH_TOKEN_COOKIE_NAME } from '../auth/native';
 
 function documentValidatedBodies(document: OpenAPIObject) {
   const seen = new Set<string>();
@@ -98,46 +94,58 @@ export function configureSwaggerUi(app: INestApplication) {
   }
 }
 
-// Keep the documented auth/SQL/response contracts; derive request schemas from the actual DTOs.
+// Controllers and runtime DTOs own the API catalog and schemas.
 export function configureOpenApi(app: INestApplication) {
-  const generated = SwaggerModule.createDocument(
-    app,
-    new DocumentBuilder().setTitle('다모아 API').setVersion('2.0.0').build(),
-  );
-  const document = structuredClone(
-    legacyOpenApiDocument,
-  ) as unknown as OpenAPIObject;
-  Object.assign(document.components!.schemas!, generated.components?.schemas);
-  for (const [path, operations] of Object.entries(generated.paths)) {
-    for (const method of ['get', 'post', 'put', 'patch', 'delete'] as const) {
-      const request = operations[method] as OperationObject | undefined;
-      const existing = document.paths[path]?.[method];
-      if (!request || !existing) continue;
-      if (request.requestBody) existing.requestBody = request.requestBody;
-      for (const parameter of request.parameters ?? []) {
-        if ('$ref' in parameter || parameter.in !== 'query') continue;
-        const index =
-          existing.parameters?.findIndex(
-            (value) =>
-              !('$ref' in value) &&
-              value.in === 'query' &&
-              value.name === parameter.name,
-          ) ?? -1;
-        if (index >= 0)
-          existing.parameters![index] = {
-            ...existing.parameters![index],
-            ...parameter,
-          };
-        else (existing.parameters ??= []).push(parameter);
-      }
-    }
-  }
-  const migrated = SwaggerModule.createDocument(
-    app,
-    new DocumentBuilder().setTitle('다모아 API').setVersion('2.0.0').build(),
-    { include: [GroupModule, UserModule, SettleModule] },
-  );
-  Object.assign(document.paths, migrated.paths);
+  const metadata = new DocumentBuilder()
+    .setOpenAPIVersion('3.0.3')
+    .setTitle('다모아 API')
+    .setVersion('2.0.0')
+    .setDescription(
+      '카카오 인증·계좌·모임·회차·증빙·개인 정산 API. localStorage의 10분 Access JWT를 Bearer 헤더로 전송하고 Refresh JWT는 HttpOnly 쿠키로 유지합니다. 모임 생성은 UUIDv7 PK로 중복을 거절하며 다른 변경은 origin·권한·멱등 키를 검증합니다. 금액은 정확한 문자열이고 양수 잔액은 보낼 돈, 음수는 받을 돈입니다.',
+    )
+    .addServer('/', '현재 배포 주소')
+    .addTag('상태')
+    .addTag('인증', '카카오 로그인과 토큰 관리')
+    .addTag('계정')
+    .addTag('모임')
+    .addTag('지출')
+    .addTag('정산')
+    .addBearerAuth(
+      {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT',
+        description:
+          'localStorage에 저장하는 10분 Access JWT. DB 세션 유효성을 확인하지 않으며 회원 상태·리소스 권한은 검사합니다.',
+      },
+      'accessBearer',
+    )
+    .addCookieAuth(
+      REFRESH_TOKEN_COOKIE_NAME,
+      {
+        type: 'apiKey',
+        in: 'cookie',
+        description: '14일 수명의 HttpOnly 리프레시 JWT',
+      },
+      'refreshCookie',
+    )
+    .addCookieAuth(
+      OIDC_COOKIE_NAMES.state,
+      { type: 'apiKey', in: 'cookie' },
+      'oidcStateCookie',
+    )
+    .addCookieAuth(
+      OIDC_COOKIE_NAMES.nonce,
+      { type: 'apiKey', in: 'cookie' },
+      'oidcNonceCookie',
+    )
+    .addCookieAuth(
+      OIDC_COOKIE_NAMES.codeVerifier,
+      { type: 'apiKey', in: 'cookie' },
+      'oidcVerifierCookie',
+    )
+    .build();
+  const document = SwaggerModule.createDocument(app, metadata);
   documentValidatedBodies(document);
   app.get(OpenApiService).configure(document);
 }

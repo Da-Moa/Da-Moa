@@ -11,6 +11,11 @@ import { createAccessToken } from '../support/legacyTokenTestSupport.ts';
 import { PrismaService } from '../../global/database/prisma.service';
 import { createBackend } from '../../domain/main';
 import type { INestApplication } from '@nestjs/common';
+import type {
+  ReferenceObject,
+  ResponseObject,
+  SchemaObject,
+} from '@nestjs/swagger';
 
 type HealthScope =
   | 'overall'
@@ -24,7 +29,7 @@ type HealthProbes = HealthWorkerProbes & {
   database: () => Promise<unknown>;
   minio: () => Promise<unknown>;
 };
-import { legacyOpenApiDocument as openApiDocument } from '../../global/util/openapi';
+import { OpenApiService } from '../../global/apiPayload/openApi.service';
 
 let app: INestApplication;
 let origin: string;
@@ -109,7 +114,7 @@ test('worker liveness skips dependencies and readiness reports each failure with
     '/api/health/worker',
     '/api/health/worker/readyz',
   ] as const) {
-    const operation = openApiDocument.paths[path].get;
+    const operation = app.get(OpenApiService).getDocument().paths[path].get!;
     assert.deepEqual(operation.security, []);
     assert.ok(operation.responses['503']);
   }
@@ -135,11 +140,18 @@ test('individual health checks only probe the selected dependency and report fai
         status: up ? 'ok' : 'down',
         checks: { [scope]: up ? 'ok' : 'down' },
       });
-      const operation = openApiDocument.paths[`/api/health/${scope}`].get;
+      const document = app.get(OpenApiService).getDocument();
+      const operation = document.paths[`/api/health/${scope}`].get!;
       assert.ok(operation.responses['503']);
-      const schema = operation.responses['200'].content['application/json']
-        .schema as { properties: { checks: { required: string[] } } };
-      assert.deepEqual(schema.properties.checks.required, [scope]);
+      const resolve = (schema: SchemaObject | ReferenceObject): SchemaObject =>
+        '$ref' in schema
+          ? resolve(
+              document.components!.schemas![schema.$ref.split('/').at(-1)!],
+            )
+          : schema;
+      const success = operation.responses['200'] as ResponseObject;
+      const schema = resolve(success.content!['application/json'].schema!);
+      assert.deepEqual(resolve(schema.properties!.checks).required, [scope]);
     }
   }
 });

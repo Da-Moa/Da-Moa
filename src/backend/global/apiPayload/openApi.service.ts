@@ -8,7 +8,7 @@ export class OpenApiService {
   configure(document: OpenAPIObject) {
     // Swagger metadata may contain reused nested objects. Own the complete JSON
     // document so creating or closing another Nest app cannot change this one.
-    this.document = structuredClone(document);
+    this.document = JSON.parse(JSON.stringify(document)) as OpenAPIObject;
   }
 
   getDocument() {

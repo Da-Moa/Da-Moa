@@ -90,15 +90,15 @@ test('OpenAPI document uses the Swagger UI-compatible 3.0 dialect', () => {
 test('OpenAPI documents a recoverable refresh failure', () => {
   const refresh = openApiDocument.paths['/api/auth/refresh'].post
 
-  assert.equal(
-    refresh.responses['503'].$ref,
-    '#/components/responses/RefreshUnavailable',
-  )
-  assert.equal(
-    openApiDocument.components.responses.RefreshUnavailable.content[
-      'application/json'
-    ].example.error,
+  const failure = refresh.responses['503'].content['application/json']
+  assert.deepEqual(failure.schema.properties.error.enum, [
     'refresh_unavailable',
+  ])
+  assert.equal(failure.example.error, 'refresh_unavailable')
+  assert.ok(failure.schema.required.includes('message'))
+  assert.deepEqual(
+    refresh.responses['401'].content['application/json'].schema.required,
+    ['error'],
   )
   assert.match(
     openApiDocument.paths['/api/auth/logout'].post.description,
@@ -303,7 +303,10 @@ test('OpenAPI component references resolve and financial privacy rules remain ex
     paths['/api/rounds/{roundId}/send'].post.description,
     /실제 메시지를 전송하지 않습니다/,
   )
-  assert.equal(openApiDocument.components.schemas.MinorAmount.type, 'string')
+  assert.equal(
+    openApiDocument.components.schemas.Expense.properties.amountMinor.type,
+    'string',
+  )
   assert.deepEqual(
     openApiDocument.components.schemas.Currency.enum,
     CURRENCY_CODES,

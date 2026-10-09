@@ -14,7 +14,7 @@ export type RoundStatus = (typeof roundStatuses)[number];
 
 @ApiSchema({ name: 'CurrencyTotal' })
 export class CurrencyTotal {
-  @ApiProperty({ type: 'string', enum: CURRENCY_CODES })
+  @ApiProperty({ type: 'string', enum: CURRENCY_CODES, enumName: 'Currency' })
   currency!: Currency;
   @ApiProperty({
     type: 'string',
@@ -29,7 +29,7 @@ export class CurrencyTotal {
 
 @ApiSchema({ name: 'CurrencyBalance' })
 export class CurrencyBalance {
-  @ApiProperty({ type: 'string', enum: CURRENCY_CODES })
+  @ApiProperty({ type: 'string', enum: CURRENCY_CODES, enumName: 'Currency' })
   currency!: Currency;
   @ApiProperty({ type: 'string', pattern: '^-?\\d+$' })
   balanceMinor!: string;
@@ -118,7 +118,7 @@ export class Expense {
   payerId!: string;
   @ApiProperty({ type: 'string' })
   description!: string;
-  @ApiProperty({ type: 'string', enum: CURRENCY_CODES })
+  @ApiProperty({ type: 'string', enum: CURRENCY_CODES, enumName: 'Currency' })
   currency!: Currency;
   @ApiProperty({
     type: 'string',
@@ -161,7 +161,7 @@ export class Expense {
 
 @ApiSchema({ name: 'SettlementTransfer' })
 export class SettlementTransfer {
-  @ApiProperty({ type: 'string', enum: CURRENCY_CODES })
+  @ApiProperty({ type: 'string', enum: CURRENCY_CODES, enumName: 'Currency' })
   currency!: Currency;
   @ApiProperty({ type: 'string', format: 'uuid' })
   senderId!: string;
@@ -178,7 +178,7 @@ export class SettlementTransfer {
 
 @ApiSchema({ name: 'PendingRemainder' })
 export class PendingRemainder {
-  @ApiProperty({ type: 'string', enum: CURRENCY_CODES })
+  @ApiProperty({ type: 'string', enum: CURRENCY_CODES, enumName: 'Currency' })
   currency!: Currency;
   @ApiProperty({
     type: 'string',
@@ -199,7 +199,7 @@ export class RoundSummary {
   groupName!: string;
   @ApiProperty({ type: 'string' })
   name!: string;
-  @ApiProperty({ type: 'string', enum: roundStatuses })
+  @ApiProperty({ type: 'string', enum: roundStatuses, enumName: 'RoundStatus' })
   status!: RoundStatus;
   @ApiProperty({ type: 'integer', minimum: 1 })
   version!: number;
@@ -282,7 +282,7 @@ export class ExclusionExpense {
   id!: string;
   @ApiProperty({ type: 'string' })
   description!: string;
-  @ApiProperty({ type: 'string', enum: CURRENCY_CODES })
+  @ApiProperty({ type: 'string', enum: CURRENCY_CODES, enumName: 'Currency' })
   currency!: Currency;
   @ApiProperty({
     type: 'string',
@@ -315,7 +315,11 @@ export class MutationResult {
   id!: string;
   @ApiPropertyOptional({ type: 'string', format: 'uuid' })
   roundId?: string;
-  @ApiPropertyOptional({ type: 'string', enum: roundStatuses })
+  @ApiPropertyOptional({
+    type: 'string',
+    enum: roundStatuses,
+    enumName: 'RoundStatus',
+  })
   status?: RoundStatus;
   @ApiPropertyOptional({ type: 'integer', minimum: 1 })
   version?: number;
@@ -370,7 +374,7 @@ export class SettlementConfirmation {
 
 @ApiSchema({ name: 'OutgoingTransfer' })
 export class OutgoingTransfer {
-  @ApiProperty({ type: 'string', enum: CURRENCY_CODES })
+  @ApiProperty({ type: 'string', enum: CURRENCY_CODES, enumName: 'Currency' })
   currency!: Currency;
   @ApiProperty({ type: 'string', format: 'uuid' })
   receiverId!: string;
@@ -397,7 +401,7 @@ export class OutgoingTransfer {
 
 @ApiSchema({ name: 'IncomingTransfer' })
 export class IncomingTransfer {
-  @ApiProperty({ type: 'string', enum: CURRENCY_CODES })
+  @ApiProperty({ type: 'string', enum: CURRENCY_CODES, enumName: 'Currency' })
   currency!: Currency;
   @ApiProperty({ type: 'string', format: 'uuid' })
   senderId!: string;
@@ -435,7 +439,7 @@ export class SettlementDTO {
   name!: string;
   @ApiProperty({ type: 'string' })
   groupName!: string;
-  @ApiProperty({ type: 'string', enum: roundStatuses })
+  @ApiProperty({ type: 'string', enum: roundStatuses, enumName: 'RoundStatus' })
   status!: RoundStatus;
   @ApiProperty({ type: 'integer', minimum: 1 })
   version!: number;
