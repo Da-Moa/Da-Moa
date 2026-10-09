@@ -27,7 +27,6 @@ export {
   refreshCookieOptions,
   readReturnToCookie,
 } from './authUtil';
-export { getTestLoginResponse } from './controller/testLogin.controller';
 export {
   setAuthCookies,
   clearAuthCookies,

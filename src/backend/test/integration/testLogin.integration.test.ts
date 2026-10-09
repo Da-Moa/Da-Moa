@@ -3,7 +3,6 @@ import assert from 'node:assert/strict'
 import { before, after, test } from 'node:test'
 import { networkInterfaces } from 'node:os'
 import { HttpRequest as NextRequest } from '../../global/apiPayload/httpContext'
-import { getTestLoginResponse as POST } from '../domainTestSupport';
 import { createBackend } from '../../domain/main';
 import type { INestApplication } from '@nestjs/common';
 import { requestTestServer } from '../actualHttpTestSupport';
@@ -24,6 +23,7 @@ process.env.AUTH_JWT_SECRET = 'isolated-test-login-secret-at-least-32-bytes'
 
 let app: INestApplication, origin: string
 const accessTokenResponse = (request: Request) => requestTestServer(origin, request)
+const POST = (request: Request) => requestTestServer(origin, request)
 after(async () => app?.close())
 
 before(async () => {

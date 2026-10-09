@@ -9,6 +9,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import {
   json,
+  urlencoded,
   type Request,
   type Response,
   type RequestHandler,
@@ -18,38 +19,57 @@ import { objectBody } from '../util/mutations';
 
 const BODY_LIMIT = 'api:body-limit';
 const JSON_BODY = 'api:json-body';
+const FORM_BODY = 'api:form-body';
 export const JsonBody = () => SetMetadata(JSON_BODY, true);
+export const FormBody = () => SetMetadata(FORM_BODY, true);
 export const RequestBodyLimit = (bytes: number) =>
   SetMetadata(BODY_LIMIT, bytes);
 
 @Injectable()
 export class RequestBodyInterceptor implements NestInterceptor {
-  private readonly parsers = new Map<number, RequestHandler>();
+  private readonly parsers = new Map<string, RequestHandler>();
 
   constructor(@Inject(Reflector) private readonly reflector: Reflector) {}
 
-  private parser(limit: number) {
-    let parser = this.parsers.get(limit);
+  private parser(limit: number, form: boolean) {
+    const key = `${form ? 'form' : 'json'}:${limit}`;
+    let parser = this.parsers.get(key);
     if (!parser) {
-      parser = json({
+      const options = {
         limit,
         type: () => true,
-        strict: false,
         inflate: false,
-        verify: (_request, _response, bytes, encoding) => {
-          // Preserve the API's strict UTF-8 contract before the library parses JSON.
+        verify: (
+          _request: Request,
+          _response: Response,
+          bytes: Buffer,
+          encoding: string,
+        ) => {
+          // Preserve strict UTF-8 before either library parser maps the body.
           if (encoding.toLowerCase().replaceAll('-', '') !== 'utf8')
-            throw new Error('JSON requests must use UTF-8');
-          new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+            throw new Error('Requests must use UTF-8');
+          const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+          // qs discards these names. Reject them rather than silently accepting extra fields.
+          if (form) {
+            const names = new URLSearchParams(text);
+            if (names.has('') || names.has('__proto__'))
+              throw new Error('Discarded form field');
+          }
         },
-      });
-      this.parsers.set(limit, parser);
+      };
+      parser = form
+        ? urlencoded({ ...options, extended: false })
+        : json({ ...options, strict: false });
+      this.parsers.set(key, parser);
     }
     return parser;
   }
 
   async intercept(context: ExecutionContext, next: CallHandler) {
-    if (this.reflector.get<boolean>(JSON_BODY, context.getHandler())) {
+    const form = Boolean(
+      this.reflector.get<boolean>(FORM_BODY, context.getHandler()),
+    );
+    if (form || this.reflector.get<boolean>(JSON_BODY, context.getHandler())) {
       const limit =
         this.reflector.getAllAndOverride<number>(BODY_LIMIT, [
           context.getHandler(),
@@ -58,7 +78,7 @@ export class RequestBodyInterceptor implements NestInterceptor {
       const http = context.switchToHttp();
       const request = http.getRequest<Request>();
       await new Promise<void>((resolve, reject) => {
-        this.parser(limit)(
+        this.parser(limit, form)(
           request,
           http.getResponse<Response>(),
           (error?: unknown) => {
@@ -75,13 +95,16 @@ export class RequestBodyInterceptor implements NestInterceptor {
                 : new AppError(
                     400,
                     'invalid_input',
-                    '올바른 JSON 입력이 필요합니다',
+                    form
+                      ? '올바른 로그인 요청이 필요합니다'
+                      : '올바른 JSON 입력이 필요합니다',
                   ),
             );
           },
         );
       });
-      request.body = objectBody(request.body === undefined ? {} : request.body);
+      request.body = request.body === undefined ? {} : request.body;
+      if (!form) request.body = objectBody(request.body);
     }
     return next.handle();
   }

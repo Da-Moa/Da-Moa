@@ -21,7 +21,6 @@ import { SettleService } from '../domain/settle/service/settle.service';
 import { AuthService } from '../global/auth/service/auth.service';
 import { AuthorizationService } from '../global/auth/service/authorization.service';
 import { UserRepository } from '../domain/user/repository/user.repository';
-import { getTestLoginResponse as testLogin } from '../global/auth/controller/testLogin.controller';
 
 @Module({
   imports: [
@@ -271,12 +270,6 @@ export async function saveOnboarding(
   ...args: Parameters<UserRepository['saveOnboarding']>
 ): Promise<Awaited<ReturnType<UserRepository['saveOnboarding']>>> {
   return (await testProvider(UserRepository)).saveOnboarding(...args);
-}
-
-export async function getTestLoginResponse(
-  request: Parameters<typeof testLogin>[0],
-) {
-  return testLogin(request, await testProvider(AuthService));
 }
 
 export async function withDatabaseConnection<T>(

@@ -18,6 +18,9 @@ import {
   OnboardingRequestDTO,
 } from '../../domain/user/dto/req/user.request.dto';
 import { issueTokens } from '../../global/auth/service/authTokens';
+import { AuthService } from '../../global/auth/service/auth.service';
+import { TestLoginRequestDTO } from '../../global/auth/dto/req/testLogin.request.dto';
+import { TestLoginBodyPipe } from '../../global/auth/pipe/testLoginBody.pipe';
 import { createBackend } from '../../domain/main';
 import {
   createAccessToken,
@@ -26,6 +29,160 @@ import {
   RETURN_TO_COOKIE_NAME,
   createReturnToCookie,
 } from '../../global/auth/native';
+
+test('native form Body validates once after the test-login Guard and preserves limits and login responses over actual HTTP', async (t) => {
+  const previous = {
+    NODE_ENV: process.env.NODE_ENV,
+    AUTH_JWT_SECRET: process.env.AUTH_JWT_SECRET,
+    KAKAO_REDIRECT_URI: process.env.KAKAO_REDIRECT_URI,
+  };
+  Object.assign(process.env, { NODE_ENV: 'development' });
+  process.env.AUTH_JWT_SECRET = 'native-form-test-secret-at-least-32-bytes';
+  const { app } = await createBackend();
+  t.after(async () => {
+    await app.close();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+  await app.listen(0, '127.0.0.1');
+  const origin = await app.getUrl();
+  const serviceCalls: unknown[] = [];
+  t.mock.method(
+    app.get(AuthService),
+    'signInTestAccount',
+    async (key: unknown) => {
+      serviceCalls.push(key);
+      return issueTokens('form-user', 'app', Math.floor(Date.now() / 1000));
+    },
+  );
+  const pipe = app.get(TestLoginBodyPipe);
+  const transform = pipe.transform.bind(pipe);
+  let validated = 0;
+  t.mock.method(
+    pipe,
+    'transform',
+    async (...args: Parameters<typeof pipe.transform>) => {
+      const result = await transform(...args);
+      assert.ok(result instanceof TestLoginRequestDTO);
+      validated++;
+      return result;
+    },
+  );
+  const post = (body: BodyInit, extra: Record<string, string> = {}) =>
+    fetch(`${origin}/api/auth/test-login`, {
+      method: 'POST',
+      redirect: 'manual',
+      signal: AbortSignal.timeout(10000),
+      headers: {
+        origin,
+        'content-type': 'application/x-www-form-urlencoded',
+        ...extra,
+      },
+      body,
+    });
+  const success = await post('key=member-a&returnTo=%2Fhome%2Fhistory');
+  assert.equal(success.status, 303);
+  assert.equal(
+    success.headers.get('location'),
+    `${origin}/auth/complete?returnTo=%2Fhome%2Fhistory`,
+  );
+  assert.equal(success.headers.get('cache-control'), 'private, no-store');
+  assert.ok(
+    success.headers
+      .getSetCookie()
+      .some((cookie) => cookie.includes('Max-Age=0')),
+  );
+  assert.ok(
+    success.headers
+      .getSetCookie()
+      .some(
+        (cookie) =>
+          cookie.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`) &&
+          cookie.includes('HttpOnly') &&
+          cookie.includes('Path=/api/auth'),
+      ),
+  );
+  await success.arrayBuffer();
+  assert.equal(validated, 1);
+  assert.deepEqual(serviceCalls, ['member-a']);
+  for (const body of [
+    '',
+    'returnTo=%2Fhome',
+    'key=a&key=b',
+    'key=a&returnTo=x&returnTo=y',
+    'key=a&extra=1',
+    'key[a]=b',
+    'key=a&__proto__=b',
+    'key=a&=b',
+    Buffer.concat([Buffer.from('key='), Buffer.from([0xc3, 0x28])]),
+  ]) {
+    const invalid = await post(body);
+    assert.equal(invalid.status, 400, String(body));
+    assert.deepEqual(await invalid.json(), {
+      error: 'invalid_input',
+      code: 'invalid_input',
+      detail: null,
+      message: '올바른 로그인 요청이 필요합니다',
+    });
+  }
+  const boundary = await post(`key=${'a'.repeat(4092)}`);
+  assert.equal(boundary.status, 303, 'exactly 4 KiB is allowed');
+  await boundary.arrayBuffer();
+  const oversized = `key=${'a'.repeat(4093)}`;
+  const large = await post(oversized);
+  assert.equal(large.status, 413);
+  assert.equal((await large.json()).code, 'request_too_large');
+  const foreign = await post(oversized, { origin: 'https://evil.test' });
+  assert.equal(foreign.status, 403, 'origin Guard rejects before the parser');
+  await foreign.arrayBuffer();
+  assert.equal(
+    (await post(oversized, { 'content-type': 'application/json' })).status,
+    400,
+  );
+  const streamed = await new Promise<number>((resolve, reject) => {
+    const outgoing = nodeRequest(
+      `${origin}/api/auth/test-login`,
+      {
+        method: 'POST',
+        headers: {
+          origin,
+          'content-type': 'application/x-www-form-urlencoded',
+        },
+      },
+      (incoming) => {
+        incoming.resume();
+        incoming.once('end', () => resolve(incoming.statusCode!));
+      },
+    );
+    outgoing.on('error', reject);
+    outgoing.setTimeout(10000, () =>
+      outgoing.destroy(new Error('Chunked form timed out')),
+    );
+    outgoing.write('key=');
+    outgoing.write('a'.repeat(4093));
+    outgoing.end();
+  });
+  assert.equal(
+    streamed,
+    413,
+    'chunked requests are bounded without Content-Length',
+  );
+  Object.assign(process.env, { NODE_ENV: 'production' });
+  process.env.KAKAO_REDIRECT_URI = `${origin}/auth/v1/kakao`;
+  assert.equal(
+    (await post(oversized)).status,
+    404,
+    'production Guard hides the route before parsing',
+  );
+  assert.equal(validated, 2);
+  assert.equal(
+    serviceCalls.length,
+    2,
+    'rejected forms never call the domain service',
+  );
+});
 
 test('cookie-parser supplies refresh authentication and rejects non-string, expired and tampered cookies over actual Nest HTTP', async (t) => {
   const previous = process.env.AUTH_JWT_SECRET;

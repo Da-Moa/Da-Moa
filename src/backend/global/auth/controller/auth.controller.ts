@@ -1,15 +1,30 @@
-import { Controller, Post, Inject, Req, Res, HttpCode } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Inject,
+  Req,
+  Res,
+  HttpCode,
+  Body,
+  UseGuards,
+} from '@nestjs/common';
 import type { Request, Response as ServerResponse } from 'express';
-import { webRequest, sendResponse } from '../../apiPayload/httpContext';
+import { nodeRequestOrigin } from '../../apiPayload/http';
+import {
+  FormBody,
+  RequestBodyLimit,
+} from '../../apiPayload/requestBody.interceptor';
 import { ApiSuccess } from '../../apiPayload/apiResponse.interceptor';
 import { AppError } from '../../apiPayload/errors';
-import { accessTokenForRefresh } from '../authUtil';
+import { accessTokenForRefresh, safeReturnTo } from '../authUtil';
 import {
   setAuthCookies,
   clearAuthCookies,
   nativeCookieResponse,
 } from './authCookies';
-import { getTestLoginResponse } from './testLogin.controller';
+import { TestLoginGuard } from '../guard/testLogin.guard';
+import type { TestLoginInput } from '../dto/req/testLogin.request.dto';
+import { TestLoginBodyPipe } from '../pipe/testLoginBody.pipe';
 
 import {
   CurrentUser,
@@ -68,9 +83,24 @@ export class AuthController {
     return { ok: true };
   }
   @Post('api/auth/test-login')
-  testLogin(@Req() request: Request, @Res() response: ServerResponse) {
-    return sendResponse(response, () =>
-      getTestLoginResponse(webRequest(request), this.service),
+  @UseGuards(TestLoginGuard)
+  @FormBody()
+  @RequestBodyLimit(4096)
+  async testLogin(
+    @Body(TestLoginBodyPipe) body: TestLoginInput,
+    @Req() request: Request,
+    @Res() response: ServerResponse,
+  ) {
+    const expected = nodeRequestOrigin(request);
+    if (!expected)
+      throw new AppError(403, 'forbidden', '허용되지 않은 요청입니다');
+    const session = await this.service.signInTestAccount(body.key);
+    const destination = new URL(
+      `/auth/complete?returnTo=${encodeURIComponent(safeReturnTo(body.returnTo))}`,
+      expected,
     );
+    setAuthCookies(nativeCookieResponse(response), session);
+    response.setHeader('Cache-Control', 'private, no-store');
+    response.redirect(303, destination.toString());
   }
 }
