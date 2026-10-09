@@ -31,8 +31,6 @@ export {
 export { getRefreshResponse } from './controller/refresh.controller';
 export { getAccessTokenResponse } from './controller/accessToken.controller';
 export { getLogoutResponse } from './controller/logout.controller';
-export { getKakaoLoginResponse } from './controller/kakaoLogin.controller';
-export { getKakaoCallbackResponse } from './controller/kakaoCallback.controller';
 export { getTestLoginResponse } from './controller/testLogin.controller';
 export {
   setAuthCookies,

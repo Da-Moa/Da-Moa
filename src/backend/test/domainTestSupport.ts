@@ -21,7 +21,6 @@ import { SettleService } from '../domain/settle/service/settle.service';
 import { AuthService } from '../global/auth/service/auth.service';
 import { AuthorizationService } from '../global/auth/service/authorization.service';
 import { UserRepository } from '../domain/user/repository/user.repository';
-import { getKakaoCallbackResponse as callback } from '../global/auth/controller/kakaoCallback.controller';
 import { getTestLoginResponse as testLogin } from '../global/auth/controller/testLogin.controller';
 import { getRefreshResponse as refresh } from '../global/auth/controller/refresh.controller';
 
@@ -273,12 +272,6 @@ export async function saveOnboarding(
   ...args: Parameters<UserRepository['saveOnboarding']>
 ): Promise<Awaited<ReturnType<UserRepository['saveOnboarding']>>> {
   return (await testProvider(UserRepository)).saveOnboarding(...args);
-}
-
-export async function getKakaoCallbackResponse(
-  request: Parameters<typeof callback>[0],
-) {
-  return callback(request, await testProvider(AuthService));
 }
 
 export async function getTestLoginResponse(

@@ -1,12 +1,4 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Inject,
-  Req,
-  Res,
-  HttpCode,
-} from '@nestjs/common';
+import { Controller, Post, Inject, Req, Res, HttpCode } from '@nestjs/common';
 import type { Request, Response as ServerResponse } from 'express';
 import { webRequest, sendResponse } from '../../apiPayload/httpContext';
 import { ApiSuccess } from '../../apiPayload/apiResponse.interceptor';
@@ -17,8 +9,6 @@ import {
   clearAuthCookies,
   nativeCookieResponse,
 } from './authCookies';
-import { getKakaoLoginResponse } from './kakaoLogin.controller';
-import { getKakaoCallbackResponse } from './kakaoCallback.controller';
 import { getTestLoginResponse } from './testLogin.controller';
 
 import {
@@ -30,18 +20,6 @@ import { AuthService } from '../service/auth.service';
 @Controller()
 export class AuthController {
   constructor(@Inject(AuthService) private readonly service: AuthService) {}
-  @Get('api/auth/kakao')
-  login(@Req() request: Request, @Res() response: ServerResponse) {
-    return sendResponse(response, () =>
-      getKakaoLoginResponse(webRequest(request)),
-    );
-  }
-  @Get('auth/v1/kakao')
-  callback(@Req() request: Request, @Res() response: ServerResponse) {
-    return sendResponse(response, () =>
-      getKakaoCallbackResponse(webRequest(request), this.service),
-    );
-  }
   @Post('api/auth/access-token')
   @HttpCode(200)
   @ApiSuccess({

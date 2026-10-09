@@ -4,8 +4,10 @@ import assert from 'node:assert/strict'
 import { generateKeyPairSync, randomUUID, sign } from 'node:crypto'
 import { test } from 'node:test'
 import { HttpRequest as NextRequest } from '../../global/apiPayload/httpContext'
-import { getKakaoLoginResponse as login } from '../../global/auth'
-import { getKakaoCallbackResponse as callback } from '../domainTestSupport';
+import { createBackend } from '../../domain/main';
+import { ResponseCookies } from '@edge-runtime/cookies';
+import { requestTestServer } from '../actualHttpTestSupport';
+import { KakaoAuthService } from '../../global/auth/service/kakaoAuth.service';
 import { OIDC_COOKIE_NAMES, readRefreshToken, REFRESH_TOKEN_COOKIE_NAME } from '../../global/auth/native.ts'
 import { createDatabaseClient } from '../../global/database/db.ts'
 import { applyMigrations } from '../../../../scripts/migrations.mjs'
@@ -16,10 +18,19 @@ if (!database || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(database)
 }
 process.env.DATABASE_URL = database
 
-test('Kakao callbacks keep the selected URI for localhost and LAN and reject untrusted origins or cookies', async () => {
+test('Kakao callbacks keep the selected URI for localhost and LAN and reject untrusted origins or cookies', async (t) => {
   const previous = Object.fromEntries(['NODE_ENV', 'AUTH_JWT_SECRET', 'KAKAO_REST_API_KEY', 'KAKAO_REDIRECT_URI'].map(key => [key, process.env[key]]))
   Object.assign(process.env, { NODE_ENV: 'development', AUTH_JWT_SECRET: 'isolated-kakao-redirect-test-secret-at-least-32-bytes', KAKAO_REST_API_KEY: 'isolated-client-id' })
   const originalFetch = globalThis.fetch
+  const { app } = await createBackend()
+  t.after(() => app.close())
+  const callbackProvider = t.mock.method(app.get(KakaoAuthService), 'complete')
+  t.after(() => assert.ok(callbackProvider.mock.callCount() > 0, 'HTTP callback uses the registered Kakao Auth Provider'))
+  await app.listen(0, '127.0.0.1')
+  const serverOrigin = await app.getUrl()
+  const login = (request: Request) => requestTestServer(serverOrigin, request)
+  const callback = login
+  const cookiesOf = (response: Response) => new ResponseCookies(response.headers)
   const local = 'http://localhost:3000/auth/v1/kakao'
   const lan = 'http://192.168.219.102:3000/auth/v1/kakao'
   const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
@@ -34,6 +45,7 @@ test('Kakao callbacks keep the selected URI for localhost and LAN and reject unt
       const body = new URLSearchParams(String(init?.body))
       assert.equal(body.get('redirect_uri'), expectedUri, 'authorization and token requests use the identical registered URI')
       assert.equal(body.get('grant_type'), 'authorization_code')
+      assert.equal(body.get('code'), 'isolated-code')
       assert.ok(body.get('code_verifier'))
       const now = Math.floor(Date.now() / 1000)
       const header = Buffer.from(JSON.stringify({ alg: 'RS256', kid: key.kid })).toString('base64url')
@@ -46,7 +58,7 @@ test('Kakao callbacks keep the selected URI for localhost and LAN and reject unt
     if (url.href === 'https://kapi.kakao.com/v1/oidc/userinfo') return new Response(JSON.stringify({ sub: subject, nickname: '콜백 검증' }))
     throw new Error(`Unexpected provider endpoint: ${url.pathname}`)
   }) as typeof fetch
-  const request = (uri: string, cookies: Record<string, string>, state: string) => new NextRequest(`${uri}?code=isolated-code&state=${state}`, {
+  const request = (uri: string, cookies: Record<string, string>, state: string) => new NextRequest(`${uri}?code=isolated-code&state=${state}&code=ignored&state=ignored`, {
     headers: { cookie: Object.entries(cookies).map(([name, value]) => `${name}=${value}`).join('; ') },
   })
   try {
@@ -55,11 +67,11 @@ test('Kakao callbacks keep the selected URI for localhost and LAN and reject unt
     for (const uri of [local, lan]) {
       process.env.KAKAO_REDIRECT_URI = `${local}, ${lan}`
       const origin = new URL(uri).origin
-      const start = await login(new NextRequest(`${origin}/api/auth/kakao?returnTo=/home/groups`))
+      const start = await login(new NextRequest(`${origin}/api/auth/kakao?returnTo=/home/groups&returnTo=/login`))
       assert.equal(start.status, 307)
       const authorize = new URL(start.headers.get('location')!)
       assert.equal(authorize.searchParams.get('redirect_uri'), uri)
-      const cookies = Object.fromEntries(start.cookies.getAll().map(({ name, value }) => [name, value]))
+      const cookies = Object.fromEntries(cookiesOf(start).getAll().map(({ name, value }) => [name, value]))
       assert.ok(cookies[OIDC_COOKIE_NAMES.redirectUri])
       assert.match(start.headers.getSetCookie().find(value => value.startsWith(`${OIDC_COOKIE_NAMES.redirectUri}=`))!, /HttpOnly/)
       expectedUri = uri
@@ -71,29 +83,32 @@ test('Kakao callbacks keep the selected URI for localhost and LAN and reject unt
       assert.equal(finish.status, 307)
       assert.equal(new URL(finish.headers.get('location')!).origin, origin)
       assert.equal(new URL(finish.headers.get('location')!).pathname, '/auth/complete')
-      const refresh = readRefreshToken(finish.cookies.get(REFRESH_TOKEN_COOKIE_NAME)?.value)
+      const refresh = readRefreshToken(cookiesOf(finish).get(REFRESH_TOKEN_COOKIE_NAME)?.value)
       assert.ok(refresh)
       assert.equal((await db.query("SELECT provider_subject FROM users WHERE id=$1 AND provider='kakao'", [refresh.userId])).rows[0].provider_subject, subject)
-      for (const name of Object.values(OIDC_COOKIE_NAMES)) assert.equal(finish.cookies.get(name)?.maxAge, 0)
+      assert.equal(new URL(finish.headers.get('location')!).searchParams.get('returnTo'), '/home/groups')
+      for (const name of Object.values(OIDC_COOKIE_NAMES)) assert.match(finish.headers.getSetCookie().find(value => value.startsWith(`${name}=`)) ?? '', /Max-Age=0(?:;|$)/)
     }
 
     process.env.KAKAO_REDIRECT_URI = `${local},${lan}`
     const denied = await login(new NextRequest('http://attacker.example/api/auth/kakao'))
     assert.equal(new URL(denied.headers.get('location')!).searchParams.get('error'), 'configuration')
-    assert.equal(denied.cookies.getAll().length, 0)
+    assert.equal(cookiesOf(denied).getAll().length, 0)
     const start = await login(new NextRequest('http://localhost:3000/api/auth/kakao'))
     const state = new URL(start.headers.get('location')!).searchParams.get('state')!
-    const cookies = Object.fromEntries(start.cookies.getAll().map(({ name, value }) => [name, value]))
+    const cookies = Object.fromEntries(cookiesOf(start).getAll().map(({ name, value }) => [name, value]))
     const callsBefore = providerCalls
     const missing = { ...cookies }; delete missing[OIDC_COOKIE_NAMES.redirectUri]
     for (const [uri, values] of [
       [lan, cookies],
       [local, { ...cookies, [OIDC_COOKIE_NAMES.redirectUri]: `${cookies[OIDC_COOKIE_NAMES.redirectUri]}x` }],
       [local, missing],
+      [local, { ...cookies, [OIDC_COOKIE_NAMES.state]: 'wrong-state' }],
+      [local, { ...cookies, [OIDC_COOKIE_NAMES.state]: encodeURIComponent('j:{"state":"forged"}') }],
     ] as const) {
       const deniedCallback = await callback(request(uri, values, state))
       assert.equal(new URL(deniedCallback.headers.get('location')!).pathname, '/login')
-      assert.equal(deniedCallback.cookies.get(REFRESH_TOKEN_COOKIE_NAME), undefined)
+      assert.equal(cookiesOf(deniedCallback).get(REFRESH_TOKEN_COOKIE_NAME), undefined)
     }
     assert.equal(providerCalls, callsBefore, 'invalid callbacks never exchange a provider code')
     // Old single-URI logins may finish without the newly introduced cookie.
