@@ -77,7 +77,7 @@ test('send bulk-finalizes settlement with constant SQL count, exact money and at
     let version = 1;
     const expenses = [];
     for (const spec of specs) {
-      const saved = await service.saveExpense(owner, randomUUID(), round.id, {
+      const saved = await service.createExpense(owner, randomUUID(), round.id, {
         description: '벌크 지출',
         currency: spec.currency,
         amount: spec.amount,

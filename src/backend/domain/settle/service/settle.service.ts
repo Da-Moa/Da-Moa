@@ -1,9 +1,12 @@
 import { ReceiptStorage } from '../../../global/util/minio.util';
 import { MutationExecutor } from '../../../global/util/idempotencyUtil';
 import type { RoundListQuery } from './roundList.query';
-import type { CustomShareRequestDTO } from '../dto/req/settle.request.dto';
+import type {
+  CreateExpenseRequestDTO,
+  CustomShareRequestDTO,
+} from '../dto/req/settle.request.dto';
 import { Injectable, Inject } from '@nestjs/common';
-import { isInt, min, max, isUUID } from 'class-validator';
+import { arrayUnique, isInt, min, max, isUUID } from 'class-validator';
 import { PrismaService } from '../../../global/database/prisma.service';
 import { settleErrors } from '../code/settle.error.code';
 import { SettleException } from '../exception/settle.exception';
@@ -16,11 +19,9 @@ import {
   mutationDigest,
   mutationResult,
   type Database,
-  idsInput,
   nowSeconds,
   pageOf,
   type PageQuery,
-  textInput,
   type Identity,
 } from '../../../global/util';
 import { validateReceipt } from './receiptFile';
@@ -70,6 +71,12 @@ import type {
 } from '../dao/settle.dao';
 import { duplicateRound, missing } from '../exception/settle.exception';
 import { SettleRepository } from '../repository/settle.repository';
+
+type ExpenseFields = Pick<
+  CreateExpenseRequestDTO,
+  'currency' | 'description' | 'payerId' | 'splitMode'
+> &
+  Pick<ExpenseRequestDTO, 'amount' | 'customShares'>;
 
 type ReceiptUpload = {
   expectedVersion: number;
@@ -379,7 +386,7 @@ export class SettleService {
   }
 
   private expenseFields(
-    body: ExpenseRequestDTO,
+    body: ExpenseFields,
     previous?: ExpenseRow,
   ): {
     currency: Currency;
@@ -388,14 +395,7 @@ export class SettleService {
     payerId: string;
     splitMode: Expense['splitMode'];
   } {
-    let currency: Currency;
-    try {
-      currency = requireCurrency(
-        body.currency === undefined ? previous?.currency : body.currency,
-      );
-    } catch {
-      throw new SettleException(settleErrors.UNSUPPORTED_EXPENSE_CURRENCY);
-    }
+    const currency = body.currency;
     if (previous && currency !== previous.currency && body.amount === undefined)
       throw new SettleException(settleErrors.CURRENCY_CHANGE_REQUIRES_AMOUNT);
     if (
@@ -407,10 +407,7 @@ export class SettleService {
       throw new SettleException(
         settleErrors.CURRENCY_CHANGE_REQUIRES_CUSTOM_SHARES,
       );
-    const description = textInput(
-      body.description === undefined ? previous?.description : body.description,
-      500,
-    );
+    const description = body.description.trim();
     let amount: bigint;
     try {
       amount =
@@ -426,18 +423,8 @@ export class SettleService {
         ...settleErrors.EXPENSE_AMOUNT_LIMIT_EXCEEDED,
         message: `지출 금액은 ${formatMoney(maximum.toString(), currency)} 이하여야 해요`,
       });
-    const payerId = textInput(
-      body.payerId === undefined ? previous?.payer_id : body.payerId,
-      128,
-    );
-    const splitMode =
-      body.splitMode === undefined ? previous?.split_mode : body.splitMode;
-    if (
-      splitMode !== 'ALL' &&
-      splitMode !== 'SELECTED' &&
-      splitMode !== 'CUSTOM'
-    )
-      throw new SettleException(settleErrors.INVALID_SPLIT_MODE);
+    const payerId = body.payerId.trim();
+    const splitMode = body.splitMode;
     if (splitMode !== 'CUSTOM' && body.customShares !== undefined)
       throw new SettleException(settleErrors.CUSTOM_SHARES_REQUIRE_CUSTOM_MODE);
     return {
@@ -475,7 +462,16 @@ export class SettleService {
     body: ExpenseRequestDTO,
     previous: ExpenseRow,
   ) {
-    const input = this.expenseFields(body, previous);
+    const input = this.expenseFields(
+      {
+        ...body,
+        currency: body.currency ?? previous.currency,
+        description: body.description ?? previous.description,
+        payerId: body.payerId ?? previous.payer_id,
+        splitMode: body.splitMode ?? previous.split_mode,
+      },
+      previous,
+    );
     const { payerId, splitMode } = input;
     const active = round.active_ids;
     if (!active.includes(payerId) && payerId !== previous?.payer_id)
@@ -510,7 +506,10 @@ export class SettleService {
           input.currency,
         );
       }
-      participantIds = idsInput(assignedShares.map((share) => share.userId));
+      participantIds = assignedShares.map((share) => share.userId).sort();
+      // A keyed allocation rejects duplicate recipients before membership errors.
+      if (!arrayUnique(participantIds))
+        badInput('invalid_participants', '참여자를 중복 없이 선택해 주세요');
       if (participantIds.some((id) => !active.includes(id)))
         throw new SettleException(settleErrors.INACTIVE_SHARE_PARTICIPANT);
       this.checkCustomShares(
@@ -519,11 +518,11 @@ export class SettleService {
         assignedShares,
       );
     } else {
-      participantIds = idsInput(
-        body.participantIds === undefined
-          ? round.shares.map((s) => s.user_id)
-          : body.participantIds,
-      );
+      participantIds = (
+        body.participantIds ?? round.shares.map((share) => share.user_id)
+      )
+        .slice()
+        .sort();
       if (participantIds.some((id) => !active.includes(id)))
         throw new SettleException(settleErrors.INACTIVE_SHARE_PARTICIPANT);
     }
@@ -575,16 +574,18 @@ export class SettleService {
         code,
         code === 'custom_share_total_mismatch'
           ? '부담금 합계가 총 금액과 일치해야 해요'
-          : '개별 부담자와 부담금을 다시 확인해 주세요',
+          : code === 'invalid_participants'
+            ? '참여자를 중복 없이 선택해 주세요'
+            : '개별 부담자와 부담금을 다시 확인해 주세요',
       );
     }
   }
 
-  private async createExpense(
+  async createExpense(
     access: Identity,
     key: string,
     roundId: string,
-    body: ExpenseRequestDTO,
+    body: CreateExpenseRequestDTO,
     captureAudience?: (audience: {
       groupId: string;
       userIds: string[];
@@ -675,15 +676,20 @@ export class SettleService {
             body.customShares,
             input.currency,
           );
-          participantIds = idsInput(
-            assignedShares.map((share) => share.userId),
-          );
+          participantIds = assignedShares.map((share) => share.userId).sort();
           this.checkCustomShares(
             BigInt(input.amount),
             participantIds,
             assignedShares,
           );
-        } else participantIds = idsInput(body.participantIds);
+        } else {
+          if (body.participantIds === undefined)
+            badInput(
+              'invalid_participants',
+              '참여자를 중복 없이 선택해 주세요',
+            );
+          participantIds = body.participantIds.slice().sort();
+        }
       },
     );
   }
@@ -704,19 +710,17 @@ export class SettleService {
     this.version(round, expectedVersion);
   }
 
-  async saveExpense(
+  async updateExpense(
     access: Identity,
     key: string,
     roundId: string,
     body: ExpenseRequestDTO,
-    expenseId?: string,
+    expenseId: string,
     captureAudience?: (audience: {
       groupId: string;
       userIds: string[];
     }) => void,
   ) {
-    if (!expenseId)
-      return this.createExpense(access, key, roundId, body, captureAudience);
     return this.prisma.withDatabaseConnection(async (client) => {
       const userId = (await this.authorization.requireAccount(client, access))
         .id;

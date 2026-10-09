@@ -340,12 +340,11 @@ export class SettleController {
     @Param('roundId') roundId: string,
   ) {
     let audience: RoundAudience | null = null;
-    const result = await this.service.saveExpense(
+    const result = await this.service.createExpense(
       user,
       idempotencyKey,
       roundId,
       body,
-      undefined,
       (value) => {
         audience = value;
       },
@@ -368,7 +367,7 @@ export class SettleController {
     @Param('expenseId') expenseId: string,
   ) {
     let audience: RoundAudience | null = null;
-    const result = await this.service.saveExpense(
+    const result = await this.service.updateExpense(
       user,
       idempotencyKey,
       roundId,

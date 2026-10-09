@@ -527,7 +527,7 @@ test('Nest HTTP routes enforce JWT before body parsing, preserve cookies, and di
     assert.equal(body.expectedVersion, 7);
     return { id: 'round-id' };
   };
-  settle.saveExpense = async (_access, _key, _id, body) => {
+  settle.createExpense = async (_access, _key, _id, body) => {
     assert.ok(body instanceof CreateExpenseRequestDTO);
     assert.equal(body.amount, '1000');
     return { id: 'expense-id' };
@@ -682,7 +682,8 @@ test('required idempotency headers reject absent and blank values before every m
         'createRound',
         'roundCommand',
         'setSettlementCheck',
-        'saveExpense',
+        'createExpense',
+        'updateExpense',
         'deleteExpense',
         'excludeMember',
         'addReceipt',

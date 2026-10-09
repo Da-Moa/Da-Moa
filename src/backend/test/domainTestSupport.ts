@@ -267,23 +267,28 @@ export async function createRound(
 }
 
 export async function saveExpense(
-  access: Parameters<SettleService['saveExpense']>[0],
+  access: Parameters<SettleService['createExpense']>[0],
   key: string,
   roundId: string,
   body: unknown,
   expenseId?: string,
-  captureAudience?: Parameters<SettleService['saveExpense']>[5],
-): Promise<Awaited<ReturnType<SettleService['saveExpense']>>> {
-  const parsed = await testBody(
-    expenseId ? ExpenseRequestDTO : CreateExpenseRequestDTO,
-    body,
-  );
-  return (await testProvider(SettleService)).saveExpense(
+  captureAudience?: Parameters<SettleService['createExpense']>[4],
+): Promise<Awaited<ReturnType<SettleService['createExpense']>>> {
+  const service = await testProvider(SettleService);
+  if (expenseId)
+    return service.updateExpense(
+      access,
+      key,
+      roundId,
+      await testBody(ExpenseRequestDTO, body),
+      expenseId,
+      captureAudience,
+    );
+  return service.createExpense(
     access,
     key,
     roundId,
-    parsed,
-    expenseId,
+    await testBody(CreateExpenseRequestDTO, body),
     captureAudience,
   );
 }

@@ -20,6 +20,7 @@ import type { Currency, Expense } from '../../../../../shared/domain/settle';
 import { CURRENCY_CODES } from '../../../../../shared/domain/settle/money';
 import { MAX_GROUP_MEMBERS } from '../../../../../shared/domain/group/constants';
 import { SearchPageQueryDTO } from '../../../../global/apiPayload/dto/req/page.request.dto';
+import { TrimmedLength } from '../../../../global/apiPayload/trimmedLength.decorator';
 import { settleErrors } from '../../code/settle.error.code';
 import type { RoundListQuery } from '../../service/roundList.query';
 import { parseSearchPageQuery } from '../../../../global/apiPayload/pageQuery';
@@ -85,6 +86,7 @@ export class ExpenseRequestDTO extends VersionRequestDTO {
   @ValidateIf((_, value) => value !== undefined)
   @IsString()
   @Matches(/\S/)
+  @TrimmedLength(0, 500)
   description?: string;
 
   @ApiPropertyOptional({ type: String, example: '10.25' })
@@ -96,6 +98,7 @@ export class ExpenseRequestDTO extends VersionRequestDTO {
   @ApiPropertyOptional({ maxLength: 128 })
   @ValidateIf((_, value) => value !== undefined)
   @IsString({ context: settleErrors.INVALID_PARTICIPANTS })
+  @TrimmedLength(1, 128)
   @MaxLength(128, { context: settleErrors.INVALID_PARTICIPANTS })
   payerId?: string;
 
@@ -150,6 +153,7 @@ export class CreateExpenseRequestDTO extends ExpenseRequestDTO {
   @ValidateIf(() => true)
   @IsString()
   @Matches(/\S/)
+  @TrimmedLength(0, 500)
   declare description: string;
 
   @ApiProperty({ type: String, example: '10.25' })
@@ -161,6 +165,7 @@ export class CreateExpenseRequestDTO extends ExpenseRequestDTO {
   @ApiProperty({ maxLength: 128 })
   @ValidateIf(() => true)
   @IsString({ context: settleErrors.INVALID_PARTICIPANTS })
+  @TrimmedLength(1, 128)
   @MaxLength(128, { context: settleErrors.INVALID_PARTICIPANTS })
   declare payerId: string;
 
