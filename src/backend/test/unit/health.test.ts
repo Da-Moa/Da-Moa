@@ -7,7 +7,7 @@ import {
   HealthService,
   type HealthWorkerProbes,
 } from '../../domain/health/service/health.service';
-import { createAccessToken } from '../../global/auth/native';
+import { createAccessToken } from '../support/legacyTokenTestSupport.ts';
 import { PrismaService } from '../../global/database/prisma.service';
 import { createBackend } from '../../domain/main';
 import type { INestApplication } from '@nestjs/common';

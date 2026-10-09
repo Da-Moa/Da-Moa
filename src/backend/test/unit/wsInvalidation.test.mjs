@@ -5,7 +5,7 @@ import test from 'node:test';
 import WebSocket from 'ws';
 import { createBackend } from '../../domain/main.ts';
 import { GroupService } from '../../domain/group/service/group.service.ts';
-import { createAccessToken } from '../../global/auth/native.ts';
+import { createAccessToken } from '../support/legacyTokenTestSupport.ts';
 import { PrismaService } from '../../global/database/prisma.service.ts';
 import { RealtimePublisher } from '../../global/util/invalidationUtil.ts';
 

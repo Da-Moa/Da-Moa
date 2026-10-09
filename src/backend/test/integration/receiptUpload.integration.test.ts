@@ -11,7 +11,7 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import sharp from 'sharp';
-import { readAccessToken } from '../../global/auth/native.ts';
+import { readAccessToken } from '../support/legacyTokenTestSupport.ts';
 import { createDatabaseClient } from '../../global/database/db.ts';
 import { uuidV7 } from '../../../shared/uuid.ts';
 import { signInKakao } from '../support/domainTestSupport.ts';

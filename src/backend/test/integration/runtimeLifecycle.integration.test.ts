@@ -8,7 +8,7 @@ import { makeWorkerUtils, runOnce } from 'graphile-worker';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
 import { createRequire } from 'node:module';
-import { createAccessToken } from '../../global/auth/native';
+import { createAccessToken } from '../support/legacyTokenTestSupport.ts';
 const WebSocket = createRequire(import.meta.url)('ws');
 import sharp from 'sharp';
 import { createBackend } from '../../domain/main';

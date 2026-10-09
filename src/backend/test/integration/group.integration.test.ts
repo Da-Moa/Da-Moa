@@ -8,7 +8,7 @@ import test from 'node:test';
 import {
   createAccessToken,
   readAccessToken,
-} from '../../global/auth/native.ts';
+} from '../support/legacyTokenTestSupport.ts';
 import { signInKakao } from '../support/domainTestSupport.ts';
 import { createDatabaseClient } from '../../global/database/db.ts';
 import { withDatabaseConnection } from '../support/domainTestSupport.ts';

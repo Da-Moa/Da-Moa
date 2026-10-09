@@ -12,8 +12,6 @@ import {
 } from 'node:crypto'
 import type { JsonWebKey as NodeJsonWebKey } from 'node:crypto'
 
-const APP_AUDIENCE = 'da-moa'
-const APP_ISSUER = 'da-moa'
 const CLOCK_SKEW_SECONDS = 60
 const KAKAO_AUTHORIZATION_ENDPOINT = 'https://kauth.kakao.com/oauth/authorize'
 const KAKAO_ISSUER = 'https://kauth.kakao.com'
@@ -59,19 +57,6 @@ export type AccessToken = {
 }
 
 export type RefreshToken = AccessToken
-
-type TokenType = 'access' | 'refresh'
-
-type TokenPayload = {
-  aud: string
-  exp: number
-  iat: number
-  iss: string
-  sid: string
-  sub: string
-  token_type: TokenType
-  purpose?: 'app' | 'onboarding'
-}
 
 type ParsedJwt = {
   header: JsonObject
@@ -382,125 +367,6 @@ export async function getKakaoUserProfile(
     profileImageUrl: httpsUrl(profile?.profile_image_url)
       ?? httpsUrl(profile?.thumbnail_image_url)
       ?? httpsUrl(oidcUserInfo.picture),
-  }
-}
-
-function createToken(
-  tokenType: TokenType,
-  userId: string,
-  sessionId: string,
-  maxAge: number,
-  secret = getSessionSecret(),
-  issuedAt = currentTimestamp(),
-  purpose?: 'app' | 'onboarding',
-): string {
-  const header = encodeJson({ alg: 'HS256', typ: 'JWT' })
-  const payload: TokenPayload = {
-    aud: APP_AUDIENCE,
-    exp: issuedAt + maxAge,
-    iat: issuedAt,
-    iss: APP_ISSUER,
-    sid: sessionId,
-    sub: userId,
-    token_type: tokenType,
-    ...(purpose ? { purpose } : {}),
-  }
-  const encodedPayload = encodeJson(payload)
-  const signingInput = `${header}.${encodedPayload}`
-  return `${signingInput}.${signHs256(signingInput, secret)}`
-}
-
-function verifyToken(
-  tokenType: TokenType,
-  token: string | undefined,
-  secret = getSessionSecret(),
-  now = currentTimestamp(),
-): AccessToken | null {
-  if (!token) return null
-
-  const parsed = parseJwt(token)
-  if (
-    !parsed
-    || parsed.header.alg !== 'HS256'
-    || parsed.header.typ !== 'JWT'
-    || !safeEqual(parsed.signature, signHs256(parsed.signingInput, secret))
-  ) return null
-
-  const { aud, exp, iat, iss, sid, sub, token_type: payloadTokenType, purpose } = parsed.payload
-  if (
-    aud !== APP_AUDIENCE
-    || iss !== APP_ISSUER
-    || payloadTokenType !== tokenType
-    || (purpose !== undefined && purpose !== 'app' && purpose !== 'onboarding')
-    || typeof sub !== 'string'
-    || !sub
-    || typeof sid !== 'string'
-    || !sid
-    || !isTimestamp(exp)
-    || exp <= now
-    || !isTimestamp(iat)
-    || iat > now + CLOCK_SKEW_SECONDS
-  ) return null
-
-  return { issuedAt: iat, sessionId: sid, userId: sub, ...(purpose ? { purpose } : {}), ...(tokenType === 'refresh' ? { expiresAt: exp } : {}) }
-}
-
-export function createAccessToken(
-  userId: string,
-  sessionId: string,
-  secret = getSessionSecret(),
-  issuedAt = currentTimestamp(),
-  maxAge = ACCESS_TOKEN_MAX_AGE_SECONDS,
-  purpose?: 'app' | 'onboarding',
-) {
-  return createToken('access', userId, sessionId, maxAge, secret, issuedAt, purpose)
-}
-
-export function createRefreshToken(
-  userId: string,
-  sessionId: string,
-  secret = getSessionSecret(),
-  issuedAt = currentTimestamp(),
-  maxAge = REFRESH_TOKEN_MAX_AGE_SECONDS,
-  purpose?: 'app' | 'onboarding',
-) {
-  return createToken('refresh', userId, sessionId, maxAge, secret, issuedAt, purpose)
-}
-
-export function verifyAccessToken(
-  token: string | undefined,
-  secret = getSessionSecret(),
-  now = currentTimestamp(),
-) {
-  return verifyToken('access', token, secret, now)
-}
-
-export function verifyRefreshToken(
-  token: string | undefined,
-  secret = getSessionSecret(),
-  now = currentTimestamp(),
-) {
-  return verifyToken('refresh', token, secret, now)
-}
-
-export function readAccessToken(token: string | undefined): AccessToken | null {
-  try {
-    return verifyAccessToken(token)
-  } catch {
-    return null
-  }
-}
-
-export function readRequestAccessToken(request: Request): AccessToken | null {
-  const authorization = request.headers.get('authorization')
-  return readAccessToken(authorization?.startsWith('Bearer ') ? authorization.slice(7) : undefined)
-}
-
-export function readRefreshToken(token: string | undefined): RefreshToken | null {
-  try {
-    return verifyRefreshToken(token)
-  } catch {
-    return null
   }
 }
 

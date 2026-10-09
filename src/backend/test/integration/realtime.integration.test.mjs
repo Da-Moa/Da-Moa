@@ -12,7 +12,12 @@ import sharp from 'sharp'
 import { createDatabaseClient } from '../../global/database/db.ts'
 import { TEST_ACCOUNTS } from '../../../shared/testAccounts.ts'
 import { applyMigrations } from '../../../../scripts/migrations.mjs'
-import { ACCESS_TOKEN_COOKIE_NAME, REFRESH_TOKEN_COOKIE_NAME, createAccessToken, createRefreshToken, currentTimestamp } from '../../global/auth/native.ts'
+import {
+  ACCESS_TOKEN_COOKIE_NAME,
+  REFRESH_TOKEN_COOKIE_NAME,
+  currentTimestamp,
+} from '../../global/auth/native.ts'
+import { createAccessToken, createRefreshToken } from '../support/legacyTokenTestSupport.ts'
 
 const database = process.env.TEST_DATABASE_URL
 assert.ok(database && ['localhost', '127.0.0.1', '[::1]'].includes(new URL(database).hostname) && new URL(database).pathname.toLowerCase().includes('test'))

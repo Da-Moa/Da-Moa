@@ -1,8 +1,4 @@
-export {
-  readRequestAccessToken,
-  currentTimestamp,
-  getKakaoRedirectUris,
-} from './authUtil';
+export { currentTimestamp, getKakaoRedirectUris } from './authUtil';
 export {
   AuthorizationService,
   type Account,

@@ -6,7 +6,8 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import sharp from 'sharp';
-import { readAccessToken, type AccessToken } from '../../global/auth/native.ts';
+import { type AccessToken } from '../../global/auth/native.ts';
+import { readAccessToken } from '../support/legacyTokenTestSupport.ts';
 import {
   updateBankAccount as saveBankAccount,
   withdrawAccount,

@@ -6,7 +6,7 @@ import { MutationRepository } from '../../global/database/mutation.repository';
 import { MutationExecutor } from '../../global/util/idempotencyUtil';
 import { SettleRepository } from '../../domain/settle/repository/settle.repository';
 import { createDatabaseClient } from '../../global/database/db';
-import { readAccessToken } from '../../global/auth/native';
+import { readAccessToken } from '../support/legacyTokenTestSupport.ts';
 import {
   acceptInvite,
   createGroup,

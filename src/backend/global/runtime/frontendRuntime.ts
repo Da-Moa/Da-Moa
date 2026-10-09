@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { TokenService } from '../auth/service/token.service';
+import { Inject, Injectable } from '@nestjs/common';
 import type { INestApplication } from '@nestjs/common';
 import type { Request, Response, NextFunction } from 'express';
 import type { IncomingMessage, Server } from 'node:http';
@@ -10,6 +11,8 @@ import { nativeJwtGuard } from '../auth/guard/jwt.guard';
 
 @Injectable()
 export class FrontendRuntime {
+  constructor(@Inject(TokenService) private readonly tokens: TokenService) {}
+
   private frontend?: ReturnType<typeof next>;
   private server?: Server;
   private readonly upgrades = new Set<
@@ -36,7 +39,7 @@ export class FrontendRuntime {
       if (
         ['/api/docs', '/api/docs/', '/api/docs/index.html'].includes(pathname)
       ) {
-        const denied = nativeJwtGuard(request);
+        const denied = nativeJwtGuard(request, this.tokens);
         if (denied) {
           response.writeHead(denied.status, Object.fromEntries(denied.headers));
           void denied

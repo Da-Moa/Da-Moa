@@ -13,7 +13,7 @@ import {
 import {
   createAccessToken,
   readAccessToken,
-} from '../../global/auth/native.ts';
+} from '../support/legacyTokenTestSupport.ts';
 import { createBackend } from '../../domain/main';
 import { SettleService } from '../../domain/settle/service/settle.service';
 import { CreateRoundRequestDTO } from '../../domain/settle/dto/req/settle.request.dto';

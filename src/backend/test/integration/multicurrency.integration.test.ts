@@ -3,7 +3,7 @@ import { getPrismaClient } from '../support/domainTestSupport.ts';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { readAccessToken } from '../../global/auth/native.ts';
+import { readAccessToken } from '../support/legacyTokenTestSupport.ts';
 import { uuidV7 } from '../../../shared/uuid.ts';
 import { createDatabaseClient } from '../../global/database/db.ts';
 import { signInKakao } from '../support/domainTestSupport.ts';

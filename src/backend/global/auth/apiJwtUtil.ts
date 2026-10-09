@@ -1,4 +1,4 @@
-import { readAccessToken, readRefreshToken } from './authUtil.ts'
+import type { TokenService } from './service/token.service'
 
 const publicHealthPaths = ['/api/health', '/api/health/live', '/api/health/database', '/api/health/minio', '/api/health/dependencies', '/api/health/worker', '/api/health/worker/readyz']
 
@@ -11,10 +11,10 @@ export function apiJwtPolicy(method: string, pathname: string) {
   return 'access'
 }
 
-export function readApiJwt(method: string, pathname: string, authorization?: string | null, refreshCookie?: string) {
+export function readApiJwt(tokens: TokenService, method: string, pathname: string, authorization?: string | null, refreshCookie?: string) {
   const policy = apiJwtPolicy(method, pathname)
   if (policy === 'public') return null
-  const refresh = policy === 'refresh' || policy === 'logout' ? readRefreshToken(refreshCookie) : null
+  const refresh = policy === 'refresh' || policy === 'logout' ? tokens.verifyRefreshToken(refreshCookie) : null
   if (policy === 'refresh') return refresh
-  return refresh ?? readAccessToken(authorization?.startsWith('Bearer ') ? authorization.slice(7) : undefined)
+  return refresh ?? tokens.verifyAccessToken(authorization?.startsWith('Bearer ') ? authorization.slice(7) : undefined)
 }

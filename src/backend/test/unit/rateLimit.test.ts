@@ -5,12 +5,15 @@ import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import cookieParser from 'cookie-parser';
 import type { Request, Response } from 'express';
-import { jwtGuardForTest as proxy } from '../support/guardRequestTestSupport';
+import {
+  jwtGuardForTest as proxy,
+  testTokens,
+} from '../support/guardRequestTestSupport';
+import { REFRESH_TOKEN_COOKIE_NAME } from '../../global/auth/native';
 import {
   createAccessToken,
   createRefreshToken,
-  REFRESH_TOKEN_COOKIE_NAME,
-} from '../../global/auth/native';
+} from '../support/legacyTokenTestSupport.ts';
 import {
   createRateLimitController,
   createTokenBuckets,
@@ -104,7 +107,7 @@ test(
     let time = 0;
     let calls = 0;
     const buckets = createTokenBuckets(() => time);
-    const limiter = createRateLimitController(buckets);
+    const limiter = createRateLimitController(testTokens, buckets);
     const parseCookies = cookieParser();
     const server = createServer((request, response) => {
       parseCookies(request as Request, response as Response, () => {

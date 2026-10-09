@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import test from 'node:test';
 import sharp from 'sharp';
-import { readAccessToken } from '../../global/auth/native.ts';
+import { readAccessToken } from '../support/legacyTokenTestSupport.ts';
 import { signInKakao } from '../support/domainTestSupport.ts';
 import { createDatabaseClient } from '../../global/database/db.ts';
 import {

@@ -8,7 +8,7 @@ import {
   ExpenseRequestDTO,
 } from '../../domain/settle/dto/req/settle.request.dto';
 import { createDatabaseClient } from '../../global/database/db';
-import { readAccessToken } from '../../global/auth/native';
+import { readAccessToken } from '../support/legacyTokenTestSupport.ts';
 import {
   acceptInvite,
   createGroup,

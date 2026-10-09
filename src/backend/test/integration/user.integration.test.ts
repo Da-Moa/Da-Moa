@@ -8,11 +8,11 @@ import { getPrismaClient } from '../support/domainTestSupport.ts';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
+import { currentTimestamp } from '../../global/auth/native.ts';
 import {
   createAccessToken,
-  currentTimestamp,
   readAccessToken,
-} from '../../global/auth/native.ts';
+} from '../support/legacyTokenTestSupport.ts';
 import { signInKakao } from '../support/domainTestSupport.ts';
 import {
   completeOnboarding,

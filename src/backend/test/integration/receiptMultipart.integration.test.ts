@@ -6,7 +6,7 @@ import sharp from 'sharp';
 import { createBackend } from '../../domain/main';
 import { SettleService } from '../../domain/settle/service/settle.service';
 import { createDatabaseClient } from '../../global/database/db';
-import { readAccessToken } from '../../global/auth/native';
+import { readAccessToken } from '../support/legacyTokenTestSupport.ts';
 import {
   acceptInvite,
   createGroup,

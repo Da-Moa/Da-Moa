@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { dispatch as GET } from '../support/httpTestSupport';
-import { createAccessToken } from '../../global/auth/authUtil';
+import { createAccessToken } from '../support/legacyTokenTestSupport.ts';
 
 test('Settle dispatch preserves routes, origin, JSON and multipart validation before DB work', async (t) => {
   const previous = process.env.AUTH_JWT_SECRET;

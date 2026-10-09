@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { JwtGuard } from '../../global/auth/guard/jwt.guard';
-import { jwtGuardForTest as jwtGuard } from '../support/guardRequestTestSupport';
+import {
+  jwtGuardForTest as jwtGuard,
+  testTokens,
+} from '../support/guardRequestTestSupport';
 import {
   CurrentUser,
   type AuthenticatedRequest,
@@ -14,10 +17,12 @@ import { ROUTE_ARGS_METADATA } from '@nestjs/common/constants.js';
 import {
   ACCESS_TOKEN_COOKIE_NAME,
   REFRESH_TOKEN_COOKIE_NAME,
-  createAccessToken,
-  createRefreshToken,
   currentTimestamp,
 } from '../../global/auth/native';
+import {
+  createAccessToken,
+  createRefreshToken,
+} from '../support/legacyTokenTestSupport.ts';
 
 const proxy = (request: Request) =>
   jwtGuard(request) ??
@@ -56,7 +61,7 @@ test('global JwtGuard replaces untrusted user data and CurrentUser reads only ve
         switchToHttp: () => ({ getRequest: () => request }),
       }) as unknown as ExecutionContext;
     const verified = request(`Bearer ${token}`),
-      guard = new JwtGuard();
+      guard = new JwtGuard(testTokens);
     assert.equal(guard.canActivate(context(verified)), true);
     assert.equal(verified.user?.userId, 'verified-user');
     assert.equal(verified.user?.sessionId, 'verified-session');

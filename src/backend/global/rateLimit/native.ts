@@ -1,7 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { setInterval, clearInterval } from 'node:timers'
-import { apiJwtPolicy, readApiJwt, readAccessToken, REFRESH_TOKEN_COOKIE_NAME } from '../auth/native.ts'
+import { apiJwtPolicy, readApiJwt, REFRESH_TOKEN_COOKIE_NAME } from '../auth/native.ts'
+import type { TokenService } from '../auth/service/token.service'
 import { createTokenBuckets } from './tokenBucket.ts'
 import { requestRateLimitKinds } from './rateLimitPolicy.ts'
 import { rateLimitResponse } from './rateLimitResponse.ts'
@@ -16,7 +17,7 @@ function refreshCookie(request: CookieRequest) {
   return typeof value === 'string' ? value : undefined
 }
 
-export function createRateLimitController(buckets = createTokenBuckets()) {
+export function createRateLimitController(tokens: TokenService, buckets = createTokenBuckets()) {
   // ponytail: one store per Node server; use an atomic shared store before running multiple processes/instances.
   const cleanup = setInterval(buckets.prune, 60000)
   cleanup.unref()
@@ -28,7 +29,7 @@ export function createRateLimitController(buckets = createTokenBuckets()) {
     if (pathname !== '/api' && !pathname.startsWith('/api/')) return false
     const method = request.method ?? 'GET'
     if (apiJwtPolicy(method, pathname) === 'public') return false
-    const jwt = readApiJwt(method, pathname, request.headers.authorization, refreshCookie(request))
+    const jwt = readApiJwt(tokens, method, pathname, request.headers.authorization, refreshCookie(request))
     // Invalid JWTs continue to the Nest Guard's 401/cookie cleanup response.
     if (!jwt) return false
     const retryAfter = buckets.consume(jwt.userId, requestRateLimitKinds(method, pathname))
@@ -40,7 +41,7 @@ export function createRateLimitController(buckets = createTokenBuckets()) {
   }
 
   function limitWebsocket(token: string | null, socket: Duplex) {
-    const access = readAccessToken(token ?? undefined)
+    const access = tokens.verifyAccessToken(token ?? undefined)
     if (!access || (access.purpose ?? 'app') !== 'app') { socket.destroy(); return true }
     const retryAfter = buckets.consume(access.userId, ['websocket'])
     if (!retryAfter) return false

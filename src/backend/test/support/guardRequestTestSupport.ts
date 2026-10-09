@@ -1,7 +1,14 @@
+import { JwtService } from '@nestjs/jwt';
+import { TokenService } from '../../global/auth/service/token.service';
+import { getSessionSecret } from '../../global/auth/authConfig';
 import cookieParser from 'cookie-parser';
 import type { Request as ExpressRequest, Response } from 'express';
 import { nativeJwtGuard } from '../../global/auth/guard/jwt.guard';
 import type { AccessToken } from '../../global/auth/authUtil';
+
+export const testTokens = new TokenService(
+  new JwtService({ secretOrKeyProvider: getSessionSecret }),
+);
 
 // Pure policy fixtures use the same cookie middleware and native Guard as HTTP.
 export function jwtGuardForTest(
@@ -16,5 +23,5 @@ export function jwtGuardForTest(
     headers: { host: url.host, ...Object.fromEntries(request.headers) },
   } as ExpressRequest;
   cookieParser()(native, {} as Response, () => {});
-  return nativeJwtGuard(native, authenticated);
+  return nativeJwtGuard(native, testTokens, authenticated);
 }

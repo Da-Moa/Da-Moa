@@ -1,11 +1,10 @@
+import { TokenService } from '../../global/auth/service/token.service';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Request, Response, NextFunction } from 'express';
 import { createBackend } from '../../domain/main';
-import {
-  createRefreshToken,
-  REFRESH_TOKEN_COOKIE_NAME,
-} from '../../global/auth/native';
+import { REFRESH_TOKEN_COOKIE_NAME } from '../../global/auth/native';
+import { createRefreshToken } from '../support/legacyTokenTestSupport.ts';
 import {
   createRateLimitController,
   createTokenBuckets,
@@ -14,8 +13,12 @@ import {
 test('actual Nest HTTP limiter and JWT Guard use the same parsed refresh-cookie identity and reject duplicates consistently', async (t) => {
   const previous = process.env.AUTH_JWT_SECRET;
   process.env.AUTH_JWT_SECRET = 'cookie-limiter-test-secret-at-least-32-bytes';
-  const limiter = createRateLimitController(createTokenBuckets(() => 0));
+  let limiter: ReturnType<typeof createRateLimitController>;
   const { app } = await createBackend(async (app) => {
+    limiter = createRateLimitController(
+      app.get(TokenService),
+      createTokenBuckets(() => 0),
+    );
     app.use((request: Request, response: Response, next: NextFunction) => {
       if (!limiter.handleRequest(request, response)) next();
     });

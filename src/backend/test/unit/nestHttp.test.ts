@@ -20,12 +20,14 @@ import { TestLoginRequestDTO } from '../../global/auth/dto/req/testLogin.request
 import { TestLoginBodyPipe } from '../../global/auth/pipe/testLoginBody.pipe';
 import { createBackend } from '../../domain/main';
 import {
-  createAccessToken,
-  createRefreshToken,
   REFRESH_TOKEN_COOKIE_NAME,
   RETURN_TO_COOKIE_NAME,
   createReturnToCookie,
 } from '../../global/auth/native';
+import {
+  createAccessToken,
+  createRefreshToken,
+} from '../support/legacyTokenTestSupport.ts';
 
 test('native form Body validates once after the test-login Guard and preserves limits and login responses over actual HTTP', async (t) => {
   const previous = {

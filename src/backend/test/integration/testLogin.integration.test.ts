@@ -8,10 +8,12 @@ import type { INestApplication } from '@nestjs/common';
 import { requestTestServer } from '../support/actualHttpTestSupport.ts';
 import {
   ACCESS_TOKEN_COOKIE_NAME,
-  readAccessToken,
-  readRefreshToken,
   REFRESH_TOKEN_COOKIE_NAME,
 } from '../../global/auth/native.ts';
+import {
+  readAccessToken,
+  readRefreshToken,
+} from '../support/legacyTokenTestSupport.ts';
 import { getAccount } from '../support/domainTestSupport.ts';
 import { completeOnboarding } from '../support/domainTestSupport.ts';
 import { signInTestAccount } from '../support/domainTestSupport.ts';

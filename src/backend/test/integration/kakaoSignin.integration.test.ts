@@ -6,7 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
 import pg from 'pg';
 import { signInKakao } from '../support/domainTestSupport.ts';
-import { readAccessToken } from '../../global/auth/native.ts';
+import { readAccessToken } from '../support/legacyTokenTestSupport.ts';
 import { withdrawAccount } from '../support/domainTestSupport.ts';
 import { AppError } from '../../global/apiPayload/errors.ts';
 import { getDatabasePool } from '../support/domainTestSupport.ts';

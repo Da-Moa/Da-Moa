@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { dispatch as GET } from '../support/httpTestSupport';
-import { createAccessToken } from '../../global/auth/authUtil';
+import { createAccessToken } from '../support/legacyTokenTestSupport.ts';
 
 test('Group controller preserves route dispatch, origin and input errors without adding update APIs', async (t) => {
   const previous = process.env.AUTH_JWT_SECRET;

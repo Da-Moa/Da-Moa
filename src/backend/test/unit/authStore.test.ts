@@ -5,13 +5,15 @@ import test from 'node:test';
 import { NestFactory } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import {
+  ACCESS_TOKEN_MAX_AGE_SECONDS,
+  REFRESH_TOKEN_MAX_AGE_SECONDS,
+} from '../../global/auth/native';
+import {
   createAccessToken,
   createRefreshToken,
   verifyAccessToken,
   verifyRefreshToken,
-  ACCESS_TOKEN_MAX_AGE_SECONDS,
-  REFRESH_TOKEN_MAX_AGE_SECONDS,
-} from '../../global/auth/native';
+} from '../support/legacyTokenTestSupport.ts';
 import { TokenModule } from '../../global/auth/module/token.module';
 import { TokenService } from '../../global/auth/service/token.service';
 

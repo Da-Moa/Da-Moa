@@ -9,7 +9,10 @@ import {
   OnboardingRequestDTO,
 } from '../../domain/user/dto/req/user.request.dto';
 import { createDatabaseClient } from '../../global/database/db';
-import { createAccessToken, readAccessToken } from '../../global/auth/native';
+import {
+  createAccessToken,
+  readAccessToken,
+} from '../support/legacyTokenTestSupport.ts';
 import { signInKakao } from '../support/domainTestSupport';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
 

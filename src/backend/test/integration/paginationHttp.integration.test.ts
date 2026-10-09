@@ -3,7 +3,10 @@ import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { createBackend } from '../../domain/main';
 import { createDatabaseClient } from '../../global/database/db';
-import { createAccessToken, readAccessToken } from '../../global/auth/native';
+import {
+  createAccessToken,
+  readAccessToken,
+} from '../support/legacyTokenTestSupport.ts';
 import { GroupService } from '../../domain/group/service/group.service';
 import { SettleService } from '../../domain/settle/service/settle.service';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';

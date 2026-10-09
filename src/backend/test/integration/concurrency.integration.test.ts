@@ -12,9 +12,9 @@ import { before, test } from 'node:test';
 import sharp from 'sharp';
 import {
   currentTimestamp,
-  readAccessToken,
   type AccessToken,
 } from '../../global/auth/native.ts';
+import { readAccessToken } from '../support/legacyTokenTestSupport.ts';
 import { withdrawAccount } from '../support/domainTestSupport.ts';
 import { signInKakao } from '../support/domainTestSupport.ts';
 import { createDatabaseClient } from '../../global/database/db.ts';

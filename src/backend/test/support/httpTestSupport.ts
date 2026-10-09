@@ -1,3 +1,4 @@
+import { testTokens } from './guardRequestTestSupport';
 import { testProvider } from './domainTestSupport';
 import 'reflect-metadata';
 import { EventEmitter } from 'node:events';
@@ -34,7 +35,7 @@ import { UserController } from '../../domain/user/controller/user.controller';
 const validationPipe = createValidationPipe();
 const bodyInterceptor = new RequestBodyInterceptor(new Reflector());
 const originGuard = new OriginGuard(new Reflector());
-const jwtGuard = new JwtGuard();
+const jwtGuard = new JwtGuard(testTokens);
 const interceptor = new ApiResponseInterceptor(new Reflector());
 // Test transport follows the actual Nest route and parameter decorators; no second API dispatch tree.
 export async function dispatch(

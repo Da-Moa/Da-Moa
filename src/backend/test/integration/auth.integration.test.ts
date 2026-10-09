@@ -5,13 +5,15 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { before, test } from 'node:test';
 import {
-  createAccessToken,
-  createRefreshToken,
   currentTimestamp,
-  readAccessToken,
-  readRefreshToken,
   type AccessToken,
 } from '../../global/auth/native.ts';
+import {
+  createAccessToken,
+  createRefreshToken,
+  readAccessToken,
+  readRefreshToken,
+} from '../support/legacyTokenTestSupport.ts';
 import { withdrawAccount, testProvider } from '../support/domainTestSupport.ts';
 import { TokenService } from '../../global/auth/service/token.service';
 import { type AuthSession } from '../../global/auth/index.ts';

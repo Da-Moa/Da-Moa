@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { readAccessToken } from '../authUtil';
+import { TokenService } from './token.service';
 import { RealtimeUserRepository } from '../../../domain/user/native';
 
 @Injectable()
@@ -7,9 +7,10 @@ export class RealtimeAuthorizationService {
   constructor(
     @Inject(RealtimeUserRepository)
     private readonly accounts: RealtimeUserRepository,
+    @Inject(TokenService) private readonly tokens: TokenService,
   ) {}
   async authenticate(token: string | null) {
-    const access = readAccessToken(token ?? undefined);
+    const access = this.tokens.verifyAccessToken(token ?? undefined);
     if (!access) return { status: 401 };
     if ((access.purpose ?? 'app') !== 'app') return { status: 403 };
     const account = await this.accounts.findState(access.userId);

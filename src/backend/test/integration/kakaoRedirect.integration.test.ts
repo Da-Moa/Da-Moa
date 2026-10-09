@@ -10,9 +10,9 @@ import { requestTestServer } from '../support/actualHttpTestSupport.ts';
 import { KakaoAuthService } from '../../global/auth/service/kakaoAuth.service';
 import {
   OIDC_COOKIE_NAMES,
-  readRefreshToken,
   REFRESH_TOKEN_COOKIE_NAME,
 } from '../../global/auth/native.ts';
+import { readRefreshToken } from '../support/legacyTokenTestSupport.ts';
 import { createDatabaseClient } from '../../global/database/db.ts';
 import { applyMigrations } from '../../../../scripts/migrations.mjs';
 

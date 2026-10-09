@@ -1,3 +1,4 @@
+import { TokenModule } from '../auth/module/token.module';
 import { Module } from '@nestjs/common';
 import { PrismaModule } from '../database/prisma.module';
 import { ReceiptWorkerModule } from '../../domain/settle/module/receiptWorker.module';
@@ -12,6 +13,7 @@ import { HttpDrain } from './httpDrain';
 
 @Module({
   imports: [
+    TokenModule,
     PrismaModule,
     ReceiptWorkerModule,
     RealtimeAuthorizationModule,

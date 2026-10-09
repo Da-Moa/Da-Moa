@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Inject,
   type CanActivate,
   type ExecutionContext,
 } from '@nestjs/common';
@@ -7,6 +8,7 @@ import { HttpResponseException } from '../../apiPayload/handler/global.exception
 import { clearAuthCookies } from '../controller/authCookies';
 import { HttpResponse } from '../../apiPayload/httpContext';
 import { REFRESH_TOKEN_COOKIE_NAME } from '../authUtil';
+import { TokenService } from '../service/token.service';
 import { apiJwtPolicy, readApiJwt } from '../apiJwtUtil';
 import { AppError, errorResponse } from '../../apiPayload/errors';
 import type { AccessToken } from '../authUtil';
@@ -14,6 +16,7 @@ import type { AuthenticatedRequest } from '../decorator/currentUser.decorator';
 import type { Request as ExpressRequest } from 'express';
 
 function authorizeApiRequest(
+  tokens: TokenService,
   method: string,
   pathname: string,
   authorization: string | null,
@@ -22,7 +25,13 @@ function authorizeApiRequest(
 ): Response | null {
   const policy = apiJwtPolicy(method, pathname);
   if (policy === 'public') return null;
-  const user = readApiJwt(method, pathname, authorization, refreshCookie);
+  const user = readApiJwt(
+    tokens,
+    method,
+    pathname,
+    authorization,
+    refreshCookie,
+  );
   if (user) {
     authenticated?.(user);
     return null;
@@ -43,10 +52,11 @@ function authorizeApiRequest(
 
 @Injectable()
 export class JwtGuard implements CanActivate {
+  constructor(@Inject(TokenService) private readonly tokens: TokenService) {}
   canActivate(context: ExecutionContext) {
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     delete request.user;
-    const denied = nativeJwtGuard(request, (user) => {
+    const denied = nativeJwtGuard(request, this.tokens, (user) => {
       request.user = user;
     });
     if (denied) throw new HttpResponseException(denied);
@@ -56,6 +66,7 @@ export class JwtGuard implements CanActivate {
 
 export function nativeJwtGuard(
   request: ExpressRequest,
+  tokens: TokenService,
   authenticated?: (user: AccessToken) => void,
 ): Response | null {
   const pathname = new URL(request.originalUrl, 'http://localhost').pathname;
@@ -65,6 +76,7 @@ export function nativeJwtGuard(
       ? request.cookies?.[REFRESH_TOKEN_COOKIE_NAME]
       : undefined;
   return authorizeApiRequest(
+    tokens,
     request.method,
     pathname,
     request.headers.authorization ?? null,

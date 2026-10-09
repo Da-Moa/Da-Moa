@@ -6,9 +6,7 @@ import {
   ACCESS_TOKEN_MAX_AGE_SECONDS,
   ONBOARDING_MAX_AGE_SECONDS,
   authCookieOptions,
-  createAccessToken,
   createKakaoAuthorizationRequest,
-  createRefreshToken,
   createRedirectUriCookie,
   getKakaoConfig,
   getKakaoRedirectUris,
@@ -16,10 +14,14 @@ import {
   REFRESH_TOKEN_MAX_AGE_SECONDS,
   refreshCookieOptions,
   readRedirectUriCookie,
-  verifyAccessToken,
   verifyKakaoIdToken,
-  verifyRefreshToken,
 } from '../../global/auth/native.ts'
+import {
+  createAccessToken,
+  createRefreshToken,
+  verifyAccessToken,
+  verifyRefreshToken,
+} from '../support/legacyTokenTestSupport.ts'
 
 const TEST_SECRET = '0123456789abcdef0123456789abcdef'
 const TEST_KAKAO_CONFIG = {

@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { DeleteObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import sharp from 'sharp';
-import { readAccessToken } from '../../global/auth/native.ts';
+import { readAccessToken } from '../support/legacyTokenTestSupport.ts';
 import { createDatabaseClient } from '../../global/database/db.ts';
 import { getDatabasePool } from '../support/domainTestSupport.ts';
 import { uuidV7 } from '../../../shared/uuid.ts';
