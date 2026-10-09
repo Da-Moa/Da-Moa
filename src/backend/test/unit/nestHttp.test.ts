@@ -686,7 +686,7 @@ test('required idempotency headers reject absent and blank values before every m
         'updateExpense',
         'deleteExpense',
         'excludeMember',
-        'addReceipt',
+        'saveReceipt',
         'removeReceipt',
       ],
     ],

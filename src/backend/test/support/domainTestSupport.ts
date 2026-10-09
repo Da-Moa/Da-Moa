@@ -17,7 +17,10 @@ import { AuthModule } from '../../global/auth/module/auth.module';
 import { HealthModule } from '../../domain/health/module/health.module';
 import { UserService } from '../../domain/user/service/user.service';
 import { GroupService } from '../../domain/group/service/group.service';
-import { SettleService } from '../../domain/settle/service/settle.service';
+import {
+  SettleService,
+  type ReceiptUpload,
+} from '../../domain/settle/service/settle.service';
 import { AuthService } from '../../global/auth/service/auth.service';
 import { AuthorizationService } from '../../global/auth/service/authorization.service';
 import { UserRepository } from '../../domain/user/repository/user.repository';
@@ -38,6 +41,7 @@ import {
   CreateExpenseRequestDTO,
   ExpenseRequestDTO,
   VersionRequestDTO,
+  ReceiptUploadRequestDTO,
   SettlementCheckRequestDTO,
   RoundListQueryDTO,
   parseRoundListQuery,
@@ -379,16 +383,46 @@ export async function getSettlement(
   return (await testProvider(SettleService)).getSettlement(...args);
 }
 
+// Legacy direct fixtures enter through the same typed metadata validation as
+// native multipart HTTP; upload overloads do not exist in production Services.
 export async function addReceipt(
-  ...args: Parameters<SettleService['addReceipt']>
-): Promise<Awaited<ReturnType<SettleService['addReceipt']>>> {
-  const [access, key, roundId, expenseId, ...input] = args;
-  return (await testProvider(SettleService)).addReceipt(
-    access,
-    key,
-    roundId,
-    expenseId,
-    ...input,
+  access: Parameters<SettleService['admitReceipt']>[0],
+  key: string,
+  roundId: string,
+  expenseId: string,
+  ...input:
+    | [
+        expectedVersion: number,
+        bytes: Uint8Array,
+        type: string,
+        captureAudience?: Parameters<SettleService['saveReceipt']>[2],
+      ]
+    | [
+        readUpload: () => Promise<ReceiptUpload>,
+        captureAudience?: Parameters<SettleService['saveReceipt']>[2],
+      ]
+): Promise<Awaited<ReturnType<SettleService['saveReceipt']>>> {
+  const service = await testProvider(SettleService);
+  const admission = await service.admitReceipt(access, key, roundId, expenseId);
+  const upload: ReceiptUpload =
+    typeof input[0] === 'function'
+      ? await input[0]()
+      : {
+          expectedVersion: input[0],
+          bytes: input[1] as Uint8Array,
+          type: input[2] as string,
+        };
+  const body = await testBody(ReceiptUploadRequestDTO, {
+    expectedVersion: upload.expectedVersion,
+  });
+  const captureAudience =
+    typeof input[0] === 'function'
+      ? (input[1] as Parameters<SettleService['saveReceipt']>[2])
+      : input[3];
+  return service.saveReceipt(
+    admission,
+    { ...upload, expectedVersion: body.expectedVersion },
+    captureAudience,
   );
 }
 

@@ -63,6 +63,24 @@ export class VersionRequestDTO {
   @Max(Number.MAX_SAFE_INTEGER, { context: settleErrors.VERSION_REQUIRED })
   expectedVersion!: number;
 }
+export class ReceiptUploadRequestDTO {
+  // FileInterceptor supplies the binary parameter separately from @Body.
+  @ApiProperty({ type: String, format: 'binary' })
+  declare file: unknown;
+
+  @ApiProperty({
+    type: 'integer',
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
+  })
+  @Transform(({ value }) => (typeof value === 'string' ? Number(value) : value))
+  @IsInt({ context: { ...settleErrors.VERSION_REQUIRED, omitField: true } })
+  @Min(1, { context: { ...settleErrors.VERSION_REQUIRED, omitField: true } })
+  @Max(Number.MAX_SAFE_INTEGER, {
+    context: { ...settleErrors.VERSION_REQUIRED, omitField: true },
+  })
+  expectedVersion!: number;
+}
 export class CustomShareRequestDTO {
   @ApiProperty({ maxLength: 128 })
   @IsString({ context: settleErrors.INVALID_PARTICIPANTS })

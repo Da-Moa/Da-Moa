@@ -2,7 +2,6 @@ import { getPrismaClient } from '../support/domainTestSupport.ts';
 import assert from 'node:assert/strict';
 import { before, after, test } from 'node:test';
 import { networkInterfaces } from 'node:os';
-import { HttpRequest as NextRequest } from '../../global/apiPayload/httpContext';
 import { createBackend } from '../../domain/main';
 import type { INestApplication } from '@nestjs/common';
 import { requestTestServer } from '../support/actualHttpTestSupport.ts';
@@ -75,7 +74,7 @@ before(async () => {
 function loginRequest(key: string, origin = 'http://localhost', extra = '') {
   const body =
     new URLSearchParams({ key, returnTo: '/home/history' }).toString() + extra;
-  return new NextRequest('http://localhost/api/auth/test-login', {
+  return new Request('http://localhost/api/auth/test-login', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
@@ -104,7 +103,7 @@ test('local development test login issues only a Refresh cookie and bootstraps a
     assert.match(refreshCookie ?? '', /HttpOnly/);
     assert.match(refreshCookie ?? '', /Path=\/api\/auth/);
     const issued = await accessTokenResponse(
-      new NextRequest('http://localhost/api/auth/access-token', {
+      new Request('http://localhost/api/auth/access-token', {
         method: 'POST',
         headers: {
           origin: 'http://localhost',
@@ -148,7 +147,7 @@ test(
   async () => {
     const origin = `http://${localAddress}:3000`;
     function request(requestOrigin = origin) {
-      return new NextRequest(`${origin}/api/auth/test-login`, {
+      return new Request(`${origin}/api/auth/test-login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
@@ -200,7 +199,7 @@ test('onboarding preview creates a fresh limited test session on every click and
       .getSetCookie()
       .find((cookie) => cookie.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`));
     const issued = await accessTokenResponse(
-      new NextRequest('http://localhost/api/auth/access-token', {
+      new Request('http://localhost/api/auth/access-token', {
         method: 'POST',
         headers: {
           origin: 'http://localhost',

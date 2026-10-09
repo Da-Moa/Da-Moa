@@ -5,7 +5,6 @@ import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import cookieParser from 'cookie-parser';
 import type { Request, Response } from 'express';
-import { HttpRequest as NextRequest } from '../../global/apiPayload/httpContext';
 import { jwtGuardForTest as proxy } from '../support/guardRequestTestSupport';
 import {
   createAccessToken,
@@ -111,7 +110,7 @@ test(
       parseCookies(request as Request, response as Response, () => {
         if (limiter.handleRequest(request, response)) return;
         const guarded = proxy(
-          new NextRequest(`http://localhost${request.url}`, {
+          new Request(`http://localhost${request.url}`, {
             method: request.method,
             headers: {
               authorization: request.headers.authorization ?? '',

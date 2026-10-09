@@ -1,16 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { Readable } from 'node:stream';
 import { ResponseCookies } from '@edge-runtime/cookies';
-import type {
-  Request as ExpressRequest,
-  Response as ExpressResponse,
-} from 'express';
-
-export class HttpRequest extends Request {
-  get nextUrl() {
-    return new URL(this.url);
-  }
-}
+import type { Response as ExpressResponse } from 'express';
 
 export class HttpResponse extends Response {
   readonly cookies = new ResponseCookies(this.headers);
@@ -45,31 +35,6 @@ export function responseScope<T>(response: ExpressResponse, work: () => T): T {
         .catch((error) => console.error('Realtime publication failed', error));
   });
   return callbacks.run(pending, work);
-}
-
-const requests = new WeakMap<ExpressRequest, HttpRequest>();
-export function webRequest(request: ExpressRequest): HttpRequest {
-  const existing = requests.get(request);
-  if (existing) return existing;
-  const headers = new Headers();
-  for (const [name, value] of Object.entries(request.headers)) {
-    if (Array.isArray(value))
-      for (const item of value) headers.append(name, item);
-    else if (value !== undefined) headers.set(name, value);
-  }
-  const url = new URL(
-    request.originalUrl,
-    `${request.protocol}://${request.headers.host || 'localhost'}`,
-  );
-  const web = new HttpRequest(url, {
-    method: request.method,
-    headers,
-    ...(!['GET', 'HEAD'].includes(request.method)
-      ? { body: Readable.toWeb(request), duplex: 'half' }
-      : {}),
-  } as RequestInit);
-  requests.set(request, web);
-  return web;
 }
 
 export async function sendResponse(

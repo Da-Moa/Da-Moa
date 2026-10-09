@@ -8,7 +8,6 @@ import { getPrismaClient } from '../support/domainTestSupport.ts';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { HttpRequest as NextRequest } from '../../global/apiPayload/httpContext';
 import {
   createAccessToken,
   currentTimestamp,
@@ -90,7 +89,7 @@ test('unified Nonghyup input preserves institution codes and verified legacy acc
       });
       statements = [];
       const response = await GET(
-        new NextRequest('http://localhost/api/me', {
+        new Request('http://localhost/api/me', {
           headers: { authorization: `Bearer ${session.accessToken}` },
         }),
       );
@@ -383,7 +382,7 @@ test('GET /api/me uses one AUTH SELECT without transaction SQL for app, onboardi
     ] as const) {
       statements = [];
       const response = await GET(
-        new NextRequest('http://localhost/api/me', {
+        new Request('http://localhost/api/me', {
           headers: { authorization: `Bearer ${token}` },
         }),
       );
@@ -410,7 +409,7 @@ test('GET /api/me uses one AUTH SELECT without transaction SQL for app, onboardi
     }
     statements = [];
     assert.equal(
-      (await GET(new NextRequest('http://localhost/api/me'))).status,
+      (await GET(new Request('http://localhost/api/me'))).status,
       401,
     );
     assert.equal(statements.length, 0);
@@ -540,7 +539,7 @@ test('bank account uses AUTH then validation then conditional UPDATE; one concur
     );
     const conflict = await trace(2, () =>
       PUT(
-        new NextRequest('http://localhost/api/me/bank-account', {
+        new Request('http://localhost/api/me/bank-account', {
           method: 'PUT',
           headers: {
             origin: 'http://localhost',

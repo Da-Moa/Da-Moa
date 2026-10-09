@@ -3,7 +3,6 @@ import { getPrismaClient } from '../support/domainTestSupport.ts';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, randomUUID, sign } from 'node:crypto';
 import { test } from 'node:test';
-import { HttpRequest as NextRequest } from '../../global/apiPayload/httpContext';
 import { createBackend } from '../../domain/main';
 import { ResponseCookies } from '@edge-runtime/cookies';
 import { requestTestServer } from '../support/actualHttpTestSupport.ts';
@@ -123,7 +122,7 @@ test('Kakao callbacks keep the selected URI for localhost and LAN and reject unt
     cookies: Record<string, string>,
     state: string,
   ) =>
-    new NextRequest(
+    new Request(
       `${uri}?code=isolated-code&state=${state}&code=ignored&state=ignored`,
       {
         headers: {
@@ -140,7 +139,7 @@ test('Kakao callbacks keep the selected URI for localhost and LAN and reject unt
       process.env.KAKAO_REDIRECT_URI = `${local}, ${lan}`;
       const origin = new URL(uri).origin;
       const start = await login(
-        new NextRequest(
+        new Request(
           `${origin}/api/auth/kakao?returnTo=/home/groups&returnTo=/login`,
         ),
       );
@@ -203,7 +202,7 @@ test('Kakao callbacks keep the selected URI for localhost and LAN and reject unt
 
     process.env.KAKAO_REDIRECT_URI = `${local},${lan}`;
     const denied = await login(
-      new NextRequest('http://attacker.example/api/auth/kakao'),
+      new Request('http://attacker.example/api/auth/kakao'),
     );
     assert.equal(
       new URL(denied.headers.get('location')!).searchParams.get('error'),
@@ -211,7 +210,7 @@ test('Kakao callbacks keep the selected URI for localhost and LAN and reject unt
     );
     assert.equal(cookiesOf(denied).getAll().length, 0);
     const start = await login(
-      new NextRequest('http://localhost:3000/api/auth/kakao'),
+      new Request('http://localhost:3000/api/auth/kakao'),
     );
     const state = new URL(start.headers.get('location')!).searchParams.get(
       'state',

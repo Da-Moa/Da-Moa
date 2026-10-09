@@ -1,4 +1,3 @@
-import { AppError } from './errors';
 import { getKakaoRedirectUris } from '../auth/native';
 import type { Request as ExpressRequest } from 'express';
 
@@ -51,38 +50,4 @@ export function nodeRequestOrigin(request: ExpressRequest): URL | null {
     (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : '') ||
     request.protocol;
   return allowedOrigin(request.headers.host || 'localhost', protocol);
-}
-
-export async function readBytes(
-  request: Request,
-  limit: number,
-  code = 'request_too_large',
-) {
-  const tooLarge = () => new AppError(413, code, '요청 크기가 너무 커요');
-  if (Number(request.headers.get('content-length')) > limit) throw tooLarge();
-  const reader = request.body?.getReader();
-  if (!reader) return new Uint8Array();
-  const parts: Uint8Array[] = [];
-  let size = 0;
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > limit) {
-        await reader.cancel();
-        throw tooLarge();
-      }
-      parts.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const part of parts) {
-    bytes.set(part, offset);
-    offset += part.byteLength;
-  }
-  return bytes;
 }

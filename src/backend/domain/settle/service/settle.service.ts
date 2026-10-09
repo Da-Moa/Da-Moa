@@ -6,7 +6,7 @@ import type {
   CustomShareRequestDTO,
 } from '../dto/req/settle.request.dto';
 import { Injectable, Inject } from '@nestjs/common';
-import { arrayUnique, isInt, min, max, isUUID } from 'class-validator';
+import { arrayUnique, isUUID } from 'class-validator';
 import { PrismaService } from '../../../global/database/prisma.service';
 import { settleErrors } from '../code/settle.error.code';
 import { SettleException } from '../exception/settle.exception';
@@ -1580,39 +1580,6 @@ export class SettleService {
     });
   }
 
-  async addReceipt(
-    access: Identity,
-    key: string,
-    roundId: string,
-    expenseId: string,
-    ...input:
-      | [
-          expectedVersion: number,
-          bytes: Uint8Array,
-          type: string,
-          captureAudience?: ReceiptAudience,
-        ]
-      | [
-          readUpload: () => Promise<ReceiptUpload>,
-          captureAudience?: ReceiptAudience,
-        ]
-  ) {
-    const admission = await this.admitReceipt(access, key, roundId, expenseId);
-    const upload: ReceiptUpload =
-      typeof input[0] === 'function'
-        ? await input[0]()
-        : {
-            expectedVersion: input[0],
-            bytes: input[1] as Uint8Array,
-            type: input[2] as string,
-          };
-    const captureAudience =
-      typeof input[0] === 'function'
-        ? (input[1] as ReceiptAudience | undefined)
-        : input[3];
-    return this.saveReceipt(admission, upload, captureAudience);
-  }
-
   async saveReceipt(
     admission: ReceiptAdmission,
     upload: ReceiptUpload,
@@ -1620,14 +1587,6 @@ export class SettleService {
   ) {
     const { userId, key, roundId, expenseId } = admission;
     const { expectedVersion, bytes, type } = upload;
-    // Multipart/programmatic uploads enter after account authorization, outside
-    // JSON DTO pipes. Validate their metadata once with the same library rules.
-    if (
-      !isInt(expectedVersion) ||
-      !min(expectedVersion, 1) ||
-      !max(expectedVersion, Number.MAX_SAFE_INTEGER)
-    )
-      throw new SettleException(settleErrors.VERSION_REQUIRED);
     const file = await validateReceipt(bytes, type, upload.name);
     const sourceSha256 = file.sha256;
     const digest = mutationDigest(key, {

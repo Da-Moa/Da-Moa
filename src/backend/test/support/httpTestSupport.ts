@@ -28,7 +28,6 @@ import { AppError, errorResponse } from '../../global/apiPayload/errors';
 import { GroupController } from '../../domain/group/controller/group.controller';
 import { SettleController } from '../../domain/settle/controller/settle.controller';
 import { HealthController } from '../../domain/health/controller/health.controller';
-import type { HttpRequest } from '../../global/apiPayload/httpContext';
 
 import { UserController } from '../../domain/user/controller/user.controller';
 
@@ -39,7 +38,7 @@ const jwtGuard = new JwtGuard();
 const interceptor = new ApiResponseInterceptor(new Reflector());
 // Test transport follows the actual Nest route and parameter decorators; no second API dispatch tree.
 export async function dispatch(
-  request: HttpRequest,
+  request: Request,
   _context: { params: Promise<{ path: string[] }> },
 ) {
   const controllers = await Promise.all(
@@ -219,14 +218,14 @@ export async function health(
   request: Request,
   _context: { params: Promise<{ check?: string[] }> },
 ) {
-  return dispatch(request as HttpRequest, {
+  return dispatch(request, {
     params: Promise.resolve({ path: [] }),
   });
 }
 
-export function getMeResponse(request: HttpRequest) {
+export function getMeResponse(request: Request) {
   return dispatch(request, { params: Promise.resolve({ path: [] }) });
 }
-export function getBankAccountResponse(request: HttpRequest) {
+export function getBankAccountResponse(request: Request) {
   return dispatch(request, { params: Promise.resolve({ path: [] }) });
 }

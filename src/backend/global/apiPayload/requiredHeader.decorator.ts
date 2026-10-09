@@ -3,6 +3,29 @@ import type { Request } from 'express';
 import type { ErrorCode } from '../../../shared/appError';
 import { AppError } from './errors';
 
+const idempotencyKeyError: ErrorCode = {
+  status: 400,
+  code: 'invalid_request_key',
+  message: '올바른 요청 키가 필요합니다',
+  detail: null,
+};
+
+function readHeader(request: Request, name: string, error: ErrorCode): string {
+  const value = request.headers[name];
+  if (typeof value !== 'string' || value.trim().length === 0)
+    throw new AppError(
+      error.status,
+      error.code,
+      error.message,
+      error.detail ?? undefined,
+    );
+  return value;
+}
+
+export function readIdempotencyKey(request: Request) {
+  return readHeader(request, 'idempotency-key', idempotencyKeyError);
+}
+
 type RequiredHeaderOptions = { name: string; error: ErrorCode };
 
 const readRequiredHeader = createParamDecorator(
@@ -10,15 +33,11 @@ const readRequiredHeader = createParamDecorator(
     { name, error }: RequiredHeaderOptions,
     context: ExecutionContext,
   ): string => {
-    const value = context.switchToHttp().getRequest<Request>().headers[name];
-    if (typeof value !== 'string' || value.trim().length === 0)
-      throw new AppError(
-        error.status,
-        error.code,
-        error.message,
-        error.detail ?? undefined,
-      );
-    return value;
+    return readHeader(
+      context.switchToHttp().getRequest<Request>(),
+      name,
+      error,
+    );
   },
 );
 
@@ -35,12 +54,7 @@ export function RequiredHeader(
 }
 
 export function RequiredIdempotencyKey(
-  error: ErrorCode = {
-    status: 400,
-    code: 'invalid_request_key',
-    message: '올바른 요청 키가 필요합니다',
-    detail: null,
-  },
+  error: ErrorCode = idempotencyKeyError,
 ): ParameterDecorator {
   return RequiredHeader('idempotency-key', error);
 }

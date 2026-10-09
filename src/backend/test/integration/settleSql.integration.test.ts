@@ -185,6 +185,11 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
         if (count > 1)
           assert.match(
             statements[1],
+            /SELECT.*round_members.*mutation_requests/,
+          );
+        if (count > 2)
+          assert.match(
+            statements[2],
             /UPDATE rounds.*INSERT INTO expense_receipts.*INSERT INTO mutation_requests/,
           );
       } else if (write === 'force-complete') {
@@ -2125,7 +2130,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       })
         .avif()
         .toBuffer();
-      const receipt = await trace(2, 'receipt', () =>
+      const receipt = await trace(3, 'receipt', () =>
         addReceipt(
           a,
           receiptKey,
@@ -2138,7 +2143,7 @@ test('Settle public APIs preserve actual SQL counts, transaction order, branches
       );
       await drainReceiptQueue();
       version = receipt.version!;
-      await trace(2, 'receipt', () =>
+      await trace(3, 'receipt', () =>
         addReceipt(
           a,
           receiptKey,

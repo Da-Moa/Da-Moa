@@ -1,6 +1,6 @@
 export type { Database } from '../database/db';
 export { AppError, badInput, errorResponse } from '../apiPayload/errors';
-export { readBytes, sameOrigin } from '../apiPayload/http';
+export { sameOrigin } from '../apiPayload/http';
 export {
   createInviteToken,
   isInviteToken,

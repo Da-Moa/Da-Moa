@@ -1,3 +1,4 @@
+import { ApiConsumes } from '@nestjs/swagger';
 import { JsonBody } from '../../../global/apiPayload/requestBody.interceptor';
 import { RequiredIdempotencyKey } from '../../../global/apiPayload/requiredHeader.decorator';
 import { PageQueryDTO } from '../../../global/apiPayload/dto/req/page.request.dto';
@@ -13,18 +14,23 @@ import {
   Patch,
   Delete,
   Inject,
-  Req,
+  UploadedFile,
+  UseInterceptors,
   Res,
   Param,
 } from '@nestjs/common';
-import type { Request, Response as ServerResponse } from 'express';
-import {
-  webRequest,
-  after,
-  type HttpRequest,
-} from '../../../global/apiPayload/httpContext';
+import type { Response as ServerResponse } from 'express';
+import { after } from '../../../global/apiPayload/httpContext';
 import { CurrentUser, type AuthenticatedUser } from '../../../global/auth';
-import { SettleService } from '../service/settle.service';
+import {
+  CurrentReceiptAdmission,
+  ReceiptUploadInterceptor,
+  type ReceiptFile,
+} from './receiptUpload.interceptor';
+import {
+  SettleService,
+  type ReceiptAdmission,
+} from '../service/settle.service';
 import {
   CreateRoundRequestDTO,
   RoundListQueryDTO,
@@ -33,17 +39,15 @@ import {
   CreateExpenseRequestDTO,
   SettlementCheckRequestDTO,
   VersionRequestDTO,
+  ReceiptUploadRequestDTO,
 } from '../dto/req/settle.request.dto';
+import { settleErrors } from '../code/settle.error.code';
 import { settleSuccess } from '../code/settle.success.code';
 import {
   ApiSuccess,
   RawApiResponse,
 } from '../../../global/apiPayload/apiResponse.interceptor';
-import { settleErrors } from '../code/settle.error.code';
-import { SettleException } from '../exception/settle.exception';
 import { RealtimePublisher, type RoundAudience } from '../../../global/util';
-import { readBytes } from '../../../global/util';
-import { MAX_RECEIPT_REQUEST_BYTES } from '../../../../shared/domain/settle';
 @ApiSuccess(settleSuccess)
 @Controller()
 export class SettleController {
@@ -449,30 +453,35 @@ export class SettleController {
     return result;
   }
 
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(ReceiptUploadInterceptor)
   @Post('api/rounds/:roundId/expenses/:expenseId/receipts')
   @HttpCode(202)
   async addReceipt(
-    @CurrentUser() user: AuthenticatedUser,
-    @Req() request: Request,
-    @RequiredIdempotencyKey() idempotencyKey: string,
-    @Param('roundId') roundId: string,
-    @Param('expenseId') expenseId: string,
+    @CurrentReceiptAdmission() admission: ReceiptAdmission,
+    @UploadedFile() file: ReceiptFile,
+    @Body() body: ReceiptUploadRequestDTO,
   ) {
-    const web = webRequest(request);
     let audience: RoundAudience | null = null;
-    const result = await this.service.addReceipt(
-      user,
-      idempotencyKey,
-      roundId,
-      expenseId,
-      () => this.receiptForm(web),
+    const result = await this.service.saveReceipt(
+      admission,
+      {
+        expectedVersion: body.expectedVersion,
+        bytes: file.buffer,
+        type: file.mimetype,
+        name: file.originalname,
+      },
       (value) => {
         audience = value;
       },
     );
     if (this.publisher.realtimeEnabled())
       after(() =>
-        this.publisher.publishRoundInvalidation(roundId, audience, false),
+        this.publisher.publishRoundInvalidation(
+          admission.roundId,
+          audience,
+          false,
+        ),
       );
     return result;
   }
@@ -518,36 +527,5 @@ export class SettleController {
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Cache-Control', 'private, no-store');
     return new StreamableFile(receipt.content, { type: receipt.mimeType });
-  }
-  private async receiptForm(web: HttpRequest) {
-    const bytes = await readBytes(
-      web,
-      MAX_RECEIPT_REQUEST_BYTES,
-      'receipt_too_large',
-    );
-    let form: FormData;
-    try {
-      form = await new Response(bytes.buffer, {
-        headers: web.headers,
-      }).formData();
-    } catch {
-      throw new SettleException(settleErrors.INVALID_RECEIPT_FORM);
-    }
-    const file = form.get('file');
-    if (
-      !(file instanceof File) ||
-      form.getAll('file').length !== 1 ||
-      form.getAll('expectedVersion').length !== 1 ||
-      [...form.keys()].some(
-        (field) => !['file', 'expectedVersion'].includes(field),
-      )
-    )
-      throw new SettleException(settleErrors.SINGLE_RECEIPT_REQUIRED);
-    return {
-      expectedVersion: Number(form.get('expectedVersion')),
-      bytes: new Uint8Array(await file.arrayBuffer()),
-      type: file.type,
-      name: file.name,
-    };
   }
 }

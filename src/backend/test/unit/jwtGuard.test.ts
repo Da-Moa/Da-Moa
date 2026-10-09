@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { HttpRequest as NextRequest } from '../../global/apiPayload/httpContext';
 import { JwtGuard } from '../../global/auth/guard/jwt.guard';
 import { jwtGuardForTest as jwtGuard } from '../support/guardRequestTestSupport';
 import {
@@ -20,7 +19,7 @@ import {
   currentTimestamp,
 } from '../../global/auth/native';
 
-const proxy = (request: NextRequest) =>
+const proxy = (request: Request) =>
   jwtGuard(request) ??
   new Response(null, { headers: { 'x-middleware-next': '1' } });
 
@@ -99,7 +98,7 @@ test('Node JWT guard rejects protected requests before body validation and permi
     const access = createAccessToken('user', 'session');
     const refresh = createRefreshToken('user', 'session');
     const request = (path: string, method = 'GET', cookie = '') =>
-      new NextRequest(`http://localhost${path}`, {
+      new Request(`http://localhost${path}`, {
         method,
         headers: {
           cookie,
@@ -162,7 +161,7 @@ test('Node JWT guard rejects protected requests before body validation and permi
     );
     assert.equal(
       proxy(
-        new NextRequest('http://localhost/api/groups', {
+        new Request('http://localhost/api/groups', {
           headers: { cookie: `${ACCESS_TOKEN_COOKIE_NAME}=${access}` },
         }),
       ).status,
